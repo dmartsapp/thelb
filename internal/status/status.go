@@ -193,7 +193,7 @@ func (s Status) render(name string, now time.Time) string {
 	case "cluster":
 		var rows [][]string
 		if c := s.Cluster; c != nil {
-			rows = append(rows, []string{c.Name, c.ID, stamp(c.Created), c.Leader, term(c.Term), stamp(c.LeaderSince)})
+			rows = append(rows, []string{c.Name, dash(c.ID), stamp(c.Created), dash(c.Leader), term(c.Term), stamp(c.LeaderSince)})
 		}
 		return table.Render([]string{"cluster", "id", "created", "leader", "term", "leader since"}, rows, 4)
 	case "nodes":

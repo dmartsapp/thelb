@@ -3,6 +3,7 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -16,6 +17,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -73,19 +75,29 @@ func New(cluster string, now time.Time) (*Authority, error) {
 	return &Authority{cluster: cluster, key: key, Cert: cert, DER: der}, nil
 }
 
-// Issue signs a certificate for a node: role is "director" or "backend", ips are
-// the addresses it may present.
+// Issue creates a key for a node and signs its certificate: role is "director"
+// or "backend", ips are the addresses it may present.
 func (a *Authority) Issue(role, name string, ips []netip.Addr, now time.Time, lifetime time.Duration) (*Certificate, error) {
-	if role != "director" && role != "backend" {
-		return nil, errors.New("a certificate is for a director or a backend")
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := NewKey()
 	if err != nil {
-		return nil, fmt.Errorf("creating a node key: %w", err)
+		return nil, err
+	}
+	cert, der, err := a.Sign(role, name, ips, &key.PublicKey, now, lifetime)
+	if err != nil {
+		return nil, err
+	}
+	return &Certificate{Key: key, Cert: cert, DER: der}, nil
+}
+
+// Sign signs a certificate for a node's public key - the key stays with the
+// node, which sent only a certificate signing request.
+func (a *Authority) Sign(role, name string, ips []netip.Addr, pub crypto.PublicKey, now time.Time, lifetime time.Duration) (*x509.Certificate, []byte, error) {
+	if role != "director" && role != "backend" {
+		return nil, nil, errors.New("a certificate is for a director or a backend")
 	}
 	serial, err := randomSerial()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -100,15 +112,90 @@ func (a *Authority) Issue(role, name string, ips []netip.Addr, now time.Time, li
 	for _, ip := range ips {
 		tmpl.IPAddresses = append(tmpl.IPAddresses, net.IP(ip.Unmap().AsSlice()))
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.Cert, &key.PublicKey, a.key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.Cert, pub, a.key)
 	if err != nil {
-		return nil, fmt.Errorf("signing a certificate for %s: %w", name, err)
+		return nil, nil, fmt.Errorf("signing a certificate for %s: %w", name, err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, fmt.Errorf("reading back the certificate for %s: %w", name, err)
+		return nil, nil, fmt.Errorf("reading back the certificate for %s: %w", name, err)
 	}
-	return &Certificate{Key: key, Cert: cert, DER: der}, nil
+	return cert, der, nil
+}
+
+// NewKey is a node's key: ECDSA P-256, in memory.
+func NewKey() (*ecdsa.PrivateKey, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("creating a key: %w", err)
+	}
+	return key, nil
+}
+
+// Load is the cluster's CA from its certificate and key, as Raft replicates
+// them to every director.
+func Load(certDER, keyDER []byte) (*Authority, error) {
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, fmt.Errorf("the CA's certificate: %w", err)
+	}
+	key, err := x509.ParseECPrivateKey(keyDER)
+	if err != nil {
+		return nil, errors.New("the CA's key cannot be read")
+	}
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		return nil, errors.New("the CA's key does not match its certificate")
+	}
+	cluster, ok := ClusterOf(cert)
+	if !ok || !cert.IsCA {
+		return nil, errors.New("the certificate is not a theLB CA's")
+	}
+	return &Authority{cluster: cluster, key: key, Cert: cert, DER: certDER}, nil
+}
+
+// KeyDER is the CA's key, for Raft to replicate to the directors - and nowhere
+// else.
+func (a *Authority) KeyDER() ([]byte, error) {
+	der, err := x509.MarshalECPrivateKey(a.key)
+	if err != nil {
+		return nil, fmt.Errorf("encoding the CA's key: %w", err)
+	}
+	return der, nil
+}
+
+// Cluster is the cluster's name, from the CA.
+func (a *Authority) Cluster() string { return a.cluster }
+
+// Pool is a certificate pool holding the CA alone.
+func (a *Authority) Pool() *x509.CertPool {
+	p := x509.NewCertPool()
+	p.AddCert(a.Cert)
+	return p
+}
+
+// Request is a certificate signing request for a node's key.
+func Request(key *ecdsa.PrivateKey, name string) ([]byte, error) {
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: name}}, key)
+	if err != nil {
+		return nil, fmt.Errorf("creating a certificate signing request: %w", err)
+	}
+	return der, nil
+}
+
+// ParseRequest reads a certificate signing request and checks its signature: the
+// sender holds the key.
+func ParseRequest(der []byte) (*x509.CertificateRequest, error) {
+	csr, err := x509.ParseCertificateRequest(der)
+	if err != nil {
+		return nil, fmt.Errorf("the certificate signing request: %w", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("the certificate signing request's signature: %w", err)
+	}
+	if _, ok := csr.PublicKey.(*ecdsa.PublicKey); !ok {
+		return nil, errors.New("the certificate signing request is not for an ECDSA key")
+	}
+	return csr, nil
 }
 
 // Identity is a node's name in a certificate:
@@ -116,6 +203,44 @@ func (a *Authority) Issue(role, name string, ips []netip.Addr, now time.Time, li
 func Identity(cluster, role, name string) *url.URL {
 	return &url.URL{Scheme: "spiffe", Host: "dmarts.app", Path: "/thelb/" + cluster + "/" + role + "/" + name}
 }
+
+// Peer is who a certificate names: its cluster, role and name, from its SPIFFE
+// ID.
+type Peer struct {
+	Cluster, Role, Name string
+}
+
+// PeerOf reads a node certificate's identity.
+func PeerOf(cert *x509.Certificate) (Peer, bool) {
+	if len(cert.URIs) != 1 {
+		return Peer{}, false
+	}
+	u := cert.URIs[0]
+	if u.Scheme != "spiffe" || u.Host != "dmarts.app" {
+		return Peer{}, false
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "thelb" || (parts[2] != "director" && parts[2] != "backend") || parts[3] == "" {
+		return Peer{}, false
+	}
+	return Peer{Cluster: parts[1], Role: parts[2], Name: parts[3]}, true
+}
+
+// ClusterOf reads the cluster's name from its CA's certificate.
+func ClusterOf(cert *x509.Certificate) (string, bool) {
+	if len(cert.URIs) != 1 {
+		return "", false
+	}
+	u := cert.URIs[0]
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if u.Scheme != "spiffe" || u.Host != "dmarts.app" || len(parts) != 2 || parts[0] != "thelb" || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+// Serial is a certificate's serial number, in hexadecimal.
+func Serial(cert *x509.Certificate) string { return cert.SerialNumber.Text(16) }
 
 // Fingerprint is a certificate's SHA-256, in hexadecimal.
 func Fingerprint(der []byte) string {

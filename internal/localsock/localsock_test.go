@@ -21,6 +21,8 @@ func (fake) Status() status.Status {
 	return status.Status{View: "director", Cluster: &status.Cluster{Name: "prod", ID: "7f3c91a2"}}
 }
 
+func (fake) Admin(op string, names []string) ([]string, error) { return names, nil }
+
 func (fake) SecretText(role string) (string, error) {
 	if role == "director" {
 		return "thelb1:director", nil

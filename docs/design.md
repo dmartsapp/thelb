@@ -186,7 +186,7 @@ The `net.ipv4.vs.*` parameters apply to IPv6 services too; IPVS keeps them all u
 
 theLB keeps nothing on disk, so after a restart it recognises its own state from the kernel:
 
-- **Addresses** carry theLB's own address protocol value (`IFA_PROTO`, the "who added this address" field upstream Linux has since 6.1) where the kernel has it, and IPv4 addresses always a label (`eth0:thelb`). On a kernel without `IFA_PROTO` (RHEL 9's), an IPv6 address - which has no label - is theLB's when it is a configured VIP: a VIP in theLB's configuration is theLB's by definition, whoever added it.
+- **Addresses** carry theLB's own address protocol value - 116, which `ip address` shows as `proto 0x74` - (`IFA_PROTO`, the "who added this address" field upstream Linux has since 6.1) where the kernel has it, and IPv4 addresses always a label (`eth0:thelb`). On a kernel without `IFA_PROTO` (RHEL 9's), an IPv6 address - which has no label - is theLB's when it is a configured VIP: a VIP in theLB's configuration is theLB's by definition, whoever added it.
 - **IPVS services** are theLB's when they match a configured service; any other IPVS service is left alone, and `doctor` reports it.
 - **`thelb0`, the `inet thelb` table and theLB's tunnel interfaces** are theLB's by name.
 - **Kernel parameters** cannot be marked. After a crash theLB cannot know a parameter's value from before it started, so it treats the current value as the one to leave; this is logged.
@@ -212,7 +212,8 @@ start ─▶ preflight ─▶ read the kernel ─▶ plan ─▶ apply ─▶ bo
 - **Interface**: for the control VIP, the director's interface with an address in its network; for a service VIP, its pool's interface (see [Address pools](#address-pools)).
 - **Adding**: `/32` or `/128`, with theLB's address protocol and label. IPv6 VIPs skip duplicate address detection, so a takeover is immediate; the cluster, not DAD, prevents duplicates.
 - **Announcing**, when a director takes a VIP: gratuitous ARP (request and reply forms) for IPv4, unsolicited Neighbor Advertisements with the override flag to all-nodes for IPv6 - three of each over two seconds, because switches and hosts miss single packets. A periodic re-announcement is an option, off by default.
-- **Probing before taking a VIP that is new to the network** - the control VIP at bootstrap, a newly allocated service VIP: an ARP probe (RFC 5227) for IPv4, a neighbour solicitation for IPv6. An answer means someone else has it, and theLB refuses.
+- **Probing before taking a VIP that is new to the network** - the control VIP at bootstrap, a newly allocated service VIP: an ARP probe (RFC 5227, from `0.0.0.0`) for IPv4, a neighbour solicitation for IPv6. An answer means someone else has it, and theLB refuses. For the control VIP, theLB also connects to `VIP:port` and starts a join's TLS handshake: a cluster answers that, and nothing else does. A probe that cannot be made - the link is down, say - is not taken for silence: a bootstrap needs a whole window of probes that worked and found nothing.
+- **Taking it**: the listener first - bound with `IP_FREEBIND` before the address exists - then the address, then the announcements, so no connection to the VIP is refused while it moves; **giving it up**: the address first, then the listener.
 - **Conflict detection**: a director listens for ARP and NDP traffic claiming one of its VIPs from another MAC address. That means another system holds it - a second cluster, a forgotten static address - and is logged as an error and counted in the metrics. theLB does not fight over it; for the control VIP, see [the bootstrap rule](#restarts-and-the-bootstrap-rule).
 - **Giving up**: the address is removed. Nothing is announced; the next director's announcement moves the clients.
 
@@ -405,8 +406,12 @@ Then the backend adds the VIP to `thelb0`, maps the service's port to its own - 
 - **Who holds the VIPs**: at first the leader holds the control VIP and every service VIP - one active director, the others standing by. Spreading service VIPs across directors (active-active, assigned by the leader) comes later.
 - **Fail closed**: holding a VIP requires leadership with a valid lease from the majority. A director that loses it - a network partition, a hung leader - gives its VIPs up within the lease time, even if it seems healthy to itself. Every decision carries the leader's **term**: a director or backend ignores instructions from an older term, so a deposed leader cannot act after the fact.
 - **Failover time**: Raft's election timeout (about a second by default, a few hundred milliseconds on a LAN) plus the announcement. Backends reconnect to the control VIP when it moves. To be measured, not promised.
-- **Transport**: TCP with mutual TLS between directors.
+- **Transport**: the control port on each director's own address, with mutual TLS 1.3. ALPN says what a connection is for: `thelb-raft/1` for Raft, `thelb-api/1` for requests between directors - check-ins, approvals, renewals - and `thelb-join/1`, on the control VIP only, for a node asking to join.
+- **The library**: [hashicorp/raft](https://github.com/hashicorp/raft) v1.8.0, with its in-memory stores and its default timings - a heartbeat timeout of one second, a leader lease of half a second, pre-voting on, so a director coming back from a partition does not disrupt the cluster.
 - **In memory only** - the log, the snapshots, the vote - so theLB writes nothing to disk for the cluster. Raft's safety needs a voter's term and vote to survive a restart, or a restarted voter could vote twice in one term, so **every process start is a new member identity** (the node's name and a random suffix): a restarted director joins as a new member, catches up, and is then promoted to voter, and the leader removes its old identity.
+- **Check-ins**: every director that does not lead checks in with the leader every second - its member identity, how far it has applied the log, its version. They are not in Raft. A director that has not checked in for 3 seconds is shown down; a new member is promoted to voter at its first check-in that has applied its own admission. Every 10 seconds the leader removes member identities no approved node holds - a restarted director's old one - and drops pending nodes that stopped asking an hour ago.
+- **A removed member** is not always told by Raft - the leader stops sending to it - but it sees its own record leave the replicated state, and stops.
+- **Measured in the lab** (one virtual machine, three directors in network namespaces): a crashed leader's control VIP is on another director 1.4 to 2.9 seconds later, its gratuitous ARP already in the client's neighbour table; a leader cut off from the others gives the VIP up by itself.
 
 ### What Raft carries
 
@@ -703,8 +708,10 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Logs**: one line per event, saying what happened, what changed and from what - shint's grammar, with a timestamp a machine can sort - to standard error, which systemd's journal keeps. Never a key or a secret: a secret's type prints as `[redacted]` wherever it goes.
 
   ```text
-  2026-11-08T13:12:24.083Z [director] OK cluster created cluster=lab id=68a368de
-  2026-11-08T13:12:24.083Z [director] WARN control VIP not checked on the network vip=192.168.1.253 port=7443 reason="this build sends nothing on the network yet"
+  2026-11-08T18:58:18.437Z [director] OK leader node=d2 term=4 member=d2-36792f70
+  2026-11-08T18:58:18.437Z [director] OK control VIP taken vip=198.18.0.10 port=7443 interface=eth0
+  2026-11-08T18:58:22.816Z [director] OK director rejoined: approved before node=d3 approved_by=d1 member=d3-976b0f6f address=198.18.0.13
+  2026-11-08T18:58:24.283Z [director] WARN join refused: the directors' secret was not proved from=198.18.0.14
   ```
 - **Metrics**: Prometheus, on a configurable address: VIP ownership, backend health, IPVS counters per service and backend (connections, packets, bytes), cluster state, failovers, enrolments, drift corrections, conflicts.
 - **`thelb status`** is the one view of the cluster - see [above](#thelb-status). It, `doctor` and `admin` talk to the running theLB over [the local socket](#the-local-socket).
@@ -742,7 +749,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | A machine pretends to be a backend | It has no certificate, or its address or MAC address does not match its enrolment: refused. |
 | Something on the network answers ARP for a backend's address | The director's pinned neighbour entry ignores it, and the watchdog logs the attempt. |
 | Someone flushes IPVS or removes a VIP | The watchdog loop puts it back within its interval, and logs it. |
-| theLB crashes | The VIPs stay on the interface until it restarts; the lease expiry makes another director take over meanwhile; on restart, theLB adopts or removes what it finds. |
+| theLB crashes | The VIPs stay on the interface until it restarts - and the machine's kernel still answers ARP for them, so a host that asks again may be sent there until then (systemd's `Restart=` makes that short); the lease expiry makes another director take over meanwhile; on restart, theLB removes the control VIP it left before anything else, and adopts or removes the rest. |
 | The process hangs | Under systemd, the watchdog restarts it; its lease expires either way. |
 | Another system claims a VIP | Logged and counted as a conflict; theLB does not fight over it. |
 | The Kubernetes API is unreachable | Current VIPs and backends keep working; no new allocations until it is back. |
@@ -763,7 +770,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 Like shint, simpler:
 
 - **One repository**, `github.com/dmartsapp/thelb`, MIT. Go, one static binary (`CGO_ENABLED=0`), Linux only (`amd64`, `arm64`).
-- **`Makefile` is the single entry point** for building and checking: `make check` (format, vet, tests, lint, `govulncheck`, docs), `make lab` (the network lab, needs root).
+- **`Makefile` is the single entry point** for building and checking: `make check` (format, vet, tests, lint, `govulncheck`, docs), `make e2e` (the network lab, needs root).
 - **Branches**: `main` is development. Each minor release gets a branch, `release/vX.Y`, cut when the release is ready; its releases are tagged there (`vX.Y.0`, then patches `vX.Y.1`...), and fixes are cherry-picked onto it from `main`. No fast-forwarding `main`.
 - **Release workflows run only for a tag `vX.Y.Z` on `release/vX.Y`**: binaries, SHA-256 checksums, signed build attestations, a container image; `govulncheck` must pass.
 - **Changelog** in `CHANGELOG.md`; **documentation** in Markdown under `docs/`, published as a site later.
@@ -774,8 +781,8 @@ Like shint, simpler:
 | Phase | Delivers |
 |---|---|
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
-| 1 - one director | **Begun in v0.1.0-dev, with everything that needs no network:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status`. **To come:** `thelb director --bootstrap` with the control VIP, the secret files and its CA; backends enrolling and offering; pools, services and assignments from the configuration and `admin`, with the path checks; port mapping; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
-| 2 - the cluster | Directors joining with their secret; Raft with the replicated CA; the bootstrap rule and restarts; failover; fail closed; leadership hand-off on stop; chaos tests. |
+| 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status`, and the control VIP - probed, held, announced and given up. **To come:** backends enrolling and offering; pools, services and assignments from the configuration and `admin`, with the path checks; port mapping; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
+| 2 - the cluster | **Begun in v0.1.0-dev, ahead of the rest of phase 1:** directors joining with their secret and waiting for approval (`admin approve`, `refuse`, `remove`); Raft with the replicated CA; the leader holding the control VIP; the bootstrap rule and restarts, approved directors rejoining by themselves; failover; fail closed; leadership hand-off on stop; the network lab (`make e2e`: a crash, a planned stop, a partition, a full stop). **To come:** a cluster that finds its control VIP claimed by another standing down; `--peers`; secret rotation; IPv6 in the lab on a kernel that has it; chaos tests under load. |
 | 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
 | 5 - active-active | Service VIPs spread across directors; optional IPVS connection synchronisation. |
@@ -794,6 +801,8 @@ Like shint, simpler:
 
 - **Names: the domain `dmarts.app`**, in DNS order and lowercase: the Service class `dmarts.app/thelb`, annotations under `dmarts.app/` (`dmarts.app/thelb-pool`, `dmarts.app/thelb-shared-vip`, ...), and custom resources, when there are any, in the API group `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...). Lowercase because Kubernetes matches the class exactly, and namespace and CRD names must be lowercase anyway.
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
+- **Raft is hashicorp/raft**, theLB's first dependency, as the design always named it; its MPL-2.0 licence allows it in an MIT project's binary - its files are unchanged, and their source is public. theLB's own certificate authority stays its own: a few lines over Go's standard library, with the checks theLB needs (an issuer-chosen identity, SPIFFE IDs, a CA loaded from the replicated state).
+- **One control port, three protocols**, told apart by TLS ALPN: Raft, the API between directors, and joins ([The cluster](#the-cluster-and-what-raft-carries)).
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
 - **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the secret files - and one or more also with `--bootstrap`. The first bootstrap creates the secrets and writes them to the named files, once, if missing; the user copies them to the other nodes; a node whose secret the cluster does not accept stops as out of date; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
 - **Every node that joins waits for a director's approval** - directors and backends alike; any approved director may approve; backends cannot; pending nodes appear in `thelb status` on any director. **An approved node rejoins after a restart without approval**, recognised by its node fingerprint, address and MAC address ([Approval](#approval)).

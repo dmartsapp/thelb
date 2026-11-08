@@ -76,3 +76,69 @@ func TestIssueRefusesOtherRoles(t *testing.T) {
 		t.Error("issued a certificate for an unknown role")
 	}
 }
+
+func TestTheCAComesBackFromWhatRaftReplicates(t *testing.T) {
+	a, _ := New("prod", now)
+	key, err := a.KeyDER()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(a.DER, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Cluster() != "prod" {
+		t.Errorf("cluster %q", b.Cluster())
+	}
+	c, err := b.Issue("director", "lb-2", []netip.Addr{netip.MustParseAddr("10.0.0.12")}, now, NodeLifetime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Cert.Verify(x509.VerifyOptions{Roots: a.Pool(), CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Errorf("a certificate the loaded CA signed does not verify against the original: %v", err)
+	}
+
+	other, _ := New("prod", now)
+	otherKey, _ := other.KeyDER()
+	if _, err := Load(a.DER, otherKey); err == nil {
+		t.Error("a CA certificate loaded with another CA's key")
+	}
+	if _, err := Load(c.DER, key); err == nil {
+		t.Error("a node's certificate loaded as a CA")
+	}
+}
+
+func TestSignARequestKeepsTheKeyWithTheNode(t *testing.T) {
+	a, _ := New("prod", now)
+	key, _ := NewKey()
+	der, err := Request(key, "lb-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := ParseRequest(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _, err := a.Sign("director", "lb-2", []netip.Addr{netip.MustParseAddr("10.0.0.12")}, csr.PublicKey, now, NodeLifetime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		t.Error("the certificate is not for the node's key")
+	}
+	p, ok := PeerOf(cert)
+	if !ok || p != (Peer{Cluster: "prod", Role: "director", Name: "lb-2"}) {
+		t.Errorf("peer %+v %v", p, ok)
+	}
+	if name, ok := ClusterOf(a.Cert); !ok || name != "prod" {
+		t.Errorf("cluster of the CA: %q %v", name, ok)
+	}
+	if _, ok := PeerOf(a.Cert); ok {
+		t.Error("the CA read as a node")
+	}
+
+	der[len(der)-1] ^= 0xff
+	if _, err := ParseRequest(der); err == nil {
+		t.Error("a request with a broken signature was accepted")
+	}
+}

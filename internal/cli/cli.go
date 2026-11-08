@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,8 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/ctlnet"
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
+	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/secret"
@@ -36,6 +39,11 @@ var (
 	hostInputs  = fingerprint.ReadHost
 	runDirector = director.Run
 	logOutput   io.Writer // nil: standard error
+	stdin       io.Reader = os.Stdin
+	isTerminal            = func() bool {
+		fi, err := os.Stdin.Stat()
+		return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	}
 )
 
 // usageError is a mistake in how theLB was called: exit status 2.
@@ -204,11 +212,19 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 	if out == nil {
 		out = stderr
 	}
+	log := logx.New(out, "thelb")
 	return runDirector(ctx, cfg, director.Deps{
 		RunDir: runDir,
-		Log:    logx.New(out, "thelb"),
+		Log:    log,
 		Now:    now,
 		Host:   hostInputs,
+		Network: func(local hostnet.Address) (director.Network, error) {
+			n, err := ctlnet.New(cfg.ControlVIP, cfg.ControlPort, local, log.Module("network"))
+			if err != nil {
+				return nil, err
+			}
+			return n, nil
+		},
 	})
 }
 
@@ -288,9 +304,29 @@ func generateCmd(args []string, stdout io.Writer) error {
 
 func adminCmd(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usagef("thelb admin: say what to change: secret show (approve, refuse, remove, pool, service, assign and unassign come later)")
+		return usagef("thelb admin: say what to change: approve, refuse, remove, secret show (pool, service, assign and unassign come later)")
 	}
 	switch args[0] {
+	case "approve":
+		return approveCmd(args[1:], stdout)
+	case "refuse", "remove":
+		fs := newFlags("admin " + args[0])
+		if err := parse(fs, args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return usagef("thelb admin %s: name one node", args[0])
+		}
+		op := localsock.OpRefuse
+		if args[0] == "remove" {
+			op = localsock.OpRemove
+		}
+		resp, err := localsock.Call(runDir, localsock.Request{Op: op, Names: fs.Args()})
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], strings.Join(resp.Names, ", "))
+		return nil
 	case "secret":
 		if len(args) < 2 {
 			return usagef("thelb admin secret: show (rotate and retire come later)")
@@ -316,11 +352,79 @@ func adminCmd(args []string, stdout io.Writer) error {
 		default:
 			return usagef("thelb admin secret: %q is not a secret command", args[1])
 		}
-	case "approve", "refuse", "remove", "pool", "service", "assign", "unassign":
+	case "pool", "service", "assign", "unassign":
 		return notYet("thelb admin " + args[0])
 	default:
 		return usagef("thelb admin: %q is not an admin command", args[0])
 	}
+}
+
+// approveCmd approves pending nodes by name, or every one whose name matches
+// --match - shown first, and approved after a "y", or at once with --yes.
+func approveCmd(args []string, stdout io.Writer) error {
+	fs := newFlags("admin approve")
+	match := fs.String("match", "", "")
+	yes := fs.Bool("yes", false, "")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	names := fs.Args()
+	switch {
+	case *match == "" && len(names) == 0:
+		return usagef("thelb admin approve: name the nodes to approve, or --match '<regular expression>'")
+	case *match != "" && len(names) > 0:
+		return usagef("thelb admin approve: names or --match, not both")
+	case *yes && *match == "":
+		return usagef("thelb admin approve: --yes goes with --match")
+	}
+	if *match != "" {
+		re, err := regexp.Compile(`^(?:` + *match + `)$`)
+		if err != nil {
+			return usagef("thelb admin approve: --match %q: %v", *match, err)
+		}
+		resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpStatus})
+		if err != nil {
+			return err
+		}
+		var matched status.Status
+		for _, p := range resp.Status.Pending {
+			if re.MatchString(p.Pending) {
+				matched.Pending = append(matched.Pending, p)
+				names = append(names, p.Pending)
+			}
+		}
+		if len(names) == 0 {
+			return fmt.Errorf("no pending node's name matches %q: nothing approved", *match)
+		}
+		text, err := matched.Text(now(), "pending")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprint(stdout, text)
+		if !*yes {
+			if !isTerminal() {
+				return errors.New("nothing approved: there is no terminal to confirm on - add --yes to approve these")
+			}
+			_, _ = fmt.Fprintf(stdout, "Approve %s? [y/N] ", plural(len(names), "this node", "these %d nodes"))
+			line, _ := bufio.NewReader(stdin).ReadString('\n')
+			if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+				return errors.New("nothing approved")
+			}
+		}
+	}
+	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpApprove, Names: names})
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stdout, "approved: %s\n", strings.Join(resp.Names, ", "))
+	return nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return fmt.Sprintf(many, n)
 }
 
 func contains(list []string, s string) bool {

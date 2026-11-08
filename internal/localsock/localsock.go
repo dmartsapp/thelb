@@ -31,7 +31,7 @@ const (
 
 	maxRequest = 64 << 10
 	maxAnswer  = 16 << 20
-	deadline   = 5 * time.Second
+	deadline   = 15 * time.Second // an admin change waits for the leader
 )
 
 // The answers a caller can act on.
@@ -44,13 +44,17 @@ var (
 const (
 	OpStatus     = "status"
 	OpSecretShow = "secret.show"
+	OpApprove    = "approve"
+	OpRefuse     = "refuse"
+	OpRemove     = "remove"
 )
 
 // Request is what a command asks.
 type Request struct {
-	V    int    `json:"v"`
-	Op   string `json:"op"`
-	Role string `json:"role,omitempty"`
+	V     int      `json:"v"`
+	Op    string   `json:"op"`
+	Role  string   `json:"role,omitempty"`
+	Names []string `json:"names,omitempty"`
 }
 
 // Response is the answer.
@@ -60,12 +64,15 @@ type Response struct {
 	Error  string         `json:"error,omitempty"`
 	Status *status.Status `json:"status,omitempty"`
 	Secret string         `json:"secret,omitempty"`
+	Names  []string       `json:"names,omitempty"`
 }
 
 // Handler answers requests: the running director or backend.
 type Handler interface {
 	Status() status.Status
 	SecretText(role string) (string, error)
+	// Admin approves, refuses or removes nodes, and returns the names changed.
+	Admin(op string, names []string) ([]string, error)
 }
 
 // Server is the listening end.
@@ -212,6 +219,13 @@ func (s *Server) handle(c *net.UnixConn) {
 		}
 		s.log.OK("secret shown", "role", req.Role)
 		answer(Response{OK: true, Secret: text})
+	case OpApprove, OpRefuse, OpRemove:
+		names, err := s.h.Admin(req.Op, req.Names)
+		if err != nil {
+			answer(Response{Error: err.Error()})
+			return
+		}
+		answer(Response{OK: true, Names: names})
 	default:
 		answer(Response{Error: fmt.Sprintf("this theLB does not know %q", req.Op)})
 	}

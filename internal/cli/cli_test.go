@@ -73,6 +73,12 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"admin"},
 		{"admin", "secret", "show"},
 		{"admin", "secret", "show", "--role", "root"},
+		{"admin", "approve"},
+		{"admin", "approve", "--match", "web-("},
+		{"admin", "approve", "--yes", "web-1"},
+		{"admin", "approve", "--match", "web-.*", "web-1"},
+		{"admin", "refuse"},
+		{"admin", "remove", "web-1", "web-2"},
 	} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 2 {
@@ -82,7 +88,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestNotYetExitsOne(t *testing.T) {
-	for _, args := range [][]string{{"backend"}, {"doctor"}, {"generate", "systemd"}, {"admin", "approve", "lb-2"}, {"admin", "secret", "rotate"}} {
+	for _, args := range [][]string{{"backend"}, {"doctor"}, {"generate", "systemd"}, {"admin", "pool"}, {"admin", "secret", "rotate"}} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 1 || !strings.Contains(errOut, "not in this build") {
 			t.Errorf("%v: exit %d, %q", args, code, errOut)
@@ -137,7 +143,20 @@ type fakeNode struct{}
 
 func (fakeNode) Status() status.Status {
 	return status.Status{View: "director", Cluster: &status.Cluster{Name: "prod", ID: "7f3c91a2", Leader: "lb-1"},
-		Nodes: []status.Node{{Node: "lb-1", Role: "leader", Address: "10.0.0.11", State: "up"}}}
+		Nodes: []status.Node{{Node: "lb-1", Role: "leader", Address: "10.0.0.11", State: "up"}},
+		Pending: []status.Pending{
+			{Pending: "web-1", Role: "director", Address: "10.0.0.21", MAC: "52:54:00:00:00:21", NodeFingerprint: "0be98d17c46a2f83", WaitingSeconds: 15},
+			{Pending: "web-12", Role: "director", Address: "10.0.0.22", MAC: "52:54:00:00:00:22", NodeFingerprint: "9f12c4e07ab35d61", WaitingSeconds: 9},
+			{Pending: "db-1", Role: "director", Address: "10.0.0.31", MAC: "52:54:00:00:00:31", NodeFingerprint: "c5a8e3071bd92f64", WaitingSeconds: 3},
+		}}
+}
+
+// adminCalls are the changes the fake node was asked for.
+var adminCalls []string
+
+func (fakeNode) Admin(op string, names []string) ([]string, error) {
+	adminCalls = append(adminCalls, op+" "+strings.Join(names, ","))
+	return names, nil
 }
 
 func (fakeNode) SecretText(role string) (string, error) {
@@ -201,5 +220,54 @@ func TestStatusWithNothingRunning(t *testing.T) {
 	code, _, errOut := as(t, 0, "status")
 	if code != 1 || !strings.Contains(errOut, "not running on this node") {
 		t.Errorf("exit %d, %q", code, errOut)
+	}
+}
+
+func TestApprove(t *testing.T) {
+	withRunningTheLB(t)
+	savedTerm, savedIn := isTerminal, stdin
+	t.Cleanup(func() { isTerminal, stdin = savedTerm, savedIn })
+	run := func(terminal bool, input string, args ...string) (int, string, string) {
+		isTerminal = func() bool { return terminal }
+		stdin = strings.NewReader(input)
+		adminCalls = nil
+		return as(t, 0, args...)
+	}
+
+	code, out, _ := run(false, "", "admin", "approve", "db-1")
+	if code != 0 || out != "approved: db-1\n" || strings.Join(adminCalls, ";") != "approve db-1" {
+		t.Errorf("by name: exit %d, %q, %v", code, out, adminCalls)
+	}
+
+	// --match is the whole name: web-1 and web-12 match 'web-[0-9]+', db-1 does not.
+	code, out, errOut := run(false, "", "admin", "approve", "--match", "web-[0-9]+")
+	if code != 1 || !strings.Contains(errOut, "no terminal to confirm on") || adminCalls != nil {
+		t.Errorf("no terminal, no --yes: exit %d, %q, %v", code, errOut, adminCalls)
+	}
+	if !strings.Contains(out, " web-1   | director") || !strings.Contains(out, " web-12  | director") || strings.Contains(out, "db-1") || !strings.Contains(out, "(2 rows)") {
+		t.Errorf("the matching nodes are not shown first:\n%s", out)
+	}
+	code, _, _ = run(true, "n\n", "admin", "approve", "--match", "web-[0-9]+")
+	if code != 1 || adminCalls != nil {
+		t.Errorf("answered no: exit %d, %v", code, adminCalls)
+	}
+	code, out, _ = run(true, "y\n", "admin", "approve", "--match", "web-[0-9]+")
+	if code != 0 || strings.Join(adminCalls, ";") != "approve web-1,web-12" || !strings.Contains(out, "Approve these 2 nodes? [y/N] approved: web-1, web-12") {
+		t.Errorf("answered yes: exit %d, %q, %v", code, out, adminCalls)
+	}
+	code, _, _ = run(false, "", "admin", "approve", "--match", "web-1", "--yes")
+	if code != 0 || strings.Join(adminCalls, ";") != "approve web-1" {
+		t.Errorf("--yes, matching web-1 only: exit %d, %v", code, adminCalls)
+	}
+	code, _, errOut = run(false, "", "admin", "approve", "--match", "lb-.*", "--yes")
+	if code != 1 || !strings.Contains(errOut, "no pending node's name matches") || adminCalls != nil {
+		t.Errorf("nothing matches: exit %d, %q", code, errOut)
+	}
+
+	for _, c := range []struct{ op, want string }{{"refuse", "refused: web-1\n"}, {"remove", "removed: web-1\n"}} {
+		code, out, _ := run(false, "", "admin", c.op, "web-1")
+		if code != 0 || out != c.want || strings.Join(adminCalls, ";") != c.op+" web-1" {
+			t.Errorf("%s: exit %d, %q, %v", c.op, code, out, adminCalls)
+		}
 	}
 }

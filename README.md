@@ -13,7 +13,7 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 ## Status
 
-**Design, and the first code.** The design is settled up to Raft; the first code - everything a director does on its own node, with nothing sent on the network - is in [v0.1.0, unreleased](CHANGELOG.md): the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status`. Raft and joining a cluster come next.
+**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. Backends, IPVS, pools and services come next.
 
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
 - [Design](docs/design.md) - how it works, and the questions still open;
@@ -26,7 +26,7 @@ theLB is Linux only, and built with Go 1.27.3 or later. `make` is the one place 
 ```text
 make build                         # bin/thelb.linux.amd64 and bin/thelb.linux.arm64
 make check                         # gofmt, go vet, go test -race, golangci-lint v2.15.0, govulncheck
-make e2e                           # the built binary end to end, as root (on Linux, with passwordless sudo)
+make e2e                           # the built binary in a lab of network namespaces, as root (Linux, passwordless sudo)
 make remote-check REMOTE=<host>    # make check on a Linux machine, over ssh
 make remote-e2e REMOTE=<host>      # make e2e there
 ```

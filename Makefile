@@ -2,7 +2,7 @@
 #
 #   make build          the Linux binaries, in bin/
 #   make check          everything a change must pass: format, vet, tests, lint, vulnerabilities
-#   make e2e            the built binary end to end, as root, on this Linux machine
+#   make e2e            the built binary in a lab of network namespaces, as root, on this Linux machine
 #   make remote-check REMOTE=<ssh host>   the same checks on a Linux machine, over ssh
 #   make remote-e2e   REMOTE=<ssh host>   the end-to-end test there (needs passwordless sudo)
 
