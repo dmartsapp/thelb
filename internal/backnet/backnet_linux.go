@@ -2,9 +2,10 @@
 
 // Package backnet is a backend's kernel state, on Linux: theLB's own dummy
 // interface, thelb0, without ARP, holding the VIPs of the services the backend
-// is assigned to - so its kernel accepts the packets a director forwards - and
+// is assigned to - so its kernel accepts the packets a director forwards -
 // arp_ignore and arp_announce, so it never answers ARP for them or uses them
-// as a source. Restore removes thelb0, and with it every VIP, and puts the
+// as a source, and, where a service's port is not its application's, theLB's
+// nftables table mapping one to the other. Restore removes thelb0, and with it every VIP, and puts the
 // parameters back.
 package backnet
 
@@ -13,12 +14,14 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"syscall"
 
 	"github.com/dmartsapp/thelb/internal/ctlnet"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/netlink"
+	"github.com/dmartsapp/thelb/internal/nft"
 	"github.com/dmartsapp/thelb/internal/sysctl"
 )
 
@@ -31,6 +34,7 @@ type Host struct {
 	mu     sync.Mutex
 	index  int
 	held   map[netip.Addr]bool
+	maps   []nft.Map // what theLB's nftables table holds
 	params sysctl.Changes
 }
 
@@ -47,6 +51,12 @@ func (h *Host) Prepare() error {
 			return fmt.Errorf("removing the %s an earlier run left: %w", Interface, err)
 		}
 		h.log.Warn("removed the "+Interface+" an earlier run left, with its VIPs", "interface", Interface)
+	}
+	if ok, err := nft.Exists(); err == nil && ok {
+		if err := nft.Remove(); err != nil {
+			return fmt.Errorf("removing the nftables table inet %s an earlier run left: %w", nft.Table, err)
+		}
+		h.log.Warn("removed the nftables table an earlier run left", "table", "inet "+nft.Table)
 	}
 	if err := netlink.AddDummy(Interface); err != nil {
 		return fmt.Errorf("creating %s: %w (is the dummy module available?)", Interface, err)
@@ -112,6 +122,34 @@ func (h *Host) Hold(vips []netip.Addr) error {
 	return errors.Join(errs...)
 }
 
+// Map makes theLB's nftables table map exactly maps - replacing it whole - and
+// removes it when there are none: with matching ports there is no rule at all.
+func (h *Host) Map(maps []nft.Map) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if slices.Equal(maps, h.maps) {
+		return nil
+	}
+	if len(maps) == 0 {
+		if err := nft.Remove(); err != nil {
+			return fmt.Errorf("removing the nftables table inet %s: %w", nft.Table, err)
+		}
+		h.log.OK("ports no longer mapped: nftables table removed", "table", "inet "+nft.Table)
+		h.maps = nil
+		return nil
+	}
+	if err := nft.Apply(maps); err != nil {
+		return fmt.Errorf("mapping ports in the nftables table inet %s: %w", nft.Table, err)
+	}
+	for _, m := range maps {
+		if !slices.Contains(h.maps, m) {
+			h.log.OK("port mapped", "vip", m.VIP, "proto", m.Proto, "port", m.Port, "to", m.AppPort, "table", "inet "+nft.Table)
+		}
+	}
+	h.maps = append([]nft.Map(nil), maps...)
+	return nil
+}
+
 // Holding are the VIPs on thelb0.
 func (h *Host) Holding() []netip.Addr {
 	h.mu.Lock()
@@ -123,11 +161,19 @@ func (h *Host) Holding() []netip.Addr {
 	return out
 }
 
-// Restore removes thelb0 - and with it the VIPs - and puts back the parameters
-// theLB changed.
+// Restore removes thelb0 - and with it the VIPs - and theLB's nftables table,
+// and puts back the parameters theLB changed.
 func (h *Host) Restore() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if len(h.maps) > 0 {
+		if err := nft.Remove(); err != nil {
+			h.log.Error("removing the nftables table failed", "table", "inet "+nft.Table, "error", err)
+		} else {
+			h.log.OK("nftables table removed", "table", "inet "+nft.Table)
+		}
+		h.maps = nil
+	}
 	if h.index != 0 {
 		if err := netlink.DelLink(h.index); err != nil {
 			h.log.Error("removing "+Interface+" failed", "error", err)

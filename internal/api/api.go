@@ -106,10 +106,12 @@ type Orders struct {
 }
 
 // Assignment is one service a backend serves: a backend learns the service's
-// name and VIP, and serves it on its offer's port.
+// name, VIP and port, and serves it on its offer's port - mapping one to the
+// other when they differ.
 type Assignment struct {
 	Service string `json:"service"`
 	VIP     string `json:"vip"`
 	Proto   string `json:"proto"`
-	Port    int    `json:"port"`
+	Port    int    `json:"port"`     // the service's
+	AppPort int    `json:"app_port"` // the application's: the offer's
 }

@@ -70,8 +70,9 @@ Flags:
   --name <name>           this node's name (default: its hostname)
   --interface <name>      the control VIP's interface (default: the one in its network)
 
-In this build an application's port must be its service's: a backend that maps
-ports comes later.
+Where a service's port differs from its offer's - the service on 80, the
+application on 8080 - the backend maps it, in theLB's own nftables table,
+inet thelb.
 `,
 	"status": `Usage:
   thelb status [--json] [--watch] [view or table ...]
@@ -136,8 +137,9 @@ leader, under this director's identity.
                   --vip), probed on the network first, a protocol and a port;
                   --scheduler wrr (the default), rr, wlc, lc, sh or mh
   assign          assigns backends' offers to a service, weight 1 unless
-                  --weight says otherwise; the offer's protocol and port must be
-                  the service's, and the director must reach the backend directly
+                  --weight says otherwise; the offer's protocol must be the
+                  service's, and the director must reach the backend directly;
+                  where its port differs, the backend maps the service's to it
   unassign        takes an offer back
   secret show     prints a role's secret, for a node whose secret file is out of
                   date - the one way to see a secret

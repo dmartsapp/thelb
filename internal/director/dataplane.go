@@ -181,7 +181,9 @@ func (p *plane) step(ctx context.Context) error {
 
 	var plan Plan
 	seenVIP := map[netip.Addr]bool{}
-	byKey := map[string]*PlanService{}
+	// Each service's place in plan.Services - an index, not a pointer: the
+	// slice moves as it grows.
+	byKey := map[string]int{}
 	for _, v := range services {
 		vip, err := netip.ParseAddr(v.VIP)
 		if err != nil {
@@ -200,17 +202,18 @@ func (p *plane) step(ctx context.Context) error {
 		}
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		plan.Services = append(plan.Services, PlanService{Service: ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port), Scheduler: v.Scheduler}})
-		byKey[v.Name] = &plan.Services[len(plan.Services)-1]
+		byKey[v.Name] = len(plan.Services) - 1
 	}
 
 	wantProbers := map[string]bool{}
 	pinned := map[netip.Addr]bool{}
 	for _, a := range assignments {
-		ps := byKey[a.Service]
+		i, found := byKey[a.Service]
 		n, ok := nodes[a.Node]
-		if ps == nil || !ok {
+		if !found || !ok {
 			continue
 		}
+		ps := &plan.Services[i]
 		addr, err := netip.ParseAddr(n.Address)
 		if err != nil {
 			continue
@@ -229,7 +232,9 @@ func (p *plane) step(ctx context.Context) error {
 		if ready {
 			w = a.Weight
 		}
-		ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: uint16(a.Port), Weight: uint32(w)})
+		// Direct routing never changes the port: the destination is the backend
+		// at the service's port, which the backend maps to its application's.
+		ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: ps.Port, Weight: uint32(w)})
 		p.mu.Lock()
 		p.weights[key] = w
 		p.mu.Unlock()
@@ -384,7 +389,7 @@ func (s *session) liveNow() ([]api.CheckIn, []api.Live) {
 		vip, _ := netip.ParseAddr(vips[a.Service])
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		addr, _ := netip.ParseAddr(nodes[a.Node].Address)
-		st := stats[DestKey(ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port)}, netip.AddrPortFrom(addr, uint16(a.Port)))]
+		st := stats[DestKey(ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port)}, netip.AddrPortFrom(addr, uint16(v.Port)))]
 		l.Conns, l.Packets, l.Bytes = st.Conns, st.Packets, st.Bytes
 		live = append(live, l)
 	}
@@ -421,7 +426,7 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 					continue
 				}
 				if v := st.Services[a.Service]; v != nil {
-					orders.Assignments = append(orders.Assignments, api.Assignment{Service: v.Name, VIP: v.VIP, Proto: a.Proto, Port: a.Port})
+					orders.Assignments = append(orders.Assignments, api.Assignment{Service: v.Name, VIP: v.VIP, Proto: a.Proto, Port: v.Port, AppPort: a.Port})
 				}
 			}
 		})

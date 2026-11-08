@@ -149,6 +149,8 @@ The director cannot change the port, so a backend whose application listens else
 
 It works the same for TCP, UDP and SCTP. Kubernetes Services already map ports, with `targetPort`; this is for plain Linux backends.
 
+**Built on nftables, not eBPF**: connection tracking turns the replies back for every connection, recomputes SCTP's CRC32c, translates the headers inside ICMP errors - path MTU discovery keeps working - and reassembles fragments, whose later parts carry no ports. A tc eBPF program would be faster per packet, but would have to do all of that itself, and share its hook with Cilium or Calico on RHEL 9's kernel, which has no multi-program tc attachment yet; the saving would be on the backend, beside the application's own cost - the director's path is IPVS either way. theLB writes the table over netlink, without the `nft` command, and replaces it whole, in one transaction, when a mapping changes: `nft list table inet thelb` shows it (`ip daddr 10.10.1.20 tcp dport 80 dnat ip to :8080`). The port a firewall must open on the backend is the application's: destination NAT, at priority `dstnat`, comes before the input filter.
+
 ## Kernel state theLB manages
 
 Everything here is **runtime state**. theLB sets it at runtime - kernel parameters by writing `/proc/sys`, which is what the `sysctl` command does (the old `sysctl(2)` system call was removed from Linux in 5.5) - and never writes a configuration file. What is already right is left alone and never reverted; what theLB changes is recorded and restored when it stops cleanly ([Philosophy](philosophy.md#2-the-running-kernel-is-the-truth)).
@@ -444,7 +446,7 @@ Only the cluster's desired and decided state - small, and changed when someone o
 
 ### When every director stops
 
-The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, **every one of them waits for approval again**; `thelb admin approve --match` approves many at once. Services in the directors' configuration file come back with it; services added from the command line do not, unless they were saved with `thelb generate config`.
+The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, **every one of them waits for approval again**; `thelb admin approve --match` approves many at once. Pools, services and assignments do not come back by themselves: theLB reads no configuration file - only its two secret files - so they are created again with `thelb admin`, by hand or from a script the user keeps (see the proposed [`generate commands`](#what-thelb-generate-prints)).
 
 ## Health checks
 
@@ -529,7 +531,7 @@ sudo thelb admin pool add internal --vip 10.0.0.50/24 --vippool-count 10 --defau
 - **Allocating**: a service takes the lowest free address of its pool, or the one it names; the allocation is in Raft.
 - **Resizing**: a count may grow while the addresses it adds are free; it may not shrink below an address in use, and a pool with an address in use cannot be removed.
 - **Kubernetes** draws from the same pools: `dmarts.app/thelb-pool` names one, or else a Service draws from its family's `--default` pool; `dmarts.app/thelb-ip` asks for a particular address (Kubernetes deprecated `spec.loadBalancerIP`); a dual-stack Service gets one address per family; the address goes back to its pool when the Service is deleted, or leaves theLB's class.
-- **After a full stop**, pools and services in the directors' configuration file come back with it, and a Kubernetes Service keeps its address in `status.loadBalancer.ingress` and asks for it back; pools and services created from the command line come back only if they were saved with `thelb generate config`.
+- **After a full stop**, pools and services are created again with `thelb admin`; a Kubernetes Service keeps its address in `status.loadBalancer.ingress` and asks for it back.
 
 ## Command line and configuration
 
@@ -538,11 +540,11 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 | Command | Does |
 |---|---|
 | `thelb` | With no command: the help, and nothing else, whether or not theLB is running; exit status `0`. |
-| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--cluster` for the cluster's name at bootstrap (default `thelb`), `--name` for this node's (default: its hostname), `--interface` when the control VIP's interface is not the one in its network, `--config` for the rest. |
-| `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer <protocol>/<port>[,check=...]` for each application it serves, `--config` for the rest. |
+| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--cluster` for the cluster's name at bootstrap (default `thelb`), `--name` for this node's (default: its hostname), `--interface` when the control VIP's interface is not the one in its network. |
+| `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer <protocol>/<port>[,check=...]` for each application it serves, `--name`, `--interface`. |
 | `thelb status` | The cluster, in tables - see below: alone, a summary; `directors`, `backends` or `vips` for one part of it, `all` for everything, or a table's name (`cluster`, `nodes`, `certificates`, `pending`, `pools`, `offers`, `services`). `--json` for the same as JSON; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
-| `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, `config` - see below. |
+| `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, and - proposed - `commands` - see below. |
 | `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>` or `approve --match <regex>`, `refuse <node>`, `remove <node>`, `pool add|remove`, `service add|remove`, `assign|unassign`, `secret show|rotate|retire`. A backend has no `admin`. |
 
 ### `thelb status`
@@ -656,39 +658,11 @@ $ sudo thelb status
 
 **Why not shared memory**: a shared memory segment is readable in full by whoever can map it, so it cannot answer one caller less than another, nor know who is reading; readers need locking against a writer mid-update; its layout ties the reader's version to the writer's; and a segment left by a crash stays in `/dev/shm` until reboot. A socket answers each caller with exactly what it may see, and its requests can be versioned like any API.
 
-### Configuration
+### No configuration file
 
-Optional: everything above works from the command line. A YAML file that the user writes (theLB never writes it) holds what should come back after a restart:
+theLB reads two files, and only two: the directors' secret file and the backends'. Everything else is on the command line - the flags of `thelb director` and `thelb backend`, which under systemd live in the unit the user installs - or in the cluster's state, changed with `thelb admin` and replicated by Raft. There is no `--config`.
 
-```yaml
-# a director
-director:
-  control: { vip: 10.0.0.10, port: 7443 }
-  bootstrap: true                                  # where wanted
-  secret_file: /etc/thelb/director.secret          # written at the first bootstrap if missing
-  backend_secret_file: /etc/thelb/backend.secret   # the same; the leader checks backends with it
-  enrollment: { backend_networks: [10.0.0.0/24, fd00::/64] }
-pools:
-  - { name: external, vip: 10.10.1.20/24, count: 10 }
-  - { name: internal, vip: 10.0.0.50/24, count: 10, default: true }
-services:
-  - { name: nginx, pool: external, protocol: tcp, port: 80, scheduler: wrr }
-  - { name: db, pool: internal, protocol: tcp, port: 5432 }
-assignments:
-  - { service: nginx, offer: "web-1:tcp/8080", weight: 3 }
-  - { service: nginx, offer: "web-2:tcp/9090" }
-  - { service: db, offer: "db-1:tcp/5432" }
-```
-
-```yaml
-# a backend
-backend:
-  name: web-1
-  join: 10.0.0.10:7443
-  secret_file: /etc/thelb/backend.secret
-offers:
-  - { offer: tcp/8080, check: { http: /healthz } }
-```
+What a configuration file would have brought back after a full stop - pools, services, assignments - is created again with `thelb admin`. The backend networks a director allows to enrol, which would have been configuration, become an `admin` setting in the cluster's state.
 
 ## What `thelb generate` prints
 
@@ -701,7 +675,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | `generate sysctl` | A `sysctl.d` file with the parameters this node's roles need, for the user who wants them set from boot. |
 | `generate modules` | A `modules-load.d` file with the modules this node needs. |
 | `generate k8s` | The manifests in [Kubernetes](#the-manifests), as one YAML stream. |
-| `generate config` | The running pools, services and assignments as a configuration file - so what was set up from the command line can be kept, if the user chooses. |
+| `generate commands` (proposed) | The `thelb admin` commands that would create the running pools, services and assignments again - a script for the user to keep and run after a full stop. theLB never reads it: it is not a configuration file. |
 
 ## Observability
 
@@ -782,7 +756,7 @@ Like shint, simpler:
 | Phase | Delivers |
 |---|---|
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
-| 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **To come:** port mapping on the backend; the return-path check; IPVS's connection synchronisation; an SCTP check; services from the configuration file; `doctor`, `generate`; the watchdog loop; the lab in CI. |
+| 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **port mapping** on the backend, in theLB's own nftables table; **To come:** the return-path check; IPVS's connection synchronisation; an SCTP check; `generate commands` (proposed); `doctor`, `generate`; the watchdog loop; the lab in CI. |
 | 2 - the cluster | **Begun in v0.1.0-dev, ahead of the rest of phase 1:** directors joining with their secret and waiting for approval (`admin approve`, `refuse`, `remove`); Raft with the replicated CA; the leader holding the control VIP; the bootstrap rule and restarts, approved directors rejoining by themselves; failover; fail closed; leadership hand-off on stop; the network lab (`make e2e`: a crash, a planned stop, a partition, a full stop). **To come:** a cluster that finds its control VIP claimed by another standing down; `--peers`; secret rotation; IPv6 in the lab on a kernel that has it; chaos tests under load. |
 | 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
@@ -791,6 +765,7 @@ Like shint, simpler:
 
 ## Open questions
 
+00. **Recreating the services after a full stop**, without a configuration file: proposed, `thelb generate commands` prints the `admin` commands for the running pools, services and assignments, for the user to keep as a script.
 0. **A node that is both a director and a backend**, which [Roles](#roles) allows for small setups: one theLB runs per node - one socket, one lock - so this build runs one role per node. Running both needs one process doing both, or a second socket.
 
 1. **The tunnel's encapsulation**, for backends in other subnets (phase 4). Both are IPVS's own, and both keep direct return:
@@ -804,6 +779,7 @@ Like shint, simpler:
 
 - **Names: the domain `dmarts.app`**, in DNS order and lowercase: the Service class `dmarts.app/thelb`, annotations under `dmarts.app/` (`dmarts.app/thelb-pool`, `dmarts.app/thelb-shared-vip`, ...), and custom resources, when there are any, in the API group `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...). Lowercase because Kubernetes matches the class exactly, and namespace and CRD names must be lowercase anyway.
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
+- **No configuration file**: theLB reads its two secret files and nothing else; everything else is a flag, or the cluster's state, changed with `thelb admin` ([No configuration file](#no-configuration-file)).
 - **Raft is hashicorp/raft**, theLB's first dependency, as the design always named it; its MPL-2.0 licence allows it in an MIT project's binary - its files are unchanged, and their source is public. theLB's own certificate authority stays its own: a few lines over Go's standard library, with the checks theLB needs (an issuer-chosen identity, SPIFFE IDs, a CA loaded from the replicated state).
 - **One control port, three protocols**, told apart by TLS ALPN: Raft, the API between directors, and joins ([The cluster](#the-cluster-and-what-raft-carries)).
 - **`thelb status` is a summary by default**, with a view for each part of the cluster - `directors`, `backends`, `vips` - and `all` for everything: one page with every table was too full to read ([`thelb status`](#thelb-status)).
@@ -826,6 +802,7 @@ Like shint, simpler:
 - **Pools** hold the service VIPs: registered on any director, as a first address in CIDR notation and `--vippool-count`, with overlap checks and network probes; the control VIP is the bootstrap's own ([Address pools](#address-pools)).
 - **Backends offer, directors decide**: a backend registers only a protocol and its application's port; a director names services and assigns offers to them, after checking the forward and the return path; VIPs carry no port ([Offers, services and assignments](#offers-services-and-assignments)).
 - **One daemon, every interface**: VIPs on any of a director's interfaces, served together ([Many interfaces, one daemon](#many-interfaces-one-daemon)).
+- **Port mapping on the backend is nftables destination NAT**, in theLB's own table, written over netlink - not eBPF: connection tracking handles the replies, SCTP's checksum, ICMP errors and fragments ([Port mapping](#port-mapping-on-the-backend)).
 - **Weighted round robin** is the default scheduler, with IPVS's connection synchronisation on by default so connections survive a failover.
 - **The director never changes the port; a backend maps it**, in theLB's own nftables table, when its application's port differs ([Port mapping](#port-mapping-on-the-backend)).
 - **One VIP, many services**, each with its own backends; in Kubernetes, Services share a VIP by annotation.

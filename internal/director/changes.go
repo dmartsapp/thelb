@@ -324,8 +324,8 @@ func (s *session) probe(addr netip.Addr) string {
 
 // assign assigns backends' offers - node:proto/port - to a service, after the
 // checks the leader can make: the offer is the backend's, its protocol the
-// service's, its port the service's (a backend that maps ports comes later),
-// and the director reaches the backend directly, on a network of its own.
+// service's, and the director reaches the backend directly, on a network of
+// its own. An offer's port may differ from the service's: the backend maps it.
 func (s *session) assign(by string, c api.Change) (api.Result, error) {
 	if len(c.Names) != 1 || len(c.Offers) == 0 {
 		return api.Result{}, errors.New("assign a service one or more offers: assign <service> <node>:<proto>/<port>")
@@ -367,9 +367,6 @@ func (s *session) assign(by string, c api.Change) (api.Result, error) {
 		}
 		if proto != svc.Proto {
 			return api.Result{}, fmt.Errorf("%s offers %s, and the service %s is %s", node, proto, service, svc.Proto)
-		}
-		if port != svc.Port {
-			return api.Result{}, fmt.Errorf("%s's application is on port %d and the service's port is %d: a backend that maps ports comes in a later build of theLB", node, port, svc.Port)
 		}
 		addr, err := netip.ParseAddr(n.Address)
 		if err != nil {

@@ -111,22 +111,32 @@ startb() {
 }
 declare -A web
 # app <node> up|down: the backend's web server, answering with its name.
+# altport is a backend's own port for the mapped service: 8080 on b1, 9090 on
+# b2, 7070 on b3 - and the service on 80.
+altport() { case $1 in b1) echo 8080 ;; b2) echo 9090 ;; b3) echo 7070 ;; esac; }
+declare -A webalt
 app() {
 	if [ "$2" = up ]; then
-		install -d -m 0755 "$tmp/$1/www"
+		install -d -m 0755 "$tmp/$1/www" "$tmp/$1/www-alt"
 		echo "$1" >"$tmp/$1/www/index.html"
+		echo "$1-$(altport $1)" >"$tmp/$1/www-alt/index.html"
 		ip netns exec $P-$1 python3 -m http.server 80 --bind 0.0.0.0 --directory "$tmp/$1/www" >/dev/null 2>&1 &
 		web[$1]=$!
+		ip netns exec $P-$1 python3 -m http.server "$(altport $1)" --bind 0.0.0.0 --directory "$tmp/$1/www-alt" >/dev/null 2>&1 &
+		webalt[$1]=$!
 	else
-		kill "${web[$1]}" 2>/dev/null
-		wait "${web[$1]}" 2>/dev/null
-		unset "web[$1]"
+		kill "${web[$1]}" "${webalt[$1]}" 2>/dev/null
+		wait "${web[$1]}" "${webalt[$1]}" 2>/dev/null
+		unset "web[$1]" "webalt[$1]"
 	fi
 }
-# answers <n>: which backends answered n requests from the client to the service.
+# answers <n> [vip]: which backends answered n requests from the client to a
+# service - the web service's VIP unless another is named.
 answers() {
-	for _ in $(seq 1 "$1"); do ip netns exec $P-c curl -s --max-time 2 "http://$SVC/" || echo none; done | sort | uniq -c | awk '{print $2 "=" $1}' | xargs
+	local vip=${2:-$SVC}
+	for _ in $(seq 1 "$1"); do ip netns exec $P-c curl -s --max-time 2 "http://$vip/" || echo none; done | sort | uniq -c | awk '{print $2 "=" $1}' | xargs
 }
+nft_on() { ip netns exec $P-$1 nft list table inet thelb 2>/dev/null; }
 ipvs_on() { ip netns exec $P-$1 ipvsadm -Ln 2>/dev/null; }
 weight_is() { ipvs_on "$1" | grep -qE -- "-> ${addr4[$2]}:80 +Route +$3 "; }
 answers_include() { answers 9 | grep -q "$1="; }
@@ -161,13 +171,14 @@ on() {
 }
 # within <seconds> <predicate> [args]: wait until the predicate holds.
 within() {
-	local t=$1
+	local end=$((SECONDS + $1))
 	shift
-	for _ in $(seq 1 $((t * 10))); do
+	# A deadline, not a count: a predicate may take seconds itself.
+	while [ "$SECONDS" -lt "$end" ]; do
 		"$@" && return 0
 		sleep 0.1
 	done
-	return 1
+	"$@"
 }
 logged() { grep -qE -- "$2" "$1" 2>/dev/null; }
 json() { on "$1" "$bin" status --json 2>/dev/null | python3 -c "import json, sys; s = json.load(sys.stdin); print($2)" 2>/dev/null; }
@@ -348,12 +359,12 @@ check "d2 and d3 join, once approved" "within 20 both_logged $tmp/d2.svc.log $tm
 for n in b1 b2 b3; do
 	cp -p "$tmp/d1/backend.secret" "$tmp/$n/"
 	app $n up
-	startb $n "$tmp/$n.log"
+	startb $n "$tmp/$n.log" --offer "tcp/$(altport $n),check=http:/"
 done
 check "the backends enrol, and wait for approval" "within 20 eval 'logged $tmp/b1.log \"OK waiting for approval\" && logged $tmp/b2.log \"OK waiting for approval\" && logged $tmp/b3.log \"OK waiting for approval\"'"
 check "approve --match 'b[1-3]' --yes" "on d1 $bin admin approve --match 'b[1-3]' --yes | grep -q 'approved: b1, b2, b3'"
 check "the backends are members" "within 20 eval 'logged $tmp/b1.log \"OK backend ready\" && logged $tmp/b2.log \"OK backend ready\" && logged $tmp/b3.log \"OK backend ready\"'"
-check "a backend's own status shows only itself, waiting for an assignment" "on b1 $bin status | grep -qE '^ backend \| e2e +\| a member of the cluster \| tcp/80 \| http / \| (ok|fail|-) +\| - '"
+check "a backend's own status shows only itself, waiting for an assignment" "on b1 $bin status | grep -qE '^ backend \| e2e +\| a member of the cluster \| tcp/80 +\| http / \| (ok|fail|-) +\| - '"
 check "admin pool add: a pool that would hold a backend's address is refused" "! on d2 $bin admin pool add bad --vip $NET4.30/24 --vippool-count 5 2>/dev/null"
 check "admin pool add lab, from a follower" "on d2 $bin admin pool add lab --vip $SVC/24 --vippool-count 10 | grep -q 'pool lab: $SVC - $NET4.29, on eth0'"
 check "admin service add web: the pool's first address" "on d1 $bin admin service add web --pool lab --proto tcp --port 80 | grep -q 'service web: $SVC tcp/80'"
@@ -372,6 +383,26 @@ check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep 
 on d1 "$bin" status >"$tmp/summary"
 check "status, alone, is the summary" "grep -qE '^ directors +\| +3 \| +3 \|' $tmp/summary && grep -qE '^ backends +\| +3 \| +3 \|' $tmp/summary && grep -q 'More: thelb status' $tmp/summary"
 on d1 "$bin" status backends | sed 's/^/      /'
+
+echo "== port mapping: a service on port 80, served from 8080 on b1, 9090 on b2, 7070 on b3"
+MAPPED=$NET4.21
+check "admin service add mapped: the pool's next address" "on d1 $bin admin service add mapped --pool lab --proto tcp --port 80 | grep -q 'service mapped: $MAPPED tcp/80'"
+check "admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070" "on d1 $bin admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070 | grep -q 'assigned to mapped: b1, b2, b3'"
+if command -v nft >/dev/null; then
+	check "b2 maps $MAPPED tcp/80 to 9090, in theLB's nftables table" "within 10 eval 'nft_on b2 | grep -q \"ip daddr $MAPPED tcp dport 80 dnat ip to :9090\"'"
+	check "and only that: web's port is its application's, so no rule" "[ \$(nft_on b2 | grep -c dnat) = 1 ]"
+	nft_on b2 | sed 's/^/      /'
+fi
+if command -v ipvsadm >/dev/null; then
+	check "IPVS sends the mapped service's packets to the backends unchanged, at port 80" "within 20 eval 'ipvs_on d1 | grep -A3 \"TCP  $MAPPED:80\" | grep -cE \"Route +1 \" | grep -qx 3'"
+fi
+check "the client's requests are answered from the three ports" "within 20 eval '[ \"\$(answers 9 $MAPPED)\" = \"b1-8080=3 b2-9090=3 b3-7070=3\" ]'"
+check "status backends: each at its own port" "on d1 $bin status backends | grep -qE '^ mapped +\| $MAPPED:80 +\| b2 +\| ${addr4[b2]}:9090 +\| ok / ok'"
+check "a backend's own status names the service and its port" "on b2 $bin status | grep -q 'tcp/9090 | http / | ok        | mapped (port 80)'"
+check "admin unassign mapped b2: b2's rule goes, and with it the table" "on d1 $bin admin unassign mapped b2 >/dev/null && within 10 eval '! nft_on b2 >/dev/null'"
+check "the client is answered by b1 and b3" "within 10 eval '[ \"\$(answers 6 $MAPPED)\" = \"b1-8080=3 b3-7070=3\" ]'"
+check "admin service remove mapped: every backend's table goes" "on d1 $bin admin service remove mapped >/dev/null && within 10 eval '! nft_on b1 >/dev/null && ! nft_on b3 >/dev/null'"
+check "and the VIP" "within 10 eval '! holds d1 $MAPPED && ! ip -n $P-b1 -o addr show dev thelb0 | grep -q \" $MAPPED/\"'"
 
 echo "== a backend's application fails, and comes back"
 app b2 down

@@ -13,11 +13,12 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 ## Status
 
-**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. And backends: pools, services, assignments, and the kernel's IPVS forwarding to them by direct routing, with health checks from both sides. Port mapping on the backend, `doctor` and `generate` come next.
+**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. And backends: pools, services, assignments, and the kernel's IPVS forwarding to them by direct routing, with health checks from both sides. A backend maps a service's port to its application's where they differ. `doctor`, `generate` and the configuration file come next.
 
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
 - [Design](docs/design.md) - how it works, and the questions still open;
-- [Diagrams](docs/diagrams.md) - both, in pictures.
+- [Diagrams](docs/diagrams.md) - both, in pictures;
+- [Build state](docs/build-state.md) - where the code is, what is broken, and what comes next.
 
 ## Building and testing
 
@@ -35,10 +36,12 @@ make lab-down                      # take it away
 
 ### Trying it on one machine
 
-`make lab` builds, in network namespaces on `198.18.0.0/24` - so nothing reaches the machine's own network - a cluster of three directors, three backends each running a small web server, and a client; then a pool, a service on `198.18.0.20:80`, and the backends assigned to it. `test/lab.sh` drives it:
+`make lab` builds, in network namespaces on `198.18.0.0/24` - so nothing reaches the machine's own network - a cluster of three directors, three backends each running two small web servers, and a client; then a pool and two services: `web` on `198.18.0.20:80`, from port 80 on every backend, and `mapped` on `198.18.0.21:80`, from 8080, 9090 and 7070 - each backend mapping the port. `test/lab.sh` drives it:
 
 ```text
-sudo test/lab.sh curl 12                    # the client fetches the service 12 times, and counts who answered
+sudo test/lab.sh curl 12                    # the client fetches web 12 times, and counts who answered
+sudo test/lab.sh curl 9 198.18.0.21         # the same for mapped
+sudo test/lab.sh run b2 nft list table inet thelb   # b2's port mapping: 80 to 9090
 sudo test/lab.sh run d1 thelb status        # the summary; then status directors, backends, vips, all
 sudo test/lab.sh run d1 ipvsadm -Ln         # what theLB programmed in IPVS, on the leader
 sudo test/lab.sh app b2 down                # a backend's application fails: weight 0; app b2 up brings it back

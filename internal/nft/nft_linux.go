@@ -1,0 +1,328 @@
+//go:build linux
+
+package nft
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/dmartsapp/thelb/internal/netlink"
+)
+
+// nf_tables over netlink (include/uapi/linux/netfilter/nf_tables.h). Every
+// integer attribute is big-endian.
+const (
+	netlinkNetfilter = 12
+	subsysNFTables   = 10
+	msgBatchBegin    = 0x10
+	msgBatchEnd      = 0x11
+
+	msgNewTable = 0
+	msgDelTable = 2
+	msgNewChain = 3
+	msgNewRule  = 6
+
+	nfprotoINET = 1
+	nfprotoIPv4 = 2
+	nfprotoIPv6 = 10
+
+	tableName = 1
+
+	chainTable = 1
+	chainName  = 3
+	chainHook  = 4
+	chainType  = 7
+	hookNum    = 1
+	hookPrio   = 2
+
+	ruleTable = 1
+	ruleChain = 2
+	ruleExprs = 4
+	listElem  = 1
+	exprName  = 1
+	exprData  = 2
+
+	metaDreg    = 1
+	metaKey     = 2
+	metaNFProto = 15
+	metaL4Proto = 16
+
+	cmpSreg   = 1
+	cmpOp     = 2
+	cmpData   = 3
+	cmpEq     = 0
+	dataValue = 1
+
+	payloadDreg   = 1
+	payloadBase   = 2
+	payloadOffset = 3
+	payloadLen    = 4
+	baseNetwork   = 1
+	baseTransport = 2
+
+	immDreg = 1
+	immData = 2
+
+	natType           = 1
+	natFamily         = 2
+	natRegProtoMin    = 5
+	natRegProtoMax    = 6
+	natFlags          = 7
+	natDNAT           = 1
+	natProtoSpecified = 2 // NF_NAT_RANGE_PROTO_SPECIFIED
+
+	reg1 = 1
+
+	hookPrerouting = 0
+	prioDstNAT     = -100
+)
+
+var seq atomic.Uint32
+
+func init() { seq.Store(uint32(time.Now().UnixNano())) }
+
+func be32(v uint32) []byte { b := make([]byte, 4); binary.BigEndian.PutUint32(b, v); return b }
+func be16(v uint16) []byte { b := make([]byte, 2); binary.BigEndian.PutUint16(b, v); return b }
+func str(s string) []byte  { return append([]byte(s), 0) }
+
+type message struct {
+	typ   uint16
+	flags uint16
+	fam   byte
+	body  []byte
+}
+
+func nfgen(fam byte, resID uint16) []byte {
+	b := []byte{fam, 0, 0, 0}
+	binary.BigEndian.PutUint16(b[2:], resID)
+	return b
+}
+
+func expr(name string, data []byte) []byte {
+	var e []byte
+	e = netlink.AppendAttr(e, exprName, str(name))
+	e = netlink.AppendNested(e, exprData, data)
+	return netlink.AppendNested(nil, listElem, e)
+}
+
+func meta(key uint32) []byte {
+	var d []byte
+	d = netlink.AppendAttr(d, metaKey, be32(key))
+	d = netlink.AppendAttr(d, metaDreg, be32(reg1))
+	return expr("meta", d)
+}
+
+func cmp(value []byte) []byte {
+	var d []byte
+	d = netlink.AppendAttr(d, cmpSreg, be32(reg1))
+	d = netlink.AppendAttr(d, cmpOp, be32(cmpEq))
+	d = netlink.AppendNested(d, cmpData, netlink.AppendAttr(nil, dataValue, value))
+	return expr("cmp", d)
+}
+
+func payload(base, offset, length uint32) []byte {
+	var d []byte
+	d = netlink.AppendAttr(d, payloadDreg, be32(reg1))
+	d = netlink.AppendAttr(d, payloadBase, be32(base))
+	d = netlink.AppendAttr(d, payloadOffset, be32(offset))
+	d = netlink.AppendAttr(d, payloadLen, be32(length))
+	return expr("payload", d)
+}
+
+// rule is: meta nfproto <family> <ip|ip6> daddr <vip> meta l4proto <proto>
+// th dport <port> dnat to :<app port>.
+func rule(m Map) ([]byte, error) {
+	proto, err := protoNumber(m.Proto)
+	if err != nil {
+		return nil, err
+	}
+	vip := m.VIP.Unmap()
+	fam, off, n := byte(nfprotoIPv4), uint32(16), uint32(4)
+	if vip.Is6() {
+		fam, off, n = nfprotoIPv6, 24, 16
+	}
+	var e []byte
+	e = append(e, meta(metaNFProto)...)
+	e = append(e, cmp([]byte{fam})...)
+	e = append(e, payload(baseNetwork, off, n)...)
+	e = append(e, cmp(vip.AsSlice())...)
+	e = append(e, meta(metaL4Proto)...)
+	e = append(e, cmp([]byte{proto})...)
+	e = append(e, payload(baseTransport, 2, 2)...)
+	e = append(e, cmp(be16(m.Port))...)
+	var imm []byte
+	imm = netlink.AppendAttr(imm, immDreg, be32(reg1))
+	imm = netlink.AppendNested(imm, immData, netlink.AppendAttr(nil, dataValue, be16(m.AppPort)))
+	e = append(e, expr("immediate", imm)...)
+	var nat []byte
+	nat = netlink.AppendAttr(nat, natType, be32(natDNAT))
+	nat = netlink.AppendAttr(nat, natFamily, be32(uint32(fam)))
+	nat = netlink.AppendAttr(nat, natRegProtoMin, be32(reg1))
+	nat = netlink.AppendAttr(nat, natRegProtoMax, be32(reg1))
+	nat = netlink.AppendAttr(nat, natFlags, be32(natProtoSpecified))
+	e = append(e, expr("nat", nat)...)
+
+	var b []byte
+	b = netlink.AppendAttr(b, ruleTable, str(Table))
+	b = netlink.AppendAttr(b, ruleChain, str(Chain))
+	b = netlink.AppendNested(b, ruleExprs, e)
+	return b, nil
+}
+
+func table() []byte { return netlink.AppendAttr(nil, tableName, str(Table)) }
+
+// Apply makes theLB's table hold exactly maps, in one transaction: the table
+// is replaced whole - created, emptied and filled - or, with no maps, removed.
+func Apply(maps []Map) error {
+	msgs := []message{
+		// Adding the table first makes deleting it succeed whether or not it was there.
+		{typ: msgNewTable, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: table()},
+		{typ: msgDelTable, fam: nfprotoINET, body: table()},
+	}
+	if len(maps) > 0 {
+		msgs = append(msgs, message{typ: msgNewTable, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: table()})
+		var hook []byte
+		hook = netlink.AppendAttr(hook, hookNum, be32(hookPrerouting))
+		p := int32(prioDstNAT)
+		hook = netlink.AppendAttr(hook, hookPrio, be32(uint32(p)))
+		var c []byte
+		c = netlink.AppendAttr(c, chainTable, str(Table))
+		c = netlink.AppendAttr(c, chainName, str(Chain))
+		c = netlink.AppendNested(c, chainHook, hook)
+		c = netlink.AppendAttr(c, chainType, str("nat"))
+		msgs = append(msgs, message{typ: msgNewChain, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: c})
+		for _, m := range maps {
+			r, err := rule(m)
+			if err != nil {
+				return err
+			}
+			msgs = append(msgs, message{typ: msgNewRule, flags: syscall.NLM_F_CREATE | syscall.NLM_F_APPEND, fam: nfprotoINET, body: r})
+		}
+	}
+	return batch(msgs)
+}
+
+// Remove removes theLB's table, if it is there.
+func Remove() error { return Apply(nil) }
+
+// Exists is whether theLB's table is there.
+func Exists() (bool, error) {
+	fd, err := open()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	s := seq.Add(1)
+	b := header(subsysNFTables<<8|1 /* NFT_MSG_GETTABLE */, syscall.NLM_F_REQUEST|syscall.NLM_F_ACK, s, nfgen(nfprotoINET, 0), table())
+	if err := syscall.Sendto(fd, b, 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		return false, err
+	}
+	found := false
+	for {
+		buf := make([]byte, 1<<16)
+		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return false, err
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return false, err
+		}
+		for _, m := range msgs {
+			if m.Header.Seq != s {
+				continue
+			}
+			if m.Header.Type == syscall.NLMSG_ERROR {
+				e := int32(binary.NativeEndian.Uint32(m.Data[0:4]))
+				if e == 0 {
+					return found, nil
+				}
+				if syscall.Errno(-e) == syscall.ENOENT {
+					return false, nil
+				}
+				return false, syscall.Errno(-e)
+			}
+			found = true
+		}
+	}
+}
+
+func open() (int, error) {
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, netlinkNetfilter)
+	if err != nil {
+		return -1, fmt.Errorf("nftables: %w", err)
+	}
+	if err := syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("nftables: %w", err)
+	}
+	tv := syscall.Timeval{Sec: 5}
+	_ = syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
+	return fd, nil
+}
+
+func header(typ, flags uint16, s uint32, parts ...[]byte) []byte {
+	var body []byte
+	for _, p := range parts {
+		body = append(body, p...)
+	}
+	b := make([]byte, syscall.NLMSG_HDRLEN, syscall.NLMSG_HDRLEN+len(body))
+	b = append(b, body...)
+	binary.NativeEndian.PutUint32(b[0:4], uint32(len(b)))
+	binary.NativeEndian.PutUint16(b[4:6], typ)
+	binary.NativeEndian.PutUint16(b[6:8], flags)
+	binary.NativeEndian.PutUint32(b[8:12], s)
+	for len(b)%4 != 0 {
+		b = append(b, 0)
+	}
+	return b
+}
+
+// batch sends msgs as one transaction, and waits for each to be acknowledged.
+func batch(msgs []message) error {
+	fd, err := open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	var b []byte
+	b = append(b, header(msgBatchBegin, syscall.NLM_F_REQUEST, seq.Add(1), nfgen(syscall.AF_UNSPEC, subsysNFTables))...)
+	want := map[uint32]bool{}
+	for _, m := range msgs {
+		s := seq.Add(1)
+		want[s] = true
+		b = append(b, header(subsysNFTables<<8|m.typ, syscall.NLM_F_REQUEST|syscall.NLM_F_ACK|m.flags, s, nfgen(m.fam, 0), m.body)...)
+	}
+	b = append(b, header(msgBatchEnd, syscall.NLM_F_REQUEST, seq.Add(1), nfgen(syscall.AF_UNSPEC, subsysNFTables))...)
+	if err := syscall.Sendto(fd, b, 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		return fmt.Errorf("nftables: %w", err)
+	}
+	var errs []error
+	for len(want) > 0 {
+		buf := make([]byte, 1<<16)
+		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return fmt.Errorf("nftables: %w", err)
+		}
+		replies, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return fmt.Errorf("nftables: %w", err)
+		}
+		for _, r := range replies {
+			if r.Header.Type != syscall.NLMSG_ERROR || !want[r.Header.Seq] {
+				continue
+			}
+			delete(want, r.Header.Seq)
+			if e := int32(binary.NativeEndian.Uint32(r.Data[0:4])); e != 0 {
+				errs = append(errs, syscall.Errno(-e))
+				// The transaction was refused as a whole: no more answers come.
+				return fmt.Errorf("nftables: %w", errors.Join(errs...))
+			}
+		}
+	}
+	return nil
+}

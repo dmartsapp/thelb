@@ -23,6 +23,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/ipvs"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/nft"
 )
 
 // fakePlane records the plan a leader applies.
@@ -68,6 +69,7 @@ func (f *fakePlane) weight(vip string, port int, backend netip.AddrPort) int {
 type fakeKernel struct {
 	mu       sync.Mutex
 	vips     []netip.Addr
+	maps     []nft.Map
 	restored bool
 }
 
@@ -76,6 +78,12 @@ func (k *fakeKernel) Hold(v []netip.Addr) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.vips = append([]netip.Addr(nil), v...)
+	return nil
+}
+func (k *fakeKernel) Map(m []nft.Map) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.maps = append([]nft.Map(nil), m...)
 	return nil
 }
 func (k *fakeKernel) Restore() {
@@ -209,6 +217,21 @@ func TestABackendServesAService(t *testing.T) {
 	dest := netip.AddrPortFrom(netip.MustParseAddr(app), uint16(port))
 	eventually(t, "the backend to hold the VIP", func() bool { return kernel.holds("127.0.0.50") })
 	eventually(t, "the leader to send it traffic, weight 3", func() bool { return plane.weight("127.0.0.50", port, dest) == 3 })
+
+	// A second service - "api", before "web" - from the same offer, on the
+	// pool's next address: both have their backend.
+	if _, err := change(t, d1, api.Change{Op: "service.add", Names: []string{"api"}, Pool: "lab", Proto: "tcp", Port: port}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"api"}, Offers: []string{fmt.Sprintf("web-1:tcp/%d", port)}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "both services with their backend", func() bool {
+		return plane.weight("127.0.0.51", port, dest) == 1 && plane.weight("127.0.0.50", port, dest) == 3
+	})
+	if _, err := change(t, d1, api.Change{Op: "service.remove", Names: []string{"api"}}); err != nil {
+		t.Fatal(err)
+	}
 	plane.mu.Lock()
 	vips, pins := plane.plan.VIPs, plane.plan.Pins
 	plane.mu.Unlock()
@@ -222,10 +245,12 @@ func TestABackendServesAService(t *testing.T) {
 	if text, _ := st.Text(time.Now(), "vips"); !strings.Contains(text, " 127.0.0.50 | service | lab ") {
 		t.Errorf("status vips:\n%s", text)
 	}
-	mine, _ = localsock.Call(run, localsock.Request{Op: localsock.OpStatus})
-	if m := mine.Status.Mine; m == nil || len(m.Offers) != 1 || m.Offers[0].Service != "web" || strings.Contains(fmt.Sprint(m), "127.0.0.50") {
-		t.Errorf("the backend's own status: %+v", mine.Status.Mine)
-	}
+	// The backend hears of api's removal with its next heartbeat's answer.
+	eventually(t, "the backend's own status: web, by name only", func() bool {
+		mine, _ = localsock.Call(run, localsock.Request{Op: localsock.OpStatus})
+		m := mine.Status.Mine
+		return m != nil && len(m.Offers) == 1 && m.Offers[0].Service == "web" && !strings.Contains(fmt.Sprint(m), "127.0.0.50")
+	})
 
 	// The application fails: both checks see it, and the weight goes to 0.
 	<-healthy
@@ -249,7 +274,7 @@ func TestABackendServesAService(t *testing.T) {
 			t.Errorf("the removed backend ended with %v", err)
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatalf("the removed backend still runs\n%s", logs)
+		t.Fatalf("the removed backend still runs\n%s\nthe leader:\n%s", logs, d1.logs)
 	}
 	if !kernel.restored {
 		t.Error("the removed backend left its kernel state")

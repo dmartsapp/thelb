@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/join"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/nft"
 	"github.com/dmartsapp/thelb/internal/sdnotify"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
@@ -53,6 +55,9 @@ type Kernel interface {
 	Prepare() error
 	// Hold makes thelb0 hold exactly these VIPs.
 	Hold(vips []netip.Addr) error
+	// Map makes theLB's nftables table map exactly these ports - and removes
+	// the table when there are none.
+	Map(maps []nft.Map) error
 	// Restore removes thelb0 and puts the parameters back.
 	Restore()
 }
@@ -464,10 +469,23 @@ func (b *agent) obey(as []api.Assignment) {
 		return
 	}
 	var vips []netip.Addr
+	var maps []nft.Map
 	for _, a := range as {
-		if v, err := netip.ParseAddr(a.VIP); err == nil && !slices.Contains(vips, v) {
+		v, err := netip.ParseAddr(a.VIP)
+		if err != nil {
+			continue
+		}
+		if !slices.Contains(vips, v) {
 			vips = append(vips, v)
 		}
+		if a.AppPort != 0 && a.AppPort != a.Port {
+			maps = append(maps, nft.Map{VIP: v, Proto: a.Proto, Port: uint16(a.Port), AppPort: uint16(a.AppPort)})
+		}
+	}
+	// The mappings first, then the VIPs: a packet the VIP accepts is mapped.
+	if err := b.kernel.Map(maps); err != nil {
+		b.log.Error("mapping the services' ports failed", "error", err)
+		return
 	}
 	if err := b.kernel.Hold(vips); err != nil {
 		b.log.Error("holding the services' VIPs failed", "error", err)
@@ -479,12 +497,12 @@ func (b *agent) obey(as []api.Assignment) {
 	b.mu.Unlock()
 	for _, a := range as {
 		if !slices.Contains(old, a) {
-			b.log.OK("assigned", "service", a.Service, "offer", fmt.Sprintf("%s/%d", a.Proto, a.Port))
+			b.log.OK("assigned", "service", a.Service, "offer", fmt.Sprintf("%s/%d", a.Proto, a.AppPort), "port", a.Port)
 		}
 	}
 	for _, a := range old {
 		if !slices.Contains(as, a) {
-			b.log.OK("unassigned", "service", a.Service, "offer", fmt.Sprintf("%s/%d", a.Proto, a.Port))
+			b.log.OK("unassigned", "service", a.Service, "offer", fmt.Sprintf("%s/%d", a.Proto, a.AppPort))
 		}
 	}
 }
@@ -592,13 +610,17 @@ func (b *agent) Status() status.Status {
 		}
 		var to []string
 		for _, a := range b.assigned {
-			if a.Proto == o.Proto && a.Port == o.Port {
-				to = append(to, a.Service)
+			if a.Proto == o.Proto && a.AppPort == o.Port {
+				name := a.Service
+				if a.Port != a.AppPort {
+					name += fmt.Sprintf(" (port %d)", a.Port)
+				}
+				to = append(to, name)
 			}
 		}
 		if len(to) > 0 {
 			sort.Strings(to)
-			row.Service = fmt.Sprint(to)[1 : len(fmt.Sprint(to))-1]
+			row.Service = strings.Join(to, ", ")
 		}
 		mine.Offers = append(mine.Offers, row)
 	}
