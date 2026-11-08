@@ -200,7 +200,7 @@ With direct routing, a packet reaches a node with the VIP as its destination. **
 
 ### Which Services, and which backends
 
-- Services of type `LoadBalancer` with **`spec.loadBalancerClass`** set to theLB's class (name: see [Open questions](#open-questions)), so theLB never takes Services meant for another provider.
+- Services of type `LoadBalancer` with **`spec.loadBalancerClass`** set to theLB's class, **`dmarts.app/thelb`**, so theLB never takes Services meant for another provider.
 - **VIPs from address pools** per family; dual-stack Services (`spec.ipFamilies`) get one VIP per family.
 - **`externalTrafficPolicy: Local`**: backends are the nodes with ready endpoints, checked at the Service's `healthCheckNodePort`, which kube-proxy answers per node; the client's address reaches the pod.
 - **`externalTrafficPolicy: Cluster`**: every ready node is a backend, checked through kube-proxy's own health endpoint.
@@ -350,13 +350,13 @@ Like shint, simpler:
 
 ## Open questions
 
-1. **The `loadBalancerClass` name, and the prefix of theLB's annotations and future custom resources.** Proposal: **`dmarts.app/thelb`**. Kubernetes writes these prefixes as a DNS name the project owns, in its usual order (its own example is `example.com/internal-vip`), and a custom resource's API group must be a DNS subdomain - so theLB's CRDs would be in `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...), and the class, the annotations (`dmarts.app/thelb-pool`, ...) and the CRDs all name the same domain the same way. All lowercase, although Kubernetes would accept `theLB` after the `/`: the namespace and CRD names must be lowercase, and the class is matched exactly - a Service with `theLB` where theLB watches `thelb` would be silently ignored.
-2. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
-3. **Cluster membership security**: certificates the user provides (with `generate certs` for small clusters), or a join token theLB exchanges for a certificate.
-4. **SCTP**, which IPVS supports: in scope, or later.
-5. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
+1. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
+2. **Cluster membership security**: certificates the user provides (with `generate certs` for small clusters), or a join token theLB exchanges for a certificate.
+3. **SCTP**, which IPVS supports: in scope, or later.
+4. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
 
 ### Decided
 
+- **Names: the domain `dmarts.app`**, in DNS order and lowercase: the Service class `dmarts.app/thelb`, annotations under `dmarts.app/` (`dmarts.app/thelb-pool`, ...), and custom resources, when there are any, in the API group `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...). Lowercase because Kubernetes matches the class exactly, and namespace and CRD names must be lowercase anyway.
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity, and a cluster that stopped entirely forms again from its configured voters ([The cluster](#the-cluster)).
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
