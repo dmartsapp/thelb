@@ -19,19 +19,20 @@ Status: **design**, before any code. Decisions still open are listed at the end,
 11. [The cluster, and what Raft carries](#the-cluster-and-what-raft-carries)
 12. [Health checks](#health-checks)
 13. [Kubernetes](#kubernetes)
-14. [Command line and configuration](#command-line-and-configuration)
-15. [What `thelb generate` prints](#what-thelb-generate-prints)
-16. [Observability](#observability)
-17. [Security](#security)
-18. [Failure modes](#failure-modes)
-19. [Testing](#testing)
-20. [Project, tooling and releases](#project-tooling-and-releases)
-21. [Phases](#phases)
-22. [Open questions](#open-questions)
+14. [Address pools](#address-pools)
+15. [Command line and configuration](#command-line-and-configuration)
+16. [What `thelb generate` prints](#what-thelb-generate-prints)
+17. [Observability](#observability)
+18. [Security](#security)
+19. [Failure modes](#failure-modes)
+20. [Testing](#testing)
+21. [Project, tooling and releases](#project-tooling-and-releases)
+22. [Phases](#phases)
+23. [Open questions](#open-questions)
 
 ## What theLB does
 
-- **L4 load balancing** of TCP and UDP to a virtual IP (VIP), IPv4 and IPv6, by the kernel's IPVS with **direct return**: replies go from the backends straight to the clients. Direct routing first; IP-in-IP tunnelling, which keeps direct return across subnets, next.
+- **L4 load balancing** of TCP, UDP and SCTP to a virtual IP (VIP), IPv4 and IPv6, by the kernel's IPVS with **direct return**: replies go from the backends straight to the clients. Direct routing first; IP-in-IP tunnelling, which keeps direct return across subnets, next.
 - **VIP ownership on the network**: it adds the VIP to the right interface and announces it on the L2 network (gratuitous ARP for IPv4, unsolicited Neighbor Advertisements for IPv6).
 - **High availability**: a cluster of directors agrees, through Raft, which one holds each VIP; when it fails, another takes the VIP over.
 - **Backends that prove who they are**: a backend enrols with the cluster, gets a certificate, and is sent traffic only for the services it is allowed to serve, only while it keeps proving it is there.
@@ -46,7 +47,7 @@ Not in scope, for now: proxying (a later capability - see [Phases](#phases)), NA
 | Word | Meaning |
 |---|---|
 | **VIP** | The virtual IP clients connect to. One VIP can carry several services, each served by its own backends. |
-| **Service** | A VIP, a protocol (TCP or UDP) and a port, with its backends. In IPVS terms, a virtual service. |
+| **Service** | A VIP, a protocol (TCP, UDP or SCTP) and a port, with its backends. In IPVS terms, a virtual service. |
 | **Director** | A node that can hold VIPs and forwards their traffic with IPVS. Directors form the Raft cluster. |
 | **Leader** | The director Raft has elected. It holds the control VIP, signs certificates, and decides; the others follow. |
 | **Control VIP** | The cluster's own VIP, held by the leader: the address backends and the command line talk to, on the control port. |
@@ -75,6 +76,7 @@ theLB supports every kernel from 5.14, the kernel of RHEL 9. It does not decide 
 | The Maglev scheduler (`ip_vs_mh`, upstream since 4.18) | the default scheduler | source hashing (`sh`), with backends always added in the same order so every director hashes alike, and a warning |
 | IPv6 | IPv6 VIPs | IPv6 VIPs refused at preflight, with the reason |
 | nftables (for port mapping) | port mapping on backends | port mapping refused at preflight; services whose ports match still work |
+| SCTP in IPVS (`CONFIG_IP_VS_PROTO_SCTP`), and the `sctp` module for health checks | SCTP services | SCTP services refused at preflight, with the reason; TCP and UDP services still work |
 | Any other module or parameter theLB needs | used | preflight fails, naming it |
 
 `thelb doctor` and the startup log print the kernel's version and every adaptation in effect.
@@ -111,6 +113,7 @@ theLB programs IPVS over its netlink interface (no `ipvsadm`):
 - **Unhealthy backend**: weight 0 - no new connections, existing ones finish - not removed. A backend that detaches is removed, and its connections expire (`expire_nodest_conn`).
 - **Failover without losing connections**: `sloppy_tcp` lets the new director accept a flow it never saw start; Maglev sends it to the same backend. IPVS's own connection synchronisation (the kernel's sync daemon, master to backups) is an option on top, off by default.
 - **Session persistence** (one client to one backend for a time) is a per-service option.
+- **SCTP** is balanced per association, like a TCP connection. Multi-homing - one association over several addresses - is not carried: on theLB's side, the VIP is the association's only address.
 
 ### Forwarding methods
 
@@ -127,7 +130,7 @@ Neither changes the port, and neither lets the director see the replies: no L7, 
 
 The director cannot change the port, so a backend whose application listens elsewhere - `VIP:443` served by an application on `8443` - maps it itself. When a backend attaches with an application port different from the service's port, its agent adds one rule to **theLB's own nftables table** (`inet thelb`): packets to `VIP:443` go to port `8443`. The kernel's connection tracking turns the replies back into `VIP:443`, so the client sees the service's port. The mapping is per VIP, protocol and port, so two VIPs can both offer 443 and lead to different applications. It is runtime state like the rest (see [Kernel state](#kernel-state-thelb-manages)); with matching ports there is no rule at all.
 
-Kubernetes Services already map ports, with `targetPort`; this is for plain Linux backends.
+It works the same for TCP, UDP and SCTP. Kubernetes Services already map ports, with `targetPort`; this is for plain Linux backends.
 
 ## Kernel state theLB manages
 
@@ -139,6 +142,7 @@ Everything here is **runtime state**. theLB sets it at runtime - kernel paramete
 |---|---|---|
 | Kernel modules | `ip_vs`, and the schedulers in use (`ip_vs_mh` by default) | IPVS itself. Loaded only if missing; needs `CAP_SYS_MODULE` only then. |
 | `net.ipv4.vs.sloppy_tcp` | `1` | A director that takes over accepts flows already in progress. |
+| `net.ipv4.vs.sloppy_sctp` | `1` | The same for SCTP associations - set only when there are SCTP services. |
 | `net.ipv4.vs.expire_nodest_conn` | `1` | Connections to a removed backend end at once instead of hanging. |
 | `net.ipv4.vs.expire_quiescent_template` | `1` | Persistence templates of a weight-0 backend expire, so its clients move on. |
 | VIP addresses | on the chosen interface, `/32` or `/128` | The control VIP while this director leads; a service VIP while it holds it. |
@@ -259,10 +263,25 @@ Every other director, and a bootstrap director that finds a cluster already runn
 **Every node that joins waits for a director's approval** - a director and a backend alike. A valid secret only lets a node ask: a secret that leaked lets someone knock, not come in. The one node that is never approved is the director that creates a cluster: it is the cluster.
 
 - **Who approves**: any director that is itself an approved member - its certificate valid, not removed - with `sudo thelb admin approve <name>` (or `refuse <name>`) on that director. The local command asks its own director, which sends the approval to the leader under its own identity; the leader checks that the identity is a director's, and records who approved what, and when.
+- **Several at once**: `sudo thelb admin approve --match '<regular expression>'` matches pending nodes' names in full (Go's RE2 syntax: `--match 'web-[0-9]+'`), shows the matching nodes as a table, and approves them after a `y` - or at once with `--yes`, for scripts. Without a terminal and without `--yes`, it changes nothing.
 - **Backends cannot approve**: `thelb backend` has no approval command, and the leader refuses an approval that does not come from a director.
 - **Where pending nodes appear**: in `thelb status` on any director - one `pending` table for both roles, with each node's name, role, address, MAC address, **node fingerprint** and how long it has waited (see [`thelb status`](#thelb-status)). `thelb status` on the pending node itself shows the same fingerprint, so the operator can compare the two before approving.
-- **Approved once, rejoins by itself**: a node's keys live only in memory and change at every start, so approval is not tied to a key but to the **node** - its node fingerprint, which identifies the machine across restarts (what it is made of is an [open question](#open-questions)), with its addresses and MAC addresses. While the cluster remembers an approved node, that node restarting with the same fingerprint, the same address and MAC address on the wire, and the right secret rejoins without waiting. A changed fingerprint, address or MAC address waits for approval again; so does a node a director removed. Two live nodes with the same fingerprint - a cloned machine - are refused, and reported.
+- **Approved once, rejoins by itself**: a node's keys live only in memory and change at every start, so approval is not tied to a key but to the **node** - its node fingerprint, which identifies the machine across restarts (see [The node fingerprint](#the-node-fingerprint)), with its addresses and MAC addresses. While the cluster remembers an approved node, that node restarting with the same fingerprint, the same address and MAC address on the wire, and the right secret rejoins without waiting. A changed fingerprint, address or MAC address waits for approval again; so does a node a director removed. Two live nodes with the same fingerprint - a cloned machine - are refused, and reported.
 - **A pending request** lasts as long as the node keeps asking; a node that stops asking is dropped from the list after an hour. A refused node is told so, and stops.
+
+### The node fingerprint
+
+What a director approves, and recognises when an approved node comes back: a SHA-256 hash, shown as its first 16 hexadecimal digits, of
+
+- **the machine's application-specific ID**: an HMAC-SHA256 keyed with `/etc/machine-id` over a fixed theLB string, as systemd recommends, so the machine ID itself never leaves the machine;
+- **the SMBIOS system UUID** (`/sys/class/dmi/id/product_uuid`), where the machine has one;
+- **the MAC address of the interface the node joins through**.
+
+The hostname is shown beside it, as a label, not part of it. In Kubernetes, the agent reads the node's machine ID and SMBIOS UUID through read-only host mounts.
+
+Left out, for their problems: `hostid` (derived from an IP address when `/etc/hostid` is missing, and identical on clones); every MAC address (they change with every container veth, bridge, VPN and randomised Wi-Fi address); the root disk's UUID (absent in a container, changed by a reinstall, shared by every machine built from one cloud image); the hostname (neither stable nor unique).
+
+**The fingerprint is reported by the node itself**: only its address and MAC address are checked on the wire. It recognises an approved machine; the secret and the first approval are what prove one.
 
 **The secrets are strong**: 256 random bits, whether theLB or `generate secret` made them, and theLB refuses a shorter one - a weak secret could be guessed from a recorded proof.
 
@@ -372,7 +391,7 @@ Only the cluster's desired and decided state - small, and changed when someone o
 | Backends: name, addresses, pinned MAC addresses, certificate serial, labels; removed names | enrolment, removal |
 | Revoked certificate serials, until they would have expired | `admin remove` |
 | Services: VIP, protocol, port, scheduler, persistence, forwarding method, allow-list, where it came from (configuration, command line, Kubernetes) | the configuration is loaded, `admin service add`/`remove`, a Kubernetes Service changes |
-| Pools, and the pools delegated to backends | configuration, command line |
+| Pools: ranges, who may draw from them, and every address allocated from them, with its owner | configuration, `admin pool`, an allocation or a release |
 | Attachments: backend, service, application port, check | a backend's `--serve`, a backend detaching or being removed |
 | Backend health: healthy or not, per attachment | the state **changes**, debounced - not every check |
 | VIP holders and their term | the leader changes; later, VIP assignments |
@@ -388,12 +407,12 @@ Only the cluster's desired and decided state - small, and changed when someone o
 
 ### When every director stops
 
-The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, waits for approval again (see [Open questions](#open-questions)). Services in the directors' configuration file come back with it; services added from the command line do not, unless they were saved with `thelb generate config`.
+The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, **every one of them waits for approval again**; `thelb admin approve --match` approves many at once. Services in the directors' configuration file come back with it; services added from the command line do not, unless they were saved with `thelb generate config`.
 
 ## Health checks
 
 - **Two views, both required**: the backend's agent checks its application locally and reports it with its heartbeat; the director holding the VIP checks the backend from outside. A backend serves only when both say it can, and its heartbeat lease is current.
-- **Kinds**: TCP connect; HTTP or HTTPS `GET` with an expected status; none (always healthy).
+- **Kinds**: TCP connect; SCTP association (set up, then shut down cleanly); HTTP or HTTPS `GET` with an expected status; none (always healthy).
 - **Defaults**: every 2 s, 1 s timeout, healthy after 2 successes, unhealthy after 3 failures.
 - **The director's check goes to the backend's own address and the application's port** - never through the VIP, which on a director is local.
 - **Result**: an unhealthy backend gets weight 0; when every backend of a service is unhealthy, the service stays (connections are refused by the backends, not black-holed) and the state is reported. The other services on the same VIP are unaffected.
@@ -414,12 +433,13 @@ With direct return, a packet reaches a node with the VIP as its destination. **k
 ### Which Services, and which backends
 
 - Services of type `LoadBalancer` with **`spec.loadBalancerClass`** set to theLB's class, **`dmarts.app/thelb`**, so theLB never takes Services meant for another provider.
-- **VIPs from address pools** per family; dual-stack Services (`spec.ipFamilies`) get one VIP per family.
+- **VIPs from theLB's own [address pools](#address-pools)**; dual-stack Services (`spec.ipFamilies`) get one VIP per family.
 - **Sharing a VIP**: Services with the same `dmarts.app/thelb-shared-vip` annotation share one VIP, as long as their ports do not overlap - each keeps its own backends.
 - **A node is a backend only when it appears in the API and its agent has enrolled and reported ready.**
 - **`externalTrafficPolicy: Local`**: backends are the nodes with ready endpoints, checked at the Service's `healthCheckNodePort`, which kube-proxy answers per node; the client's address reaches the pod.
 - **`externalTrafficPolicy: Cluster`**: every ready node is a backend, checked through kube-proxy's own health endpoint.
-- **Directors are not Kubernetes nodes running kube-proxy** in the first releases: kube-proxy would itself take the VIP's traffic on that node, and in IPVS mode the two would share the kernel's IPVS table. `doctor` refuses that combination.
+- **A director can be a Kubernetes node, but not one running kube-proxy** (or a replacement for it, such as Cilium's). The catch is in the data path: kube-proxy programs every Service's load-balancer IP on every node, ahead of IPVS. A packet for the VIP that reaches a director which is also a kube-proxy node is taken by kube-proxy's rules - in `PREROUTING` for its iptables and nftables modes, earlier still for eBPF - before IPVS, which sits at `LOCAL_IN`, ever sees it. That node then sends every connection to pods itself, the replies come back through it, direct return is lost, and theLB's IPVS service is never used; with `externalTrafficPolicy: Local` and no pod on that node, kube-proxy drops the packet instead. In IPVS mode, kube-proxy also manages the same kernel IPVS table and the same IPVS parameters as theLB, and the two would undo each other's changes. `ipMode` cannot help: it applies to every node at once, and the backends need `VIP`.
+- So a director that is a Kubernetes node is a **dedicated** node: tainted so that no workload runs on it, and with kube-proxy kept off it (a node affinity on kube-proxy's DaemonSet) - its pods could not reach Services anyway. `doctor` refuses the director role on a node where kube-proxy, or its replacement, is running.
 
 ### Where theLB runs
 
@@ -439,11 +459,10 @@ Both check at startup that the API server answers and that they hold every permi
 | `Namespace` `thelb` | Everything theLB runs, labelled `pod-security.kubernetes.io/enforce: privileged`: the agent needs host networking and writable kernel parameters, which no other Pod Security level allows. |
 | `ServiceAccount` `thelb-agent`, `thelb-director` | One identity per component. |
 | `ClusterRole` + `ClusterRoleBinding` per component | The cluster-wide permissions below. |
-| `Role` + `RoleBinding` per component, in `thelb` | Reading theLB's own configuration, and the agent its secret. |
-| `ConfigMap` `thelb-config` | Pools and settings for the provider. |
+| `Role` + `RoleBinding` for the agent, in `thelb` | Reading its secret, and nothing else in the namespace. |
 | `Secret` `thelb-backend-secret` | The backends' secret, for the agents. `generate k8s --backend-secret-file` fills it in; without it, the Secret is left for the user to fill. |
 | `PriorityClass` `thelb-node-critical` | The agent is not evicted before the workloads it carries traffic for. |
-| `DaemonSet` `thelb-agent` | One agent per node: host network, privileged, `/lib/modules` read-only, tolerates every taint. |
+| `DaemonSet` `thelb-agent` | One agent per node: host network, privileged, `/lib/modules` and `/etc/machine-id` read-only, tolerates every taint. |
 | `Secret` `thelb-director-token` (type `kubernetes.io/service-account-token`) | The directors' credential, and the kubeconfig built from it, printed for the user to install on the directors. |
 
 **RBAC, the least each component needs:**
@@ -455,12 +474,21 @@ Both check at startup that the API server answers and that they hold every permi
 | director | `discovery.k8s.io` | `endpointslices` | `get`, `list`, `watch` |
 | director | core | `nodes` | `get`, `list`, `watch` |
 | director | `events.k8s.io` | `events` | `create`, `patch` |
-| director, in `thelb` | core | `configmaps` | `get`, `list`, `watch` |
 | agent | core | `nodes` | `get`, `list`, `watch` |
 | agent | core | `services` | `get`, `list`, `watch` |
 | agent | `events.k8s.io` | `events` | `create`, `patch` |
-| agent, in `thelb` | core | `configmaps` | `get`, `list`, `watch` |
 | agent, in `thelb` | core | `secrets`, `thelb-backend-secret` only | `get` |
+
+## Address pools
+
+**A proposal, still to be decided** (see [Open questions](#open-questions)). Pools are theLB's own: defined in the directors' configuration or with `thelb admin pool add|remove`, replicated through Raft, and the same for plain Linux and for Kubernetes. Kubernetes holds no pool definition - no ConfigMap, no custom resource.
+
+- **A pool** has a name, address ranges per family (subnets, or first and last addresses), addresses to leave out, and who may draw from it: backends, by name pattern (a delegated pool); Kubernetes, by namespace pattern; or only the operator.
+- **Allocating**: the leader takes the lowest free address of the right family, skipping a subnet's network and broadcast addresses and the left-out ones; probes it on the network (ARP or NDP) before handing it out, and skips it if anything answers; and records the allocation, with its owner, in Raft.
+- **Kubernetes**: a Service names its pool with the `dmarts.app/thelb-pool` annotation, or draws from its family's default pool; asks for a particular address with `dmarts.app/thelb-ip` (Kubernetes deprecated `spec.loadBalancerIP`); a dual-stack Service gets one address per family. The address goes back to the pool when the Service is deleted, or no longer has theLB's class.
+- **No overlaps**: pools may not overlap each other or the control VIP; a service VIP the operator defined inside a pool is reserved in it.
+- **Removing a pool** that has addresses allocated is refused until they are released.
+- **After a full stop**, allocations are rebuilt from where they are still known: a Kubernetes Service keeps its address in `status.loadBalancer.ingress`, and a backend that created a service from a delegated pool still holds its VIP on `thelb0` - each asks for its address back, and gets it unless someone else already has it.
 
 ## Command line and configuration
 
@@ -474,7 +502,7 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 | `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`nodes`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
 | `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, `config` - see below. |
-| `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>`, `refuse <node>`, `remove <node>`, `service add|remove`, `secret show|rotate|retire`. A backend has no `admin`. |
+| `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>` or `approve --match <regex>`, `refuse <node>`, `remove <node>`, `service add|remove`, `pool add|remove`, `secret show|rotate|retire`. A backend has no `admin`. |
 
 ### `thelb status`
 
@@ -681,20 +709,9 @@ Like shint, simpler:
 
 ## Open questions
 
-1. **What a node fingerprint is made of.** It must stay the same across restarts and reboots, differ between machines - cloned ones included - and be readable in a container as on a host. Candidates, and their problems:
-   - `hostid`: on Linux usually derived from an IP address when `/etc/hostid` is missing, and identical on cloned machines - weak;
-   - **`/etc/machine-id`**: unique per installation, stable, readable in a container through a host mount; identical on clones of an image that did not reset it; and confidential, so it is used only through an application-specific hash, as systemd recommends - a strong candidate;
-   - **the SMBIOS system UUID** (`/sys/class/dmi/id/product_uuid`, root only): per machine or virtual machine, new on most hypervisors' clones; absent on some hardware - a strong candidate where it exists;
-   - every MAC address: changes whenever an interface comes or goes - container veths, bridges, VPNs, randomised Wi-Fi addresses - so a node would keep needing approval; only the MAC address of the interface the node joins through is stable enough, and the director checks that one on the wire anyway;
-   - the primary disk's UUID: undefined on some machines (which disk; a container's root is an overlay), changed by a reinstall, and identical on every machine built from one cloud image;
-   - the hostname: changed by DHCP and by people, and not unique (`localhost`) - a label to show, not an identity.
-
-   Proposal: a hash of the application-specific machine ID, the SMBIOS UUID where there is one, and the MAC address of the joining interface; the hostname shown beside it. Whatever it is made of, **the fingerprint is reported by the node itself**: only its address and MAC address can be checked on the wire. It recognises an approved machine; it cannot prove one - the secret and the first approval do that.
-2. **Approving nodes again after a full stop.** A cluster created again remembers no one, so every node that rejoins waits for approval again. Proposals: approving by pattern (`thelb admin approve 'web-*'`, after a look at `status`); a list of nodes the directors' configuration pre-approves (name, fingerprint, addresses, MAC addresses), which the user keeps; and, for Kubernetes, approving an agent whose node the API already lists at the agent's address.
-3. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
-4. **SCTP**, which IPVS supports: in scope, or later.
-5. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
-6. **The tunnel's encapsulation**: plain IP-in-IP (and its IPv6 equivalent), or GUE, which network equipment can balance by its UDP ports.
+1. **How theLB runs on a dedicated Kubernetes director node**: as a second DaemonSet, `thelb-director`, with a node selector and the in-cluster credentials, or under systemd as on any machine. A later option would let directors be ordinary nodes: theLB as the service proxy for its own Services (`service.kubernetes.io/service-proxy-name`), programming both ends itself instead of kube-proxy - a large piece of work, not for the first releases.
+2. **Address pools**: the [proposal](#address-pools) - who may draw from a pool, ranges and left-out addresses, default pools, the order addresses are handed out in (lowest free first, or spread out, for IPv6 above all), and the annotations' names.
+3. **The tunnel's encapsulation**: plain IP-in-IP (and its IPv6 equivalent), or GUE, which network equipment can balance by its UDP ports.
 
 ### Decided
 
@@ -703,7 +720,12 @@ Like shint, simpler:
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
 - **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the secret files - and one or more also with `--bootstrap`. The first bootstrap creates the secrets and writes them to the named files, once, if missing; the user copies them to the other nodes; a node whose secret the cluster does not accept stops as out of date; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
 - **Every node that joins waits for a director's approval** - directors and backends alike; any approved director may approve; backends cannot; pending nodes appear in `thelb status` on any director. **An approved node rejoins after a restart without approval**, recognised by its node fingerprint, address and MAC address ([Approval](#approval)).
-- **Root only**: every command runs with effective user ID 0, or not at all - except the help and `--version`.
+- **Root only**: every command runs with effective user ID 0, or not at all - except the help and `--version`, which any user may run.
+- **The node fingerprint**: a hash of the machine's application-specific ID, its SMBIOS UUID where there is one, and the MAC address of the interface it joins through ([The node fingerprint](#the-node-fingerprint)).
+- **After a full stop, every node is approved again**; `admin approve --match <regex>` approves many at once.
+- **SCTP is in the first release**, alongside TCP and UDP.
+- **Address pools are theLB's own**, not Kubernetes objects; how they work is still open ([Address pools](#address-pools)).
+- **A director may be a Kubernetes node only if it is dedicated, without kube-proxy** - kube-proxy would take the VIP's packets before IPVS ([Kubernetes](#which-services-and-which-backends)).
 - **What `status` shows**: on a director, everything but secret material, including which service runs on which node's address and port behind which VIP, and the traffic sent to it; on a backend, only its role, the cluster's name, its services by name and its node fingerprint.
 - **The local socket**: `status`, `doctor` and `admin` ask the running theLB over a Unix socket that authorises each caller and exposes only what each command shows - not shared memory ([The local socket](#the-local-socket)).
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.
