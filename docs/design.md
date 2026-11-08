@@ -58,7 +58,22 @@ Direct routing has hard requirements, and theLB checks them rather than hoping:
 - **No port translation.** A backend receives the packet exactly as the client sent it: VIP and port unchanged. The backend must listen on the service's port.
 - **Backends must accept traffic to the VIP and must not announce it** - see [Kernel state](#kernel-state-thelb-manages).
 - **The network must let a VIP move between machines.** On-premises switches and most hypervisors do (some need settings such as accepting forged transmits); public clouds generally do not. `thelb doctor` detects the major clouds and says so.
-- **Linux only**, with IPVS in the kernel. Minimum kernel: see [Open questions](#open-questions).
+- **Linux only**, with IPVS in the kernel: **kernel 5.14 or later**, so that RHEL 9 and its rebuilds (Rocky, AlmaLinux), still in extended support, are covered - see [Kernels](#kernels).
+
+### Kernels
+
+theLB supports every kernel from 5.14, the kernel of RHEL 9. It does not decide what a kernel can do from its version number - distribution kernels, RHEL's above all, carry features backported from much newer kernels - but **probes each feature it needs** at startup and adapts:
+
+| Feature | When the kernel has it | When it does not |
+|---|---|---|
+| Address protocol (`IFA_PROTO`, upstream since 6.1) | theLB's addresses carry theLB's own protocol value | IPv4 addresses are recognised by their label alone, IPv6 addresses by matching a configured VIP (see [Telling what theLB owns](#telling-what-thelb-owns)) |
+| The Maglev scheduler (`ip_vs_mh`, upstream since 4.18) | the default scheduler | source hashing (`sh`), with backends always added in the same order so every director hashes alike, and a warning |
+| IPv6 | IPv6 VIPs | IPv6 VIPs refused at preflight, with the reason |
+| Any other module or parameter theLB needs | used | preflight fails, naming it |
+
+`thelb doctor` and the startup log print the kernel's version and every adaptation in effect.
+
+On RHEL 9 and its rebuilds, `doctor` also reports two things theLB does not manage: **firewalld** (on by default there) must allow the VIPs' ports on the directors, because the firewall sees a packet before IPVS does - `doctor` prints the `firewall-cmd` commands for the user to run; and **SELinux**'s mode.
 
 ## Roles
 
@@ -124,7 +139,7 @@ The `net.ipv4.vs.*` parameters apply to IPv6 services too; IPVS keeps them all u
 
 theLB keeps nothing on disk, so after a restart it recognises its own state from the kernel:
 
-- **Addresses** carry theLB's own address protocol value (`IFA_PROTO`, the "who added this address" field Linux has since 6.1), and IPv4 addresses also a label (`eth0:thelb`).
+- **Addresses** carry theLB's own address protocol value (`IFA_PROTO`, the "who added this address" field upstream Linux has since 6.1) where the kernel has it, and IPv4 addresses always a label (`eth0:thelb`). On a kernel without `IFA_PROTO` (RHEL 9's), an IPv6 address - which has no label - is theLB's when it is a configured VIP: a VIP in theLB's configuration is theLB's by definition, whoever added it.
 - **IPVS services** are theLB's when they match a configured service; any other IPVS service is left alone, and `doctor` reports it.
 - **`thelb0`** is theLB's by name.
 - **Kernel parameters** cannot be marked. After a crash theLB cannot know a parameter's value from before it started, so it treats the current value as the one to leave; this is logged.
@@ -161,7 +176,7 @@ start ─▶ preflight ─▶ read the kernel ─▶ plan ─▶ apply ─▶ jo
 - **Fail closed**: holding a VIP requires a valid lease from the majority. A director that loses it - a network partition, a hung leader - gives its VIPs up within the lease time, even if it seems healthy to itself.
 - **Failover time**: Raft's election timeout (about a second by default, a few hundred milliseconds on a LAN) plus the announcement. To be measured, not promised.
 - **Transport**: TCP with mutual TLS between members.
-- **Raft's own state** - its log and snapshots - is a decision still open: see [Open questions](#open-questions).
+- **Raft's state is kept in memory only** - its log, its snapshots, its vote - so theLB writes nothing to disk for the cluster either. Raft's safety needs a voter's term and vote to survive a restart, or a restarted voter could vote twice in one term, so **every process start is a new member identity** (the node's name and a random suffix): a restarted director joins as a new member, catches up from the leader, and is then promoted to voter, and the leader removes its old identity. Nothing that matters is lost: the desired services come from the user's configuration file or from Kubernetes, and VIP ownership is decided again by the cluster. A cluster whose directors all stopped forms again from the configured voters once enough of them are up (`bootstrap-expect`, as Consul does); until then, no one holds a VIP.
 
 ## Health checks
 
@@ -308,7 +323,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **A network lab in network namespaces**: a bridge, veth pairs, a client, three directors and several backends, IPv4 and IPv6 - a real L2 cluster on one machine, in CI too (GitHub's runners allow `sudo`).
 - **Chaos tests in the lab**: kill the leader, partition the directors, flap a backend, flush IPVS, remove a VIP; measure failover time and how many flows survive.
 - **Kubernetes** in [kind](https://kind.sigs.k8s.io/), with kube-proxy in each of its modes.
-- **Kernels**: the lab under QEMU on each supported kernel series.
+- **Kernels**: the lab under QEMU on each supported kernel series - RHEL 9's 5.14 (from a Rocky or AlmaLinux 9 image), 6.1, and the newest long-term kernel - so both sides of every [kernel adaptation](#kernels) are tested.
 - **`make check`** is the one command to run them all, as in shint.
 
 ## Project, tooling and releases
@@ -326,7 +341,7 @@ Like shint, simpler:
 
 | Phase | Delivers |
 |---|---|
-| 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared - IPv4 and IPv6. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, `IFA_PROTO`, Maglev behaviour on failover. |
+| 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO` and `ip_vs_mh`, Maglev and source hashing on failover. |
 | 1 - one director | `run`, `plan`, `doctor`, `status`, `generate`; director and backend roles; the watchdog loop; health checks; IPv4 and IPv6; the network lab in CI. |
 | 2 - the cluster | Raft among directors, agents as non-voters; failover; fail closed; leadership hand-off on stop; chaos tests. |
 | 3 - Kubernetes | The provider; the agent DaemonSet; `generate k8s`; kind tests. |
@@ -335,10 +350,13 @@ Like shint, simpler:
 
 ## Open questions
 
-1. **Raft's state.** Raft needs its log and its vote to survive a restart, or a restarted voter could vote twice in one term. Keeping them on disk is a persistent entry theLB would make on its own. Proposal: keep them **in memory by default**, and give every process start a **new member identity** - a restarted director joins as a new member, catches up, and is promoted to voter, and the leader removes its old identity - so no safety rule is broken. The desired services come from the user's configuration or Kubernetes, so nothing that matters is lost; a cluster whose directors all restart at once forms again from the configured voters (`bootstrap-expect`, as Consul does). A `--data-dir` would be the opt-in for keeping Raft's state on disk.
-2. **Minimum kernel.** 6.1 gives `IFA_PROTO` for marking addresses and covers Debian 12, Ubuntu 22.04 (HWE) and 24.04, and every current Kubernetes node image; it leaves out RHEL 9 (5.14), which would need address marking by label only (IPv4) and in-memory tracking (IPv6).
-3. **The `loadBalancerClass` name**, and the prefix for theLB's annotations (pool, requested address): `dmarts.app/thelb`, or a domain of theLB's own.
-4. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
-5. **Cluster membership security**: certificates the user provides (with `generate certs` for small clusters), or a join token theLB exchanges for a certificate.
-6. **SCTP**, which IPVS supports: in scope, or later.
-7. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
+1. **The `loadBalancerClass` name, and the prefix of theLB's annotations and future custom resources.** Proposal: **`dmarts.app/thelb`**. Kubernetes writes these prefixes as a DNS name the project owns, in its usual order (its own example is `example.com/internal-vip`), and a custom resource's API group must be a DNS subdomain - so theLB's CRDs would be in `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...), and the class, the annotations (`dmarts.app/thelb-pool`, ...) and the CRDs all name the same domain the same way. All lowercase, although Kubernetes would accept `theLB` after the `/`: the namespace and CRD names must be lowercase, and the class is matched exactly - a Service with `theLB` where theLB watches `thelb` would be silently ignored.
+2. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
+3. **Cluster membership security**: certificates the user provides (with `generate certs` for small clusters), or a join token theLB exchanges for a certificate.
+4. **SCTP**, which IPVS supports: in scope, or later.
+5. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
+
+### Decided
+
+- **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity, and a cluster that stopped entirely forms again from its configured voters ([The cluster](#the-cluster)).
+- **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
