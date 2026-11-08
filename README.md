@@ -16,7 +16,8 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 **Design.** There is no code yet. Start with:
 
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
-- [Design](docs/design.md) - how it works, and the questions still open.
+- [Design](docs/design.md) - how it works, and the questions still open;
+- [Diagrams](docs/diagrams.md) - both, in pictures.
 
 ## License
 

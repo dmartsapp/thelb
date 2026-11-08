@@ -2,7 +2,7 @@
 
 theLB is a load balancer for Linux in one binary. Run it, and the box it runs on balances traffic to a virtual IP (VIP) across a set of backends, keeps that VIP alive across a cluster of nodes, and - in a Kubernetes cluster - serves Services of type `LoadBalancer`. You should not need to know `sysctl`, `ipvsadm`, `iptables` or ARP to get there.
 
-These principles decide every design question. When a choice is unclear, the one that keeps them wins.
+These principles decide every design question. When a choice is unclear, the one that keeps them wins. The first of the [diagrams](diagrams.md#1-how-thelb-treats-a-machine) shows them as one flow.
 
 ## 1. One binary, and nothing left behind
 

@@ -2,7 +2,7 @@
 
 How theLB works, and why. The principles behind every choice here are in [Philosophy](philosophy.md); where this document and the philosophy disagree, the philosophy wins and this document is wrong.
 
-Status: **design**, before any code. Decisions still open are listed at the end, in [Open questions](#open-questions).
+Status: **design**, before any code. Decisions still open are listed at the end, in [Open questions](#open-questions). The [diagrams](diagrams.md) show the pieces, starting a director, joining and approval, a backend's path to traffic, and a packet's.
 
 ## Contents
 
@@ -466,6 +466,7 @@ Six commands, and `--version`. Everything else is a flag:
 
 | Command | Does |
 |---|---|
+| `thelb` | With no command: the help, exit status `0`. On a node where theLB is already running, first one line saying so - `theLB is running on this node as a backend, process 4321` - and the same for a director. |
 | `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--config` for the rest. |
 | `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--serve <service>=<port>[,check=...][,pool=...]` for each service it serves, `--config` for the rest. |
 | `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`nodes`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
@@ -534,7 +535,19 @@ $ sudo thelb status
 }
 ```
 
-On a director, `status` shows the whole cluster, pending nodes included; a director that is not the leader asks the leader for what only the leader knows (backends' last check-ins), and says so if it cannot reach it. On a backend it shows the cluster's line, the leader, and only that backend's own rows - including, while it waits, that it is pending, with its key fingerprint: one backend has no need to see the others.
+**On a director**, `status` shows the whole cluster, as above - everything except secret material: no secret and no key, ever. A director that is not the leader asks the leader for what only the leader knows (backends' last check-ins), and says so if it cannot reach it. A secret is shown only by `thelb admin secret show`, and only on a director.
+
+**On a backend**, `status` shows what that backend is, and nothing about the rest of the cluster: that it is a backend, the cluster's name, the services it is registered with, and its own key fingerprint.
+
+```text
+$ sudo thelb status
+ role    | cluster | services | key fingerprint
+---------+---------+----------+-----------------
+ backend | prod    | web, db  | SHA256:4fT2mQ8a
+(1 row)
+```
+
+`--json` gives the same row: `{ "role": "backend", "cluster": "prod", "services": ["web", "db"], "key_fingerprint": "SHA256:4fT2mQ8a" }`. While the backend waits for approval, its services are empty, and its fingerprint is the one a director's `pending` table shows for it.
 
 ### The local socket
 
@@ -542,7 +555,7 @@ On a director, `status` shows the whole cluster, pending nodes included; a direc
 
 - **Only what each command shows crosses it.** The daemon answers requests - the tables `status` shows, the checks `doctor` makes, the changes `admin` asks for - and never exposes its internals: no keys, no secrets except where `admin secret show` exists to print one, no Raft log.
 - **It knows who is asking.** The kernel tells the daemon the caller's user and process (`SO_PEERCRED`), so each request is authorised on its own: `status` and `doctor` for root, and for the members of a group named with `--socket-group`, if any; `admin` for root only. The socket is `0660`, in a directory only root can enter, unless a group is named.
-- **One theLB per node.** A second `thelb director` or `thelb backend` on the same node finds the socket answering, and stops with the running one's process ID. A socket file left by a crash - nothing listening - is removed and replaced.
+- **One theLB per node.** A second `thelb director` or `thelb backend` on the same node finds the socket answering, and stops with the running one's process ID; plain `thelb` shows that process ID above the help. A user who may not use the socket still sees the process ID: theLB looks for itself among the node's processes (unless `/proc` hides other users' processes). A socket file left by a crash - nothing listening - is removed and replaced.
 - **Nothing left behind**: `/run` is cleared at boot, and theLB removes the socket when it stops.
 - **In Kubernetes**, `kubectl exec` into an agent's pod and `thelb status` there reaches that agent the same way.
 
@@ -666,7 +679,7 @@ Like shint, simpler:
 
 ## Open questions
 
-1. **Approving nodes again after a full stop.** A cluster created again knows no one, so every director and backend that rejoins waits for approval again - for a large cluster, many approvals at once. Proposals: approving by pattern (`thelb admin approve 'web-*'`, after a look at `status`); a list of nodes the directors' configuration pre-approves (name, address, key fingerprint), which the user keeps; and, for Kubernetes, approving an agent whose node the API already lists at the agent's address.
+1. **Approving a node again after it restarts, and after a full stop.** A node's key lives only in memory, so every start gives it a new key and a new fingerprint. If approval followed the key, every backend reboot or upgrade, and every restarted director, would wait in `pending` again. Proposal: a director approves a **node** - its name, addresses and MAC addresses, with its fingerprint at that first approval - and while the cluster remembers it, the node restarting with the same name, addresses and MAC addresses and a valid secret rejoins without waiting; a new name, address or MAC address always waits. After a full stop the cluster remembers no one; for that, approving by pattern (`thelb admin approve 'web-*'`, after a look at `status`), a list of nodes the directors' configuration pre-approves (name, addresses, MAC addresses), which the user keeps, and, for Kubernetes, approving an agent whose node the API already lists at the agent's address.
 2. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
 3. **SCTP**, which IPVS supports: in scope, or later.
 4. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
