@@ -52,7 +52,7 @@ Not in scope, for now: proxying (a later capability - see [Phases](#phases)), NA
 | **Leader** | The director Raft has elected. It holds the control VIP, signs certificates, and decides; the others follow. |
 | **Control VIP** | The cluster's own VIP, held by the leader: the address backends and the command line talk to, on the control port. |
 | **Backend** | A node that serves a service's traffic: it holds the VIP without announcing it, and answers clients directly. IPVS calls it a real server. |
-| **Agent** | theLB running on a backend. On a Kubernetes node it is a pod of the agent DaemonSet. |
+| **Agent** | theLB running on a backend - under systemd, on a Kubernetes node as on any other machine. |
 | **Cluster secrets** | Two random secrets - one for directors, one for backends - created by the director that first bootstraps the cluster, in the files the user names, and copied by the user to every node of that role. A node joins by proving it knows its role's secret. |
 | **Pool** | Service VIPs a director registered: a first address in CIDR notation, and how many addresses follow it. The control VIP is in no pool. |
 | **Offer** | What a backend registers: a protocol and the port its application listens on (`tcp/8080`), and how to check it. No name and no VIP: the same application may listen on 8080 on one node and on 9090 on another. |
@@ -199,7 +199,7 @@ start ─▶ preflight ─▶ read the kernel ─▶ plan ─▶ apply ─▶ bo
            └─ missing authority: exit 1    └─ `thelb doctor` prints this, and exits
 ```
 
-1. **Preflight - full authority or nothing.** Effective capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`; `CAP_SYS_MODULE` if a module is missing); `/proc/sys/net` writable; IPVS present (netlink family, schedulers); nftables if a port mapping is needed; IPv6 enabled if any VIP is IPv6; the interface exists; in Kubernetes, the API server reachable and every permission held (checked with `SelfSubjectAccessReview`). Anything missing: theLB changes nothing, exits `1`, and prints what is missing and how to grant it.
+1. **Preflight - full authority or nothing.** Effective capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`; `CAP_SYS_MODULE` if a module is missing); `/proc/sys/net` writable; IPVS present (netlink family, schedulers); nftables if a port mapping is needed; IPv6 enabled if any VIP is IPv6; the interface exists; on a director serving Kubernetes, the API server reachable and every permission held (checked with `SelfSubjectAccessReview`). Anything missing: theLB changes nothing, exits `1`, and prints what is missing and how to grant it.
 2. **Read the kernel**: every parameter, address, interface, table and IPVS entry it cares about.
 3. **Plan**: the difference between what it needs and what is there.
 4. **Apply**: kernel parameters and modules now; VIPs and IPVS services only when the cluster gives this node a VIP. Each change is logged with its old value.
@@ -295,7 +295,7 @@ What a director approves, and recognises when an approved node comes back: a SHA
 - **the SMBIOS system UUID** (`/sys/class/dmi/id/product_uuid`), where the machine has one;
 - **the MAC address of the interface the node joins through**.
 
-The hostname is shown beside it, as a label, not part of it. In Kubernetes, the agent reads the node's machine ID and SMBIOS UUID through read-only host mounts.
+The hostname is shown beside it, as a label, not part of it.
 
 Left out, for their problems: `hostid` (derived from an IP address when `/etc/hostid` is missing, and identical on clones); every MAC address (they change with every container veth, bridge, VPN and randomised Wi-Fi address); the root disk's UUID (absent in a container, changed by a reinstall, shared by every machine built from one cloud image); the hostname (neither stable nor unique).
 
@@ -390,13 +390,13 @@ sudo thelb admin assign nginx web-1:tcp/8080 web-2:tcp/9090 --weight web-1=3
 
 1. the offer's protocol is the service's;
 2. **the forward path**: the director reaches the backend directly - its route to the backend's address goes through no gateway - and the backend's MAC address is the pinned one;
-3. **the return path**: the backend is told the VIP, adds it to `thelb0`, and sends a probe from it - the VIP as source - to a director's own address in the VIP's network. The director watches for it on its interfaces, ahead of its own IP stack (which drops a packet from one of its own addresses). The probe arriving shows that the backend's replies, sent from the VIP through its own gateway, get through. If it does not arrive, the assignment is refused, the backend removes the VIP, and `status` says why.
+3. **the return path**: the backend is told the VIP and sends a probe with the VIP as its source - from a raw socket, so it needs no address for it - to a director's own address in the VIP's network. The director watches for it on its interfaces, ahead of its own IP stack (which drops a packet from one of its own addresses). The probe arriving shows that the backend's replies, sent from the VIP through its own gateway, get through. If it does not arrive, the assignment is refused, and `status` says why.
 
-Then the backend maps the service's port to its own - 80 to 8080 on `web-1`, 80 to 9090 on `web-2` - checks its application, and reports ready; when both its own check and the director's pass, the director adds it to the IPVS service, with its weight. `thelb admin unassign nginx web-2` takes an offer back.
+Then the backend adds the VIP to `thelb0`, maps the service's port to its own - 80 to 8080 on `web-1`, 80 to 9090 on `web-2` - checks its application, and reports ready; when both its own check and the director's pass, the director adds it to the IPVS service, with its weight. `thelb admin unassign nginx web-2` takes an offer back.
 
 **A backend never chooses a service**, so a compromised backend cannot claim one: it can offer, and a director decides.
 
-**A Kubernetes Service is a service already**: its name, ports and protocols are its own, and its nodes are its backends (see [Kubernetes](#kubernetes)).
+**A Kubernetes Service is a service already**: its name, ports and protocols are its own, and its backends are its nodes - each node's host enrolled and approved as a theLB backend first. After that, its Services need no offers and no assignments: they are handled by themselves (see [Kubernetes](#kubernetes)).
 
 ## The cluster, and what Raft carries
 
@@ -467,7 +467,7 @@ With direct return, a packet reaches a node with the VIP as its destination. **k
 - Services of type `LoadBalancer` with **`spec.loadBalancerClass`** set to theLB's class, **`dmarts.app/thelb`**, so theLB never takes Services meant for another provider.
 - **VIPs from theLB's own [address pools](#address-pools)**; dual-stack Services (`spec.ipFamilies`) get one VIP per family. A Service brings its own name, ports and protocols, so it needs no offers: its nodes are its backends.
 - **Sharing a VIP**: Services with the same `dmarts.app/thelb-shared-vip` annotation share one VIP, as long as their ports do not overlap - each keeps its own backends.
-- **A node is a backend only when it appears in the API and its agent has enrolled and reported ready.**
+- **A node is a backend only when its host runs theLB as a backend that a director approved** - matched to its Node by address - and has reported ready. A Kubernetes node goes through the same approval as any backend; once it is approved, its Services are handled by themselves - a VIP from their pool, the right nodes as backends - with no offers and no assignments.
 - **`externalTrafficPolicy: Local`**: backends are the nodes with ready endpoints, checked at the Service's `healthCheckNodePort`, which kube-proxy answers per node; the client's address reaches the pod.
 - **`externalTrafficPolicy: Cluster`**: every ready node is a backend, checked through kube-proxy's own health endpoint.
 - **A director can be a Kubernetes node, but not one running kube-proxy** (or a replacement for it, such as Cilium's). The catch is in the data path: kube-proxy programs every Service's load-balancer IP on every node, ahead of IPVS. A packet for the VIP that reaches a director which is also a kube-proxy node is taken by kube-proxy's rules - in `PREROUTING` for its iptables and nftables modes, earlier still for eBPF - before IPVS, which sits at `LOCAL_IN`, ever sees it. That node then sends every connection to pods itself, the replies come back through it, direct return is lost, and theLB's IPVS service is never used; with `externalTrafficPolicy: Local` and no pod on that node, kube-proxy drops the packet instead. In IPVS mode, kube-proxy also manages the same kernel IPVS table and the same IPVS parameters as theLB, and the two would undo each other's changes. `ipMode` cannot help: it applies to every node at once, and the backends need `VIP`.
@@ -475,41 +475,37 @@ With direct return, a packet reaches a node with the VIP as its destination. **k
 
 ### Where theLB runs
 
-| Component | Runs as | Talks to the API with |
-|---|---|---|
-| Directors | systemd services on their own machines, outside the cluster | a **kubeconfig** for the `thelb-director` ServiceAccount - required, and checked at startup |
-| Agents | the `thelb-agent` **DaemonSet**, one pod per node, host network; they enrol with the backends' secret, from the `thelb-backend-secret` Secret | the pod's **ServiceAccount token**, which Kubernetes mounts into the pod; no kubeconfig file is needed inside the cluster. `--kubeconfig` and `$KUBECONFIG` are used only outside it |
+**Always under systemd, never as a pod** - on a Kubernetes node as on any other machine.
 
-Both check at startup that the API server answers and that they hold every permission they need (`SelfSubjectAccessReview`, which every authenticated user may call); a missing one stops theLB with its name.
+| Component | Runs as | Talks to the Kubernetes API |
+|---|---|---|
+| Directors | systemd services, on machines of their own or on dedicated nodes | with a **kubeconfig** for the `thelb-director` ServiceAccount - required, and checked at startup |
+| Backends on Kubernetes nodes | systemd services on the nodes' hosts, enrolled and approved like any backend | not at all: the directors read the API and tell them what they need |
+
+A director checks at startup that the API server answers and that it holds every permission it needs (`SelfSubjectAccessReview`, which every authenticated user may call); a missing one stops it with its name.
+
+On a Kubernetes node, a backend adds nothing for a VIP - kube-proxy already accepts the VIP's packets; it checks kube-proxy's mode (and `strictARP`, in IPVS mode), sends the return-path probe, and reports the node's health.
 
 ### The manifests
 
-`thelb generate k8s` prints everything, for namespace **`thelb`** (Kubernetes namespace names are lowercase):
+Nothing of theLB's runs in the cluster, so `thelb generate k8s` prints only what the directors need, in namespace **`thelb`**:
 
 | Object | What for |
 |---|---|
-| `Namespace` `thelb` | Everything theLB runs, labelled `pod-security.kubernetes.io/enforce: privileged`: the agent needs host networking and writable kernel parameters, which no other Pod Security level allows. |
-| `ServiceAccount` `thelb-agent`, `thelb-director` | One identity per component. |
-| `ClusterRole` + `ClusterRoleBinding` per component | The cluster-wide permissions below. |
-| `Role` + `RoleBinding` for the agent, in `thelb` | Reading its secret, and nothing else in the namespace. |
-| `Secret` `thelb-backend-secret` | The backends' secret, for the agents. `generate k8s --backend-secret-file` fills it in; without it, the Secret is left for the user to fill. |
-| `PriorityClass` `thelb-node-critical` | The agent is not evicted before the workloads it carries traffic for. |
-| `DaemonSet` `thelb-agent` | One agent per node: host network, privileged, `/lib/modules` and `/etc/machine-id` read-only, tolerates every taint. |
+| `Namespace` `thelb` | Holds the directors' identity. |
+| `ServiceAccount` `thelb-director` | The directors' identity. |
+| `ClusterRole` + `ClusterRoleBinding` `thelb-director` | The permissions below. |
 | `Secret` `thelb-director-token` (type `kubernetes.io/service-account-token`) | The directors' credential, and the kubeconfig built from it, printed for the user to install on the directors. |
 
-**RBAC, the least each component needs:**
+**RBAC, the least the directors need:**
 
-| Component | API group | Resource | Verbs |
-|---|---|---|---|
-| director | core | `services` | `get`, `list`, `watch` |
-| director | core | `services/status` | `update`, `patch` |
-| director | `discovery.k8s.io` | `endpointslices` | `get`, `list`, `watch` |
-| director | core | `nodes` | `get`, `list`, `watch` |
-| director | `events.k8s.io` | `events` | `create`, `patch` |
-| agent | core | `nodes` | `get`, `list`, `watch` |
-| agent | core | `services` | `get`, `list`, `watch` |
-| agent | `events.k8s.io` | `events` | `create`, `patch` |
-| agent, in `thelb` | core | `secrets`, `thelb-backend-secret` only | `get` |
+| API group | Resource | Verbs |
+|---|---|---|
+| core | `services` | `get`, `list`, `watch` |
+| core | `services/status` | `update`, `patch` |
+| `discovery.k8s.io` | `endpointslices` | `get`, `list`, `watch` |
+| core | `nodes` | `get`, `list`, `watch` |
+| `events.k8s.io` | `events` | `create`, `patch` |
 
 ## Address pools
 
@@ -644,7 +640,6 @@ $ sudo thelb status
 - **Root only.** The socket is `0600`, in a directory only root can enter, and the kernel tells the daemon who is calling (`SO_PEERCRED`): a request from anything but effective user ID 0 is refused, whatever the file's permissions.
 - **One theLB per node.** A second `thelb director` or `thelb backend` on the same node finds the socket answering, and stops: theLB is already running on this node. A socket file left by a crash - nothing listening - is removed and replaced.
 - **Nothing left behind**: `/run` is cleared at boot, and theLB removes the socket when it stops.
-- **In Kubernetes**, `kubectl exec` into an agent's pod and `thelb status` there reaches that agent the same way.
 
 **Why not shared memory**: a shared memory segment is readable in full by whoever can map it, so it cannot answer one caller less than another, nor know who is reading; readers need locking against a writer mid-update; its layout ties the reader's version to the writer's; and a segment left by a crash stays in `/dev/shm` until reboot. A socket answers each caller with exactly what it may see, and its requests can be versioned like any API.
 
@@ -707,7 +702,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Joining needs the role's secret**, proven over the TLS connection and never sent; directors and backends have separate secrets, both the user's files, rotatable - and every new director and backend also waits for an existing director's approval.
 - **Backends are checked by address and MAC address**, pinned once enrolled, allowed only the services their certificate's identity is allowed, and cut off when their lease or certificate lapses.
 - **Revocation**: removed members' certificate serials are denied until they would have expired; backend certificates last 24 hours.
-- **Privileges**: theLB runs only as root (effective user ID 0), and every command checks it; under systemd its capability bounding set is limited to what it needs, so root does not mean every capability. In Kubernetes the agent must be privileged (kernel parameters are writable only so); the `thelb` namespace isolates it.
+- **Privileges**: theLB runs only as root (effective user ID 0), and every command checks it; under systemd its capability bounding set is limited to what it needs, so root does not mean every capability. theLB never runs in a container or a pod.
 - **No secrets in logs, `status` or standard output**, except the output of `generate secret` and `admin secret show|rotate`, which exist to print one; keys never. Secrets are read only from files, never from the command line.
 - **The secret files** are the one thing theLB writes, at the first bootstrap only, if missing, mode `0600`, never overwritten.
 - **Listeners on every address**: a director's own service listening on `0.0.0.0` answers on every VIP the director holds; `doctor` lists them ([How a director takes a port](#how-a-director-takes-a-port)).
@@ -746,7 +741,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Unit tests** for everything that is not the kernel: planning, the Raft state machine and its entries, authorisation, enrolment checks, VIP assignment, configuration, health-check logic.
 - **A network lab in network namespaces**: a bridge, veth pairs, a client, three directors and several backends, IPv4 and IPv6 - a real L2 cluster on one machine, in CI too (GitHub's runners allow `sudo`).
 - **Chaos tests in the lab**: kill the leader, partition the directors, restart the bootstrap director, stop every director, flap a backend, flush IPVS, remove a VIP, impersonate a backend, answer ARP for one; measure failover time and how many flows survive.
-- **Kubernetes** in [kind](https://kind.sigs.k8s.io/), with kube-proxy in each of its modes.
+- **Kubernetes** in [kind](https://kind.sigs.k8s.io/), with kube-proxy in each of its modes, and theLB's backends under systemd inside kind's node containers, which run systemd.
 - **Kernels**: the lab under QEMU on each supported kernel series - RHEL 9's 5.14 (from a Rocky or AlmaLinux 9 image), 6.1, and the newest long-term kernel - so both sides of every [kernel adaptation](#kernels) are tested.
 - **`make check`** is the one command to run them all, as in shint.
 
@@ -768,16 +763,19 @@ Like shint, simpler:
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
 | 1 - one director | `thelb director --bootstrap` with the control VIP, the secret files and its CA; backends enrolling and offering; pools, services and assignments from the configuration and `admin`, with the path checks; port mapping; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
 | 2 - the cluster | Directors joining with their secret; Raft with the replicated CA; the bootstrap rule and restarts; failover; fail closed; leadership hand-off on stop; chaos tests. |
-| 3 - Kubernetes | The provider; the agent DaemonSet; shared VIPs; `generate k8s`; kind tests. |
+| 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
 | 5 - active-active | Service VIPs spread across directors; optional IPVS connection synchronisation. |
 | 6 - proxy | A proxying mode, as a separate capability, for networks where direct return is not possible. |
 
 ## Open questions
 
-1. **How theLB runs on a dedicated Kubernetes director node**: as a second DaemonSet, `thelb-director`, with a node selector and the in-cluster credentials, or under systemd as on any machine. A later option would let directors be ordinary nodes: theLB as the service proxy for its own Services (`service.kubernetes.io/service-proxy-name`), programming both ends itself instead of kube-proxy - a large piece of work, not for the first releases.
-2. **Kubernetes Services and assignment**: a Service gets a VIP from its pool at once, as [Address pools](#address-pools) describes - or waits, like an offer, until a director assigns it.
-3. **The tunnel's encapsulation**: plain IP-in-IP (and its IPv6 equivalent), or GUE, which network equipment can balance by its UDP ports.
+1. **The tunnel's encapsulation**, for backends in other subnets (phase 4). Both are IPVS's own, and both keep direct return:
+   - **IP-in-IP** (IPv4 in IPv4; IPv6 in IPv6): 20 extra bytes a packet (40 for IPv6), in every kernel theLB supports, and the backend needs only the `ipip` (or `ip6_tunnel`) module. But the outer header has no ports, so all the traffic from one director to one backend looks like a single flow to the network: equal-cost multipath and link aggregation keep it on one path, and the backend's network card delivers it all to one receive queue - one CPU core unwraps it. Some firewalls and networks also drop IP protocol 4 outright.
+   - **GUE** (Generic UDP Encapsulation - IP in UDP; in IPVS since Linux 5.2, so RHEL 9 has it): 32 extra bytes a packet. The outer UDP source port varies with each inner connection, so multipath, link aggregation and the backend's receive queues spread the traffic, and UDP passes where protocol 4 does not. The backend needs the `fou` module and a UDP port to receive on, which its firewall must let in.
+   - Either way, the extra bytes come out of the path's MTU: a larger MTU between directors and backends, or clamping TCP's MSS on the backends, keeps packets from being too big.
+
+   Proposal: IP-in-IP by default, for its simplicity; GUE as a per-service option, for heavy traffic across a multipath network, or networks that drop protocol 4.
 
 ### Decided
 
@@ -791,6 +789,8 @@ Like shint, simpler:
 - **After a full stop, every node is approved again**; `admin approve --match <regex>` approves many at once.
 - **SCTP is in the first release**, alongside TCP and UDP.
 - **A director may be a Kubernetes node only if it is dedicated, without kube-proxy** - kube-proxy would take the VIP's packets before IPVS ([Kubernetes](#which-services-and-which-backends)).
+- **theLB always runs under systemd, never as a pod or a DaemonSet** - on Kubernetes nodes as on any machine; `generate k8s` prints only the directors' identity and permissions ([Where theLB runs](#where-thelb-runs)).
+- **A Kubernetes node is a backend only once its host's theLB backend is approved**; its Services are then handled by themselves - no offers, no assignments ([Which Services, and which backends](#which-services-and-which-backends)).
 - **What `status` shows**: on a director, everything but secret material, including which service runs on which node's address and port behind which VIP, and the traffic sent to it; on a backend, only its role, the cluster's name, its services by name and its node fingerprint.
 - **The local socket**: `status`, `doctor` and `admin` ask the running theLB over a Unix socket that authorises each caller and exposes only what each command shows - not shared memory ([The local socket](#the-local-socket)).
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.

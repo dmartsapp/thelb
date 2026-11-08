@@ -31,7 +31,7 @@ A load balancer that half works is worse than one that refuses to start. Before 
 - the Linux capabilities it needs (`CAP_NET_ADMIN`, `CAP_NET_RAW`, and `CAP_SYS_MODULE` only when a kernel module has to be loaded);
 - that the kernel parameters it needs are writable (they are not in an unprivileged container);
 - that the kernel has IPVS, the schedulers it will use, and IPv6 if a VIP is IPv6;
-- in Kubernetes: that it can reach the API server and holds every permission it needs - checked with the API's own access review, not assumed.
+- for a director serving Kubernetes: that it can reach the API server and holds every permission it needs - checked with the API's own access review, not assumed.
 
 If anything is missing, theLB stops before doing anything, says exactly what is missing, and prints how to grant it.
 
