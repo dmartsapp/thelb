@@ -301,7 +301,7 @@ Left out, for their problems: `hostid` (derived from an IP address when `/etc/ho
 
 **The fingerprint is reported by the node itself**: only its address and MAC address are checked on the wire. It recognises an approved machine; the secret and the first approval are what prove one.
 
-**The secrets are strong**: 256 random bits, whether theLB or `generate secret` made them, and theLB refuses a shorter one - a weak secret could be guessed from a recorded proof.
+**The secrets are strong**: 256 random bits, whether theLB or `generate secret` made them, and theLB refuses a shorter one - a weak secret could be guessed from a recorded proof. A secret file holds one line, `thelb1:` and the 32 bytes in base64url without padding; theLB reads it only if it is a regular file - not a symbolic link - that root owns and no one else can read.
 
 **Why a secret, and not the CA certificate**: the CA certificate is public - the leader sends its certificate chain to anyone who connects - so having it would prove only that the joiner is talking to the real cluster, not that the cluster should trust the joiner. The secret works in both directions, and outlives any one CA: a cluster created again after a full stop has a new CA but the same secret, so no node needs anything new.
 
@@ -533,16 +533,16 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 | Command | Does |
 |---|---|
 | `thelb` | With no command: the help, and nothing else, whether or not theLB is running; exit status `0`. |
-| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--config` for the rest. |
+| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--cluster` for the cluster's name at bootstrap (default `thelb`), `--name` for this node's (default: its hostname), `--interface` when the control VIP's interface is not the one in its network, `--config` for the rest. |
 | `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer <protocol>/<port>[,check=...]` for each application it serves, `--config` for the rest. |
-| `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`nodes`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
+| `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`cluster`, `nodes`, `certificates`, `pending`, `pools`, `offers`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
 | `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, `config` - see below. |
 | `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>` or `approve --match <regex>`, `refuse <node>`, `remove <node>`, `pool add|remove`, `service add|remove`, `assign|unassign`, `secret show|rotate|retire`. A backend has no `admin`. |
 
 ### `thelb status`
 
-One command answers "what is running where": who leads, every node and when it last checked in, the nodes waiting for approval, every pool, every offer - and which service it is assigned to, or that it waits for one - every VIP and who holds it, every service, and every backend serving it - as tables in the style of a SQL client's results, or as JSON.
+One command answers "what is running where": who leads, every node - with its node fingerprint - and when it last checked in, the cluster's certificates (the CA's, and each node's, with their fingerprints and expiry - never a key), the nodes waiting for approval, every pool, every offer - and which service it is assigned to, or that it waits for one - every VIP and who holds it, every service, and every backend serving it - as tables in the style of a SQL client's results, or as JSON.
 
 ```text
 $ sudo thelb status
@@ -551,20 +551,27 @@ $ sudo thelb status
  prod    | 7f3c91a2 | 2026-11-09 10:02:11 | lb-1   |    4 | 2026-11-09 10:02:13
 (1 row)
 
- node  | role     | address   | state | version | last check-in
--------+----------+-----------+-------+---------+---------------
- lb-1  | leader   | 10.0.0.11 | up    | v0.1.0  | -
- lb-2  | director | 10.0.0.12 | up    | v0.1.0  | 0.3 s ago
- lb-3  | director | 10.0.0.13 | up    | v0.1.0  | 0.2 s ago
- web-1 | backend  | 10.0.0.21 | up    | v0.1.0  | 1.1 s ago
- web-2 | backend  | 10.0.0.22 | up    | v0.1.0  | 0.6 s ago
- db-1  | backend  | 10.0.0.31 | up    | v0.1.0  | 1.9 s ago
+ node  | role     | address   | state | version | node fingerprint | last check-in
+-------+----------+-----------+-------+---------+------------------+---------------
+ lb-1  | leader   | 10.0.0.11 | up    | v0.1.0  | 7c41e0a2f39b55d1 | -
+ lb-2  | director | 10.0.0.12 | up    | v0.1.0  | 52e09a1bc3d84f70 | 0.3 s ago
+ lb-3  | director | 10.0.0.13 | up    | v0.1.0  | a91f0c63d2e8b745 | 0.2 s ago
+ web-1 | backend  | 10.0.0.21 | up    | v0.1.0  | 0be98d17c46a2f83 | 1.1 s ago
+ web-2 | backend  | 10.0.0.22 | up    | v0.1.0  | 3d7e21f9a0c46b18 | 0.6 s ago
+ db-1  | backend  | 10.0.0.31 | up    | v0.1.0  | c5a8e3071bd92f64 | 1.9 s ago
 (6 rows)
+
+ certificate   | kind     | fingerprint      | not after
+---------------+----------+------------------+---------------------
+ theLB prod CA | ca       | b39b2bc27e695d13 | 2036-11-06 10:02:11
+ lb-1          | director | 113b8cd5ce3cffd4 | 2026-11-10 10:02:11
+ lb-2          | director | 6a04d1e95b3c27f8 | 2026-11-10 10:03:40
+(3 rows)
 
  pending | role     | address   | mac               | node fingerprint | waiting
 ---------+----------+-----------+-------------------+------------------+---------
  lb-4    | director | 10.0.0.14 | 52:54:00:3a:19:04 | 7c41e0a2f39b55d1 | 2 min
- web-3   | backend  | 10.0.0.23 | 52:54:00:3a:19:23 | 0be98d17c46a2f83 | 15 s
+ web-3   | backend  | 10.0.0.23 | 52:54:00:3a:19:23 | 9f12c4e07ab35d61 | 15 s
 (2 rows)
 
  pool     | network      | addresses               | interface | used
@@ -606,9 +613,10 @@ $ sudo thelb status
 {
   "cluster": { "name": "prod", "id": "7f3c91a2", "created": "2026-11-09T10:02:11Z", "leader": "lb-1", "term": 4, "leader_since": "2026-11-09T10:02:13Z" },
   "nodes": [
-    { "node": "lb-1", "role": "leader", "address": "10.0.0.11", "state": "up", "version": "v0.1.0", "last_check_in": null, "last_check_in_seconds": null },
-    { "node": "web-1", "role": "backend", "address": "10.0.0.21", "state": "up", "version": "v0.1.0", "last_check_in": "2026-11-09T10:40:02Z", "last_check_in_seconds": 1.1 }
+    { "node": "lb-1", "role": "leader", "address": "10.0.0.11", "state": "up", "version": "v0.1.0", "node_fingerprint": "7c41e0a2f39b55d1", "last_check_in": null, "last_check_in_seconds": null },
+    { "node": "web-1", "role": "backend", "address": "10.0.0.21", "state": "up", "version": "v0.1.0", "node_fingerprint": "0be98d17c46a2f83", "last_check_in": "2026-11-09T10:40:02Z", "last_check_in_seconds": 1.1 }
   ],
+  "certificates": [ { "certificate": "theLB prod CA", "kind": "ca", "fingerprint": "b39b2bc27e695d13...", "not_after": "2036-11-06T10:02:11Z" } ],
   "pending": [ { "pending": "lb-4", "role": "director", "address": "10.0.0.14", "mac": "52:54:00:3a:19:04", "node_fingerprint": "7c41e0a2f39b55d1", "waiting_seconds": 120 } ],
   "pools": [ { "pool": "external", "network": "10.10.1.0/24", "first": "10.10.1.20", "count": 10, "interface": "eth0", "used": 1 } ],
   "offers": [ { "node": "web-2", "address": "10.0.0.22", "protocol": "tcp", "port": 9090, "check": "http /healthz", "service": null, "since_seconds": 40 } ],
@@ -692,7 +700,12 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 
 ## Observability
 
-- **Logs**: one line per event, saying what happened, what changed and from what - in the style of shint's log lines. Never a key or a secret.
+- **Logs**: one line per event, saying what happened, what changed and from what - shint's grammar, with a timestamp a machine can sort - to standard error, which systemd's journal keeps. Never a key or a secret: a secret's type prints as `[redacted]` wherever it goes.
+
+  ```text
+  2026-11-08T13:12:24.083Z [director] OK cluster created cluster=lab id=68a368de
+  2026-11-08T13:12:24.083Z [director] WARN control VIP not checked on the network vip=192.168.1.253 port=7443 reason="this build sends nothing on the network yet"
+  ```
 - **Metrics**: Prometheus, on a configurable address: VIP ownership, backend health, IPVS counters per service and backend (connections, packets, bytes), cluster state, failovers, enrolments, drift corrections, conflicts.
 - **`thelb status`** is the one view of the cluster - see [above](#thelb-status). It, `doctor` and `admin` talk to the running theLB over [the local socket](#the-local-socket).
 
@@ -761,7 +774,7 @@ Like shint, simpler:
 | Phase | Delivers |
 |---|---|
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
-| 1 - one director | `thelb director --bootstrap` with the control VIP, the secret files and its CA; backends enrolling and offering; pools, services and assignments from the configuration and `admin`, with the path checks; port mapping; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
+| 1 - one director | **Begun in v0.1.0-dev, with everything that needs no network:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status`. **To come:** `thelb director --bootstrap` with the control VIP, the secret files and its CA; backends enrolling and offering; pools, services and assignments from the configuration and `admin`, with the path checks; port mapping; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
 | 2 - the cluster | Directors joining with their secret; Raft with the replicated CA; the bootstrap rule and restarts; failover; fail closed; leadership hand-off on stop; chaos tests. |
 | 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
