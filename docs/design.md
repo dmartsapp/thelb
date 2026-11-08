@@ -95,7 +95,13 @@ Every node runs the same binary, as `thelb director` or `thelb backend`:
 | `director` | A Raft member. The leader holds the control VIP. A director holding a service VIP adds it to the interface, announces it, programs IPVS and health-checks the backends; a director holding nothing announces nothing. |
 | `backend` | **Not** a Raft member: a client of the cluster, through the control VIP. It enrols, offers what it serves, holds the VIPs of the services its offers are assigned to on its own dummy interface without announcing them, maps ports where asked, checks its applications locally, and keeps reporting. |
 
-A node can run both (small setups); a director that is also a backend forwards to itself through the local stack. On a Kubernetes node, the backend role mostly checks rather than configures: kube-proxy already accepts traffic for a Service's load-balancer IP (see [Kubernetes](#kubernetes)).
+**A node can run both**, for small setups - decided: one process, `thelb director ... --offer tcp/80`, so still one theLB, one socket and one lock per node. How it works:
+
+- **One name, two roles**: the cluster records a node per name and role, so the same machine is a director and a backend, each approved, each with its own certificate; approving a name approves its pending roles; the clone check never mistakes one machine's two roles for two machines.
+- **When it leads**, IPVS sees that one destination is a local address and delivers that share of the traffic to the node's own stack (IPVS's local-node forwarding) - the VIP is on the director's interface, so the application, listening on the VIP's port, gets it; the other backends are sent theirs by direct routing.
+- **When it does not lead**, it is a backend like any other: the VIP on `thelb0`, `arp_ignore` and `arp_announce` set (which leave the director's own VIPs, on the receiving interface, answered), traffic sent to it by the leader.
+- **Its own offers use the service's port**: a port-mapping rule at prerouting would also catch the clients' packets while it leads - before IPVS - so a node that is both maps no ports for itself; its other backends still may.
+- `thelb status` there is the director's view, in which the node appears twice: as a director and as a backend. On a Kubernetes node, the backend role mostly checks rather than configures: kube-proxy already accepts traffic for a Service's load-balancer IP (see [Kubernetes](#kubernetes)).
 
 ## The data path
 
@@ -766,7 +772,6 @@ Like shint, simpler:
 ## Open questions
 
 00. **Recreating the services after a full stop**, without a configuration file: proposed, `thelb generate commands` prints the `admin` commands for the running pools, services and assignments, for the user to keep as a script.
-0. **A node that is both a director and a backend**, which [Roles](#roles) allows for small setups: one theLB runs per node - one socket, one lock - so this build runs one role per node. Running both needs one process doing both, or a second socket.
 
 1. **The tunnel's encapsulation**, for backends in other subnets (phase 4). Both are IPVS's own, and both keep direct return:
    - **IP-in-IP** (IPv4 in IPv4; IPv6 in IPv6): 20 extra bytes a packet (40 for IPv6), in every kernel theLB supports, and the backend needs only the `ipip` (or `ip6_tunnel`) module. But the outer header has no ports, so all the traffic from one director to one backend looks like a single flow to the network: equal-cost multipath and link aggregation keep it on one path, and the backend's network card delivers it all to one receive queue - one CPU core unwraps it. Some firewalls and networks also drop IP protocol 4 outright.
@@ -779,6 +784,7 @@ Like shint, simpler:
 
 - **Names: the domain `dmarts.app`**, in DNS order and lowercase: the Service class `dmarts.app/thelb`, annotations under `dmarts.app/` (`dmarts.app/thelb-pool`, `dmarts.app/thelb-shared-vip`, ...), and custom resources, when there are any, in the API group `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...). Lowercase because Kubernetes matches the class exactly, and namespace and CRD names must be lowercase anyway.
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
+- **A node can be both a director and a backend**, for small setups: one process, `thelb director ... --offer ...`; the cluster keeps a node per name and role ([Roles](#roles)).
 - **No configuration file**: theLB reads its two secret files and nothing else; everything else is a flag, or the cluster's state, changed with `thelb admin` ([No configuration file](#no-configuration-file)).
 - **Raft is hashicorp/raft**, theLB's first dependency, as the design always named it; its MPL-2.0 licence allows it in an MIT project's binary - its files are unchanged, and their source is public. theLB's own certificate authority stays its own: a few lines over Go's standard library, with the checks theLB needs (an issuer-chosen identity, SPIFFE IDs, a CA loaded from the replicated state).
 - **One control port, three protocols**, told apart by TLS ALPN: Raft, the API between directors, and joins ([The cluster](#the-cluster-and-what-raft-carries)).
