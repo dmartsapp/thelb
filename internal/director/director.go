@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
@@ -74,6 +75,9 @@ type Deps struct {
 	Local   func(vip netip.Addr, iface string) (hostnet.Address, error) // nil: hostnet.For
 	PeerUID func(*net.UnixConn) (int, error)                            // nil: the kernel's answer
 	Ready   func()                                                      // nil: nothing; called once, when the director is a member
+	// Dataplane is the kernel state a leader programs - service VIPs, IPVS,
+	// pinned backends; nil: a director without one.
+	Dataplane func() (Dataplane, error)
 	// ProbeWindow is how long a bootstrapping director must find nothing on the
 	// control VIP before it creates a cluster; 0: the default.
 	ProbeWindow time.Duration
@@ -90,8 +94,8 @@ var (
 	// has not for liveFor is down.
 	checkInEvery = time.Second
 	liveFor      = 3 * time.Second
-	// keepalive is how often both ends of a pending join say they are there.
-	keepalive = 10 * time.Second
+	// backendLease is how long a backend's heartbeat counts: it beats every 2 s.
+	backendLease = 10 * time.Second
 	// pendingFor is how long a pending node that stopped asking stays listed.
 	pendingFor = time.Hour
 	// sweepEvery is how often the leader tidies the membership.
@@ -162,6 +166,7 @@ type node struct {
 	d     Deps
 	log   *logx.Logger
 	net   Network
+	plane Dataplane
 	addr  hostnet.Address
 	claim cluster.Claim
 
@@ -211,6 +216,12 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	if n.net, err = d.Network(addr); err != nil {
 		return err
 	}
+	n.plane = nothing{}
+	if d.Dataplane != nil {
+		if n.plane, err = d.Dataplane(); err != nil {
+			return err
+		}
+	}
 	if err := n.net.Cleanup(); err != nil {
 		return err
 	}
@@ -251,6 +262,15 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 	log.OK("stopped")
 	return nil
+}
+
+// local is this director's address in the network of addr - on the
+// interface named, if one is.
+func (n *node) local(addr netip.Addr, iface string) (hostnet.Address, error) {
+	if n.d.Local != nil {
+		return n.d.Local(addr, iface)
+	}
+	return hostnet.For(addr, iface)
 }
 
 func (n *node) setPhase(p string) {
@@ -515,14 +535,14 @@ func (n *node) SecretText(role string) (string, error) {
 	return s.Encode(), nil
 }
 
-// Admin changes the cluster, for `thelb admin approve|refuse|remove`: on the
-// leader directly, from another director through the leader.
-func (n *node) Admin(op string, names []string) ([]string, error) {
+// Admin changes the cluster, for `thelb admin`: on the leader directly, from
+// another director through the leader.
+func (n *node) Admin(c api.Change) (api.Result, error) {
 	n.mu.Lock()
 	s := n.sess
 	n.mu.Unlock()
 	if s == nil {
-		return nil, errors.New("this director is not a member of a cluster yet")
+		return api.Result{}, errors.New("this director is not a member of a cluster yet")
 	}
-	return s.admin(op, names)
+	return s.admin(c)
 }

@@ -176,9 +176,10 @@ func (n *Net) Release() {
 	n.ln, n.cancel = nil, nil
 }
 
-// Cleanup removes the control VIP if an earlier run of theLB left it on this
-// node - a crash cleans up nothing - and refuses if it is here and theLB did
-// not add it.
+// Cleanup removes what an earlier run of theLB left on this node's interfaces
+// - a crash cleans up nothing: the control VIP, and every service VIP, by
+// theLB's address protocol or label - and refuses if the control VIP is here
+// and theLB did not add it.
 func (n *Net) Cleanup() error {
 	addrs, err := netlink.Addrs()
 	if err != nil {
@@ -189,28 +190,30 @@ func (n *Net) Cleanup() error {
 		kernelHasProto = kernelHasProto || a.HasProto
 	}
 	for _, a := range addrs {
-		if a.Prefix.Addr() != n.vip {
-			continue
-		}
 		ifc, _ := net.InterfaceByIndex(a.Index)
 		name := fmt.Sprint(a.Index)
 		if ifc != nil {
 			name = ifc.Name
 		}
-		ours := a.HasProto && a.Proto == Proto
-		if !ours && n.vip.Is4() {
-			ours = a.Label == name+":thelb"
+		if ifc != nil && ifc.Name == "thelb0" {
+			continue // a backend's, on a node that runs both: the backend's to clear
 		}
-		if !ours && !kernelHasProto && a.Prefix.Bits() == n.vip.BitLen() {
-			ours = true // no way to mark it on this kernel: a configured VIP is theLB's
-		}
-		if !ours {
+		marked := (a.HasProto && a.Proto == Proto) || (a.Prefix.Addr().Is4() && a.Label == name+":thelb")
+		control := a.Prefix.Addr() == n.vip
+		if control && !marked && (kernelHasProto || a.Prefix.Bits() != n.vip.BitLen()) {
 			return fmt.Errorf("the control VIP %s is already on %s, and theLB did not add it: remove it, or choose another --vip", n.vip, name)
 		}
-		if err := netlink.DelAddr(a.Index, a.Prefix); err != nil && !errors.Is(err, syscall.EADDRNOTAVAIL) {
-			return fmt.Errorf("removing the control VIP an earlier run left on %s: %w", name, err)
+		if !marked && !control {
+			continue
 		}
-		n.log.Warn("removed the control VIP an earlier run left", "vip", n.vip, "interface", name)
+		if err := netlink.DelAddr(a.Index, a.Prefix); err != nil && !errors.Is(err, syscall.EADDRNOTAVAIL) {
+			return fmt.Errorf("removing %s, which an earlier run left on %s: %w", a.Prefix.Addr(), name, err)
+		}
+		if control {
+			n.log.Warn("removed the control VIP an earlier run left", "vip", n.vip, "interface", name)
+		} else {
+			n.log.Warn("removed a VIP an earlier run left", "vip", a.Prefix.Addr(), "interface", name)
+		}
 	}
 	return nil
 }

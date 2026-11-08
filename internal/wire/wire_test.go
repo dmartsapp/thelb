@@ -15,6 +15,8 @@ import (
 
 var vip = netip.MustParseAddr("127.0.0.1")
 
+var directors = []string{"director"}
+
 type member struct {
 	id   *Identity
 	cert *ca.Certificate
@@ -71,7 +73,7 @@ func TestTheJoinProofsBindToOneConnection(t *testing.T) {
 		results <- result{joinerOK: ok, proof: p}
 		_ = w.Send(p)
 	}}}
-	addr := serve(t, m, leader.id.ServerConfig(ALPNJoin))
+	addr := serve(t, m, leader.id.ServerConfig(directors, ALPNJoin))
 
 	join := func(with secret.Secret) (Cluster, bool, []byte) {
 		var cl Cluster
@@ -124,7 +126,7 @@ func TestTheJoinChecksTheServersChain(t *testing.T) {
 	a, _ := ca.New("prod", time.Now())
 	leader := newMember(t, a, "lb-1")
 	m := &Mux{Handlers: map[string]func(*tls.Conn){ALPNJoin: func(c *tls.Conn) { _ = c.Close() }}}
-	addr := serve(t, m, leader.id.ServerConfig(ALPNJoin))
+	addr := serve(t, m, leader.id.ServerConfig(directors, ALPNJoin))
 	if c, err := tls.Dial("tcp", addr, JoinConfig(netip.MustParseAddr("127.0.0.2"), nil)); err == nil {
 		_ = c.Close()
 		t.Error("a certificate without the VIP was accepted for it")
@@ -188,7 +190,7 @@ func TestRaftAndTheAPINeedADirectorsCertificate(t *testing.T) {
 			_ = c.Close()
 		},
 	}}
-	addr := serve(t, m, lb1.id.ServerConfig(ALPNRaft, ALPNAPI))
+	addr := serve(t, m, lb1.id.ServerConfig(directors, ALPNRaft, ALPNAPI))
 
 	c, err := tls.Dial("tcp", addr, lb2.id.ClientConfig(ALPNRaft, vip))
 	if err != nil {

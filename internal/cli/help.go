@@ -7,11 +7,12 @@ Usage:
 
 Commands:
   director   run this node as a director
-  backend    run this node as a backend                       (not in this build yet)
+  backend    run this node as a backend
   status     show the cluster, from the theLB running on this node
   doctor     check this node, and what theLB would change     (not in this build yet)
   generate   print a file's content, and write nothing: secret
-  admin      change the cluster, on a director: approve, refuse, remove, secret show
+  admin      change the cluster, on a director: approve, refuse, remove,
+             pool, service, assign, unassign, secret show
 
 Every command runs only as root (effective user ID 0); this help and --version
 run for anyone.
@@ -50,17 +51,44 @@ Flags:
   --interface <name>             the control VIP's interface (default: the one in its network)
 `,
 	"backend": `Usage:
-  thelb backend --join <control VIP:port> --secret-file <file> --offer <protocol>/<port> [flags]
+  thelb backend --join <control VIP:port> --secret-file <file> --offer <offer> ... [flags]
 
-Runs this node as a backend. Not in this build yet.
+Runs this node as a backend. It enrols on the control VIP with the backends'
+secret - the file a bootstrap created, copied from a director - and waits for a
+director's approval. Then it sends its heartbeat every 2 seconds, checks its
+applications, and holds the VIPs of the services its offers are assigned to on
+its own interface, thelb0, without answering ARP for them. It never chooses a
+service: a director assigns its offers (thelb admin assign).
+
+Flags:
+  --join <address:port>   the control VIP and port
+  --secret-file <file>    the backends' secret (absolute path)
+  --offer <offer>         what this node serves, as often as needed: tcp/8080,
+                          udp/53 or sctp/2905, with ,check=tcp (TCP's default),
+                          ,check=http:/healthz, or ,check=none (UDP's and
+                          SCTP's default)
+  --name <name>           this node's name (default: its hostname)
+  --interface <name>      the control VIP's interface (default: the one in its network)
+
+In this build an application's port must be its service's: a backend that maps
+ports comes later.
 `,
 	"status": `Usage:
-  thelb status [--json] [--watch] [table ...]
+  thelb status [--json] [--watch] [view or table ...]
 
-Shows the cluster, as the theLB running on this node sees it: tables in the
-style of a SQL client's results, or one JSON document with --json. Name tables
-to show only those: cluster, nodes, certificates, pending, pools, offers, vips,
-services, backends. --watch shows them again every 2 seconds.
+Shows the cluster, as the theLB running on this node sees it. Without a name, a
+summary: the cluster, and how many directors, backends, services and VIPs there
+are, and how many are up. Name a view for one part of it:
+
+  directors   the directors, those waiting for approval, their certificates
+  backends    the backends, those waiting, their offers, and who serves what -
+              each backend's checks, weight, and what IPVS sent it
+  vips        the VIPs and who holds them, the services, the pools
+  all         everything
+
+or one table: cluster, nodes, certificates, pending, pools, offers, services.
+--json prints the same as JSON - everything, without a name; --watch shows it
+again every 2 seconds. On a backend, status shows that backend alone.
 `,
 	"doctor": `Usage:
   thelb doctor [--json]
@@ -82,6 +110,12 @@ systemd, sysctl, modules, k8s and config come later.
   thelb admin approve --match '<regular expression>' [--yes]
   thelb admin refuse <name>
   thelb admin remove <name>
+  thelb admin pool add <name> --vip <first address/prefix> --vippool-count <n> [--interface <name>] [--default]
+  thelb admin pool remove <name>
+  thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr]
+  thelb admin service remove <name>
+  thelb admin assign <service> <node>:<proto>/<port> ... [--weight <node>=<n>,...]
+  thelb admin unassign <service> <node>
   thelb admin secret show --role director|backend
 
 Changes the cluster, on a director; another director's change goes through the
@@ -92,11 +126,22 @@ leader, under this director's identity.
                   approved after a "y" - or at once with --yes; without a
                   terminal and without --yes, nothing is approved
   refuse          refuses a pending node, which is told so and stops
-  remove          removes a node: its certificate is revoked, and a director
-                  leaves Raft; it waits for approval if it asks again
+  remove          removes a node: its certificate is revoked, a director leaves
+                  Raft, a backend's assignments end; it waits for approval if it
+                  asks again
+  pool add        registers addresses for service VIPs: --vip 10.10.1.20/24
+                  --vippool-count 10 is 10.10.1.20 to 10.10.1.29, on the
+                  director's interface in 10.10.1.0/24
+  service add     creates a service: the lowest free address of its pool (or
+                  --vip), probed on the network first, a protocol and a port;
+                  --scheduler wrr (the default), rr, wlc, lc, sh or mh
+  assign          assigns backends' offers to a service, weight 1 unless
+                  --weight says otherwise; the offer's protocol and port must be
+                  the service's, and the director must reach the backend directly
+  unassign        takes an offer back
   secret show     prints a role's secret, for a node whose secret file is out of
                   date - the one way to see a secret
 
-pool, service, assign, unassign, and secret rotate and retire come later.
+secret rotate and retire come later.
 `,
 }

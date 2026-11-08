@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/status"
 )
@@ -44,17 +45,15 @@ var (
 const (
 	OpStatus     = "status"
 	OpSecretShow = "secret.show"
-	OpApprove    = "approve"
-	OpRefuse     = "refuse"
-	OpRemove     = "remove"
+	OpChange     = "change" // thelb admin: approve, refuse, remove, pool, service, assign, unassign
 )
 
 // Request is what a command asks.
 type Request struct {
-	V     int      `json:"v"`
-	Op    string   `json:"op"`
-	Role  string   `json:"role,omitempty"`
-	Names []string `json:"names,omitempty"`
+	V      int         `json:"v"`
+	Op     string      `json:"op"`
+	Role   string      `json:"role,omitempty"`
+	Change *api.Change `json:"change,omitempty"`
 }
 
 // Response is the answer.
@@ -64,15 +63,15 @@ type Response struct {
 	Error  string         `json:"error,omitempty"`
 	Status *status.Status `json:"status,omitempty"`
 	Secret string         `json:"secret,omitempty"`
-	Names  []string       `json:"names,omitempty"`
+	Result *api.Result    `json:"result,omitempty"`
 }
 
 // Handler answers requests: the running director or backend.
 type Handler interface {
 	Status() status.Status
 	SecretText(role string) (string, error)
-	// Admin approves, refuses or removes nodes, and returns the names changed.
-	Admin(op string, names []string) ([]string, error)
+	// Admin changes the cluster.
+	Admin(c api.Change) (api.Result, error)
 }
 
 // Server is the listening end.
@@ -219,13 +218,17 @@ func (s *Server) handle(c *net.UnixConn) {
 		}
 		s.log.OK("secret shown", "role", req.Role)
 		answer(Response{OK: true, Secret: text})
-	case OpApprove, OpRefuse, OpRemove:
-		names, err := s.h.Admin(req.Op, req.Names)
+	case OpChange:
+		if req.Change == nil {
+			answer(Response{Error: "a change without a change"})
+			return
+		}
+		r, err := s.h.Admin(*req.Change)
 		if err != nil {
 			answer(Response{Error: err.Error()})
 			return
 		}
-		answer(Response{OK: true, Names: names})
+		answer(Response{OK: true, Result: &r})
 	default:
 		answer(Response{Error: fmt.Sprintf("this theLB does not know %q", req.Op)})
 	}

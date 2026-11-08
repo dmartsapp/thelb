@@ -12,6 +12,7 @@ import (
 
 	"github.com/dmartsapp/thelb/internal/ca"
 	"github.com/dmartsapp/thelb/internal/cluster"
+	"github.com/dmartsapp/thelb/internal/join"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/wire"
 	"github.com/hashicorp/raft"
@@ -36,16 +37,21 @@ type admission struct {
 }
 
 // live is whether the node holding name - with member identity raftID - is
-// running: the leader itself, or a director that checked in a moment ago.
-func (s *session) live(checkIns map[string]checkIn, name, raftID string) bool {
-	if raftID == "" {
+// running: the leader itself, a director that checked in a moment ago, or a
+// backend whose heartbeat lease is current.
+func (s *session) live(checkIns map[string]checkIn, n *cluster.Node) bool {
+	if n.RaftID == "" {
 		return false
 	}
-	if raftID == s.raftID {
+	if n.RaftID == s.raftID {
 		return true
 	}
-	ci, ok := checkIns[name]
-	return ok && ci.RaftID == raftID && time.Since(ci.At) < liveFor
+	ci, ok := checkIns[n.Name]
+	lease := liveFor
+	if n.Role == "backend" {
+		lease = backendLease
+	}
+	return ok && ci.RaftID == n.RaftID && time.Since(ci.At) < lease
 }
 
 func (s *session) checkInsCopy() map[string]checkIn {
@@ -70,13 +76,13 @@ func (s *session) admission(c cluster.Claim) admission {
 			return
 		}
 		for name, n := range st.Nodes {
-			if name != c.Name && n.Fingerprint == c.Fingerprint && s.live(live, name, n.RaftID) {
+			if name != c.Name && n.Fingerprint == c.Fingerprint && s.live(live, n) {
 				a = admission{verdict: verdictClone, why: fmt.Sprintf("its node fingerprint is that of %s, which is running: two live nodes cannot share one (a cloned machine?)", name)}
 				return
 			}
 		}
 		if n := st.Nodes[c.Name]; n != nil {
-			if s.live(live, c.Name, n.RaftID) {
+			if s.live(live, n) {
 				a = admission{verdict: verdictBusy, why: fmt.Sprintf("the name %s is held by a member that is running; trying again", c.Name)}
 				return
 			}
@@ -104,29 +110,33 @@ func (s *session) serveJoin(c *tls.Conn) {
 	w := wire.NewConn(c)
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	from := remoteIP(c)
-	var hello joinHello
+	var hello join.Hello
 	if err := w.Recv(&hello); err != nil {
 		return // a probe: the handshake was all it wanted
 	}
 	lctx := s.leading()
 	if lctx == nil {
-		_ = w.Send(joinReply{V: wire.Version, Retry: true, Error: "the director answering does not lead at the moment"})
+		_ = w.Send(join.Reply{V: wire.Version, Retry: true, Error: "the director answering does not lead at the moment"})
 		return
 	}
-	if hello.V != wire.Version || hello.Role != "director" {
-		_ = w.Send(joinReply{V: wire.Version, Error: "this cluster takes joins from directors of this protocol version only"})
+	if hello.V != wire.Version || (hello.Role != "director" && hello.Role != "backend") {
+		_ = w.Send(join.Reply{V: wire.Version, Error: "this cluster takes joins of this protocol version only"})
 		return
 	}
+	role := hello.Role
 	cs := c.ConnectionState()
 	s.n.mu.Lock()
-	dirSecret := s.n.dirSecret
+	roleSecret := s.n.dirSecret
+	if role == "backend" {
+		roleSecret = s.n.bkSecret
+	}
 	s.n.mu.Unlock()
-	if !wire.CheckProof([]secret.Secret{dirSecret}, wire.SideJoiner, cs, hello.Proof) {
-		s.log.Warn("join refused: the directors' secret was not proved", "from", from)
-		_ = w.Send(joinReply{V: wire.Version, Error: "not accepted"})
+	if !wire.CheckProof([]secret.Secret{roleSecret}, wire.SideJoiner, cs, hello.Proof) {
+		s.log.Warn("join refused: the "+role+"s' secret was not proved", "from", from)
+		_ = w.Send(join.Reply{V: wire.Version, Error: "not accepted"})
 		return
 	}
-	proof, err := wire.Proof(dirSecret, wire.SideCluster, cs)
+	proof, err := wire.Proof(roleSecret, wire.SideCluster, cs)
 	if err != nil {
 		return
 	}
@@ -136,19 +146,19 @@ func (s *session) serveJoin(c *tls.Conn) {
 			clusterID = st.Cluster.ID
 		}
 	})
-	if err := w.Send(joinReply{V: wire.Version, OK: true, Proof: proof, ClusterID: clusterID}); err != nil {
+	if err := w.Send(join.Reply{V: wire.Version, OK: true, Proof: proof, ClusterID: clusterID}); err != nil {
 		return
 	}
-	var req joinRequest
+	var req join.Request
 	if err := w.Recv(&req); err != nil {
 		return
 	}
 	claim := req.Claim
 	refuse := func(why string) {
 		s.log.Warn("join refused", "node", claim.Name, "from", from, "reason", why)
-		_ = w.Send(joinState{State: stateRefused, Message: why})
+		_ = w.Send(join.State{State: join.Refused, Message: why})
 	}
-	if p := claimProblem(claim, from); p != "" {
+	if p := join.Problem(claim, role, from); p != "" {
 		refuse(p)
 		return
 	}
@@ -164,13 +174,13 @@ func (s *session) serveJoin(c *tls.Conn) {
 	_ = c.SetDeadline(time.Time{})
 
 	// The joiner's messages: "here" while it waits, "ready" when it listens.
-	msgs, gone, done := make(chan joinMsg), make(chan struct{}), make(chan struct{})
+	msgs, gone, done := make(chan join.Msg), make(chan struct{}), make(chan struct{})
 	defer close(done)
 	go func() {
 		defer close(gone)
 		for {
-			_ = c.SetReadDeadline(time.Now().Add(3 * keepalive))
-			var m joinMsg
+			_ = c.SetReadDeadline(time.Now().Add(3 * join.Keepalive))
+			var m join.Msg
 			if w.Recv(&m) != nil {
 				return
 			}
@@ -185,7 +195,7 @@ func (s *session) serveJoin(c *tls.Conn) {
 	}()
 
 	waited := false
-	t := time.NewTicker(keepalive)
+	t := time.NewTicker(join.Keepalive)
 	defer t.Stop()
 	for {
 		changed := s.fsm.Changed()
@@ -199,7 +209,7 @@ func (s *session) serveJoin(c *tls.Conn) {
 			refuse(a.why)
 			return
 		case verdictBusy:
-			_ = w.Send(joinState{State: stateRetry, Message: a.why})
+			_ = w.Send(join.State{State: join.Retry, Message: a.why})
 			return
 		case verdictApproved:
 			s.admit(w, claim, csr, a.by, waited, from, msgs, gone, lctx)
@@ -208,7 +218,7 @@ func (s *session) serveJoin(c *tls.Conn) {
 			if !a.pending {
 				p := cluster.Pending{Claim: claim, Since: s.n.d.Now().UTC()}
 				if err := s.apply(cluster.TypePending, s.n.cfg.Name, p); err != nil {
-					_ = w.Send(joinState{State: stateRetry, Message: "the cluster could not record the request: " + err.Error()})
+					_ = w.Send(join.State{State: join.Retry, Message: "the cluster could not record the request: " + err.Error()})
 					return
 				}
 				s.log.OK("node waiting for approval", "node", claim.Name, "role", claim.Role, "address", claim.Address, "mac", claim.MAC, "fingerprint", claim.Fingerprint, "hostname", claim.Hostname)
@@ -219,7 +229,7 @@ func (s *session) serveJoin(c *tls.Conn) {
 			s.mu.Unlock()
 			if !waited {
 				waited = true
-				if w.Send(joinState{State: statePending}) != nil {
+				if w.Send(join.State{State: join.Pending}) != nil {
 					return
 				}
 			}
@@ -235,31 +245,36 @@ func (s *session) serveJoin(c *tls.Conn) {
 		case <-lctx.Done():
 			return
 		case <-t.C:
-			if w.Send(joinState{State: statePending}) != nil {
+			if w.Send(join.State{State: join.Pending}) != nil {
 				return
 			}
 		}
 	}
 }
 
-// admit signs an approved director's certificate, waits for it to listen as a
-// member, records its new member identity - removing its old one - and adds it
-// to Raft as a non-voter; it is promoted once it has caught up.
-func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.CertificateRequest, by string, waited bool, from netip.Addr, msgs <-chan joinMsg, gone <-chan struct{}, lctx context.Context) {
+// admit signs an approved node's certificate, waits for it to be set up, and
+// records its new member identity. A director - removing its old identity - is
+// added to Raft as a non-voter, and promoted once it has caught up; a backend
+// is not a Raft member.
+func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.CertificateRequest, by string, waited bool, from netip.Addr, msgs <-chan join.Msg, gone <-chan struct{}, lctx context.Context) {
 	a, err := s.signer()
 	if err != nil {
-		_ = w.Send(joinState{State: stateRetry, Message: err.Error()})
+		_ = w.Send(join.State{State: join.Retry, Message: err.Error()})
 		return
 	}
-	cert, der, err := a.Sign("director", claim.Name, []netip.Addr{from, s.n.cfg.ControlVIP}, csr.PublicKey, s.n.d.Now(), ca.NodeLifetime)
+	ips := []netip.Addr{from, s.n.cfg.ControlVIP}
+	if claim.Role == "backend" {
+		ips = []netip.Addr{from}
+	}
+	cert, der, err := a.Sign(claim.Role, claim.Name, ips, csr.PublicKey, s.n.d.Now(), ca.NodeLifetime)
 	if err != nil {
-		_ = w.Send(joinState{State: stateRetry, Message: err.Error()})
+		_ = w.Send(join.State{State: join.Retry, Message: err.Error()})
 		return
 	}
-	if w.Send(joinState{State: stateApproved, By: by, Before: !waited, Cert: der, CA: s.id.CA.Raw}) != nil {
+	if w.Send(join.State{State: join.Approved, By: by, Before: !waited, Cert: der, CA: s.id.CA.Raw}) != nil {
 		return
 	}
-	var ready joinMsg
+	var ready join.Msg
 	timeout := time.NewTimer(30 * time.Second)
 	defer timeout.Stop()
 	for ready.Op != "ready" {
@@ -273,10 +288,18 @@ func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.Certificate
 			return
 		}
 	}
-	ap, err := netip.ParseAddrPort(ready.RaftAddr)
-	if err != nil || ap.Addr().Unmap() != from || !strings.HasPrefix(ready.RaftID, claim.Name+"-") {
-		_ = w.Send(joinState{State: stateRefused, Message: "its member address or identity is not its own"})
+	if !strings.HasPrefix(ready.RaftID, claim.Name+"-") {
+		_ = w.Send(join.State{State: join.Refused, Message: "its member identity is not its own"})
 		return
+	}
+	if claim.Role == "director" {
+		ap, err := netip.ParseAddrPort(ready.RaftAddr)
+		if err != nil || ap.Addr().Unmap() != from {
+			_ = w.Send(join.State{State: join.Refused, Message: "its member address is not its own"})
+			return
+		}
+	} else {
+		ready.RaftAddr = ""
 	}
 	var old string
 	s.fsm.Read(func(st *cluster.State) {
@@ -284,8 +307,21 @@ func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.Certificate
 			old = n.RaftID
 		}
 	})
-	if err := s.apply(cluster.TypeAdmit, s.n.cfg.Name, cluster.Admit{Claim: claim, RaftID: ready.RaftID, RaftAddr: ready.RaftAddr, Cert: certRecord(claim.Name, cert)}); err != nil {
-		_ = w.Send(joinState{State: stateRetry, Message: "the cluster could not record the member: " + err.Error()})
+	if err := s.apply(cluster.TypeAdmit, s.n.cfg.Name, cluster.Admit{Claim: claim, RaftID: ready.RaftID, RaftAddr: ready.RaftAddr, Cert: certRecord(claim.Name, claim.Role, cert)}); err != nil {
+		_ = w.Send(join.State{State: join.Retry, Message: "the cluster could not record the member: " + err.Error()})
+		return
+	}
+	if claim.Role == "backend" {
+		// Counted as live from now: its heartbeat follows at once.
+		s.mu.Lock()
+		s.checkIns[claim.Name] = checkIn{Name: claim.Name, RaftID: ready.RaftID, At: time.Now(), Version: claim.Version}
+		s.mu.Unlock()
+		_ = w.Send(join.State{State: join.Added})
+		if waited {
+			s.log.OK("backend joined", "node", claim.Name, "approved_by", by, "address", from)
+		} else {
+			s.log.OK("backend rejoined: approved before", "node", claim.Name, "approved_by", by, "address", from)
+		}
 		return
 	}
 	if old != "" && old != ready.RaftID {
@@ -295,10 +331,10 @@ func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.Certificate
 	}
 	f := s.r.AddNonvoter(raft.ServerID(ready.RaftID), raft.ServerAddress(ready.RaftAddr), 0, 10*time.Second)
 	if err := f.Error(); err != nil {
-		_ = w.Send(joinState{State: stateRetry, Message: "the cluster could not add the member: " + err.Error()})
+		_ = w.Send(join.State{State: join.Retry, Message: "the cluster could not add the member: " + err.Error()})
 		return
 	}
-	_ = w.Send(joinState{State: stateAdded, Index: f.Index()})
+	_ = w.Send(join.State{State: join.Added, Index: f.Index()})
 	if waited {
 		s.log.OK("director joined", "node", claim.Name, "approved_by", by, "member", ready.RaftID, "address", from)
 	} else {

@@ -26,8 +26,8 @@ func sample() Status {
 	}
 }
 
-func TestTextShowsEveryTableInOrder(t *testing.T) {
-	text, err := sample().Text(now)
+func TestAllShowsEveryTableInOrder(t *testing.T) {
+	text, err := sample().Text(now, "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +85,76 @@ func TestByteCounts(t *testing.T) {
 		if got := bytesText(n); got != want {
 			t.Errorf("bytesText(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestTheSummaryIsTheDefault(t *testing.T) {
+	st := sample()
+	st.Pending = []Pending{{Pending: "web-2", Role: "backend"}, {Pending: "lb-4", Role: "director"}}
+	st.Nodes = append(st.Nodes, Node{Node: "web-3", Role: "backend", State: "down"})
+	text, err := st.Text(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		" directors |     1 |  1 |    0 |       1",
+		" backends  |     2 |  1 |    1 |       1",
+		" services  |     0 |  0 |    0 |       -",
+		"More: thelb status directors | backends | vips | all",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the summary lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "web-1") {
+		t.Errorf("the summary lists nodes:\n%s", text)
+	}
+}
+
+func TestViewsShowOnePartEach(t *testing.T) {
+	st := sample()
+	st.Pending = []Pending{{Pending: "web-2", Role: "backend"}, {Pending: "lb-4", Role: "director"}}
+	st.Certificates = append(st.Certificates, Certificate{Certificate: "lb-1", Kind: "director"}, Certificate{Certificate: "web-1", Kind: "backend"})
+	directors, _ := st.Text(now, "directors")
+	backends, _ := st.Text(now, "backends")
+	vips, _ := st.Text(now, "vips")
+	for _, c := range []struct {
+		view, text string
+		has, lacks []string
+	}{
+		{"directors", directors, []string{" lb-1 ", " lb-4 ", "theLB prod CA"}, []string{" web-1 ", " web-2 ", " pool "}},
+		{"backends", backends, []string{" web-1 ", " web-2 ", "tcp/8080"}, []string{" lb-1 ", " lb-4 ", "theLB prod CA", " cluster "}},
+		{"vips", vips, []string{" external ", " vip "}, []string{" lb-1 ", " web-1 "}},
+	} {
+		for _, h := range c.has {
+			if !strings.Contains(c.text, h) {
+				t.Errorf("%s lacks %q:\n%s", c.view, h, c.text)
+			}
+		}
+		for _, l := range c.lacks {
+			if strings.Contains(c.text, l) {
+				t.Errorf("%s has %q:\n%s", c.view, l, c.text)
+			}
+		}
+	}
+	j, err := st.Pick("backends")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(j)
+	if !strings.Contains(string(b), `"offers":[`) || strings.Contains(string(b), `"lb-1"`) || strings.Contains(string(b), `"pools"`) {
+		t.Errorf("backends as JSON: %s", b)
+	}
+}
+
+func TestABackendShowsOnlyItself(t *testing.T) {
+	st := Status{View: "backend", Mine: &Mine{Role: "backend", Cluster: "prod", State: "a member of the cluster", NodeFingerprint: "0be98d17c46a2f83",
+		Offers: []MineOffer{{Offer: "tcp/8080", Check: "http /healthz", Own: "ok", Service: "nginx"}}}}
+	text, err := st.Text(now, "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, " backend | prod    | a member of the cluster | tcp/8080 | http /healthz | ok        | nginx   | 0be98d17c46a2f83") {
+		t.Errorf("a backend's status:\n%s", text)
 	}
 }

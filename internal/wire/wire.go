@@ -165,9 +165,9 @@ func (id *Identity) checkPeer(cs tls.ConnectionState, roles ...string) error {
 }
 
 // ServerConfig is the TLS configuration of a listener serving the protocols in
-// allowed. A join is served without a client certificate; anything else needs a
-// director's.
-func (id *Identity) ServerConfig(allowed ...string) *tls.Config {
+// allowed. A join is served without a client certificate; anything else needs
+// the certificate of a member in one of roles.
+func (id *Identity) ServerConfig(roles []string, allowed ...string) *tls.Config {
 	get := func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return id.current() }
 	return &tls.Config{
 		MinVersion:     tls.VersionTLS13,
@@ -187,7 +187,7 @@ func (id *Identity) ServerConfig(allowed ...string) *tls.Config {
 			if proto != ALPNJoin {
 				c.ClientAuth = tls.RequireAndVerifyClientCert
 				c.ClientCAs = id.pool
-				c.VerifyConnection = func(cs tls.ConnectionState) error { return id.checkPeer(cs, "director") }
+				c.VerifyConnection = func(cs tls.ConnectionState) error { return id.checkPeer(cs, roles...) }
 			}
 			return c, nil
 		},

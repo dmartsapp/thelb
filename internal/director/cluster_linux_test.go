@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/wire"
@@ -94,8 +95,11 @@ func vipLeader(t *testing.T, w *world) string {
 }
 
 func admin(w *world, op string, names ...string) ([]string, error) {
-	resp, err := localsock.Call(w.run, localsock.Request{Op: op, Names: names})
-	return resp.Names, err
+	resp, err := localsock.Call(w.run, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: op, Names: names}})
+	if err != nil || resp.Result == nil {
+		return nil, err
+	}
+	return resp.Result.Names, nil
 }
 
 func TestACluster(t *testing.T) {
@@ -121,10 +125,10 @@ func TestACluster(t *testing.T) {
 			t.Errorf("a pending node does not know its cluster: %+v", own.Cluster)
 		}
 	}
-	if _, err := admin(d2, localsock.OpApprove, "lb-3"); err == nil || !strings.Contains(err.Error(), "not a member") {
+	if _, err := admin(d2, "approve", "lb-3"); err == nil || !strings.Contains(err.Error(), "not a member") {
 		t.Errorf("a pending node approved another: %v", err)
 	}
-	if got, err := admin(d1, localsock.OpApprove, "lb-2", "lb-3"); err != nil || len(got) != 2 {
+	if got, err := admin(d1, "approve", "lb-2", "lb-3"); err != nil || len(got) != 2 {
 		t.Fatalf("approving: %v %v", got, err)
 	}
 	d2.waitReady(t)
@@ -146,7 +150,7 @@ func TestACluster(t *testing.T) {
 	copySecrets(t, d1, d4)
 	d4.launch(t)
 	eventually(t, "lb-4 pending", func() bool { return pending(d2.status(t), "lb-4") != nil })
-	if _, err := admin(d2, localsock.OpApprove, "lb-4"); err != nil {
+	if _, err := admin(d2, "approve", "lb-4"); err != nil {
 		t.Fatalf("approving through a follower: %v", err)
 	}
 	d4.waitReady(t)
@@ -197,7 +201,7 @@ func TestACluster(t *testing.T) {
 	if leader == "lb-4" {
 		victim = d3
 	}
-	if _, err := admin(d1, localsock.OpRemove, victim.cfg.Name); err != nil {
+	if _, err := admin(d1, "remove", victim.cfg.Name); err != nil {
 		t.Fatalf("removing: %v", err)
 	}
 	select {
@@ -216,7 +220,7 @@ func TestACluster(t *testing.T) {
 	copySecrets(t, d1, d5)
 	d5.launch(t)
 	eventually(t, "lb-5 pending", func() bool { return pending(d1.status(t), "lb-5") != nil })
-	if _, err := admin(d1, localsock.OpRefuse, "lb-5"); err != nil {
+	if _, err := admin(d1, "refuse", "lb-5"); err != nil {
 		t.Fatal(err)
 	}
 	select {

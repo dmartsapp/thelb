@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"slices"
 	"sync"
 	"time"
@@ -39,6 +40,15 @@ const (
 	TypeAdmit   = "node.admit"     // an approved node joined, with a new member identity
 	TypeRemove  = "node.remove"    // a director removed a node
 	TypeCert    = "cert.issue"     // a certificate was issued
+
+	TypePoolAdd       = "pool.add"       // a director registered a pool of service VIPs
+	TypePoolRemove    = "pool.remove"    // a director removed one
+	TypeServiceAdd    = "service.add"    // a director created a service
+	TypeServiceRemove = "service.remove" // a director removed one
+	TypeOffers        = "offers"         // a backend offers what it serves
+	TypeAssign        = "assign"         // a director assigned offers to a service
+	TypeUnassign      = "unassign"       // a director took one back
+	TypeHealth        = "health"         // an assignment became ready to serve, or stopped being
 )
 
 // Entry is one change to the state.
@@ -146,6 +156,26 @@ type (
 	Name struct {
 		Name string `json:"name"`
 	}
+	// SetOffers is TypeOffers's.
+	SetOffers struct {
+		Node   string  `json:"node"`
+		Offers []Offer `json:"offers"`
+	}
+	// Assign is TypeAssign's.
+	Assign struct {
+		Assignments []Assignment `json:"assignments"`
+	}
+	// Unassign is TypeUnassign's.
+	Unassign struct {
+		Service string `json:"service"`
+		Node    string `json:"node"`
+	}
+	// Health is TypeHealth's.
+	Health struct {
+		Service string `json:"service"`
+		Node    string `json:"node"`
+		Healthy bool   `json:"healthy"`
+	}
 	// Admit is TypeAdmit's.
 	Admit struct {
 		Claim    Claim  `json:"claim"`
@@ -155,24 +185,103 @@ type (
 	}
 )
 
+// Pool is a range of service VIPs: Count addresses from First, in the network
+// First/Bits.
+type Pool struct {
+	Name      string    `json:"name"`
+	First     string    `json:"first"`
+	Bits      int       `json:"bits"`
+	Count     int       `json:"count"`
+	Interface string    `json:"interface,omitempty"` // "": the one in its network
+	Default   bool      `json:"default,omitempty"`
+	By        string    `json:"by"`
+	At        time.Time `json:"at"`
+}
+
+// Contains is whether a is one of the pool's addresses.
+func (p *Pool) Contains(a netip.Addr) bool {
+	first, err := netip.ParseAddr(p.First)
+	if err != nil || a.BitLen() != first.BitLen() {
+		return false
+	}
+	for i, x := 0, first; i < p.Count; i, x = i+1, x.Next() {
+		if x == a {
+			return true
+		}
+	}
+	return false
+}
+
+// Service is a service: a VIP, a protocol and a port, with its scheduler.
+type Service struct {
+	Name      string    `json:"name"`
+	Pool      string    `json:"pool"`
+	VIP       string    `json:"vip"`
+	Proto     string    `json:"proto"`
+	Port      int       `json:"port"`
+	Scheduler string    `json:"scheduler"`
+	By        string    `json:"by"`
+	At        time.Time `json:"at"`
+}
+
+// Offer is what a backend serves: a protocol, its application's port, and how
+// to check it - "tcp", "none" or "http:<path>".
+type Offer struct {
+	Proto string `json:"proto"`
+	Port  int    `json:"port"`
+	Check string `json:"check"`
+}
+
+// Key is an offer's name: tcp/8080.
+func (o Offer) Key() string { return fmt.Sprintf("%s/%d", o.Proto, o.Port) }
+
+// Offers are a backend's offers, and since when it has made them.
+type Offers struct {
+	Offers []Offer   `json:"offers"`
+	Since  time.Time `json:"since"`
+}
+
+// Assignment is a backend's offer serving a service.
+type Assignment struct {
+	Service string    `json:"service"`
+	Node    string    `json:"node"`
+	Proto   string    `json:"proto"`
+	Port    int       `json:"port"` // the application's
+	Weight  int       `json:"weight"`
+	Healthy bool      `json:"healthy"` // both checks pass, the backend holds the VIP and reports
+	By      string    `json:"by"`
+	At      time.Time `json:"at"`
+}
+
+// AssignmentKey is an assignment's key in the state.
+func AssignmentKey(service, node string) string { return service + "/" + node }
+
 // State is the cluster's state.
 type State struct {
-	Cluster *Info                `json:"cluster"`
-	Leader  *Leader              `json:"leader"`
-	Nodes   map[string]*Node     `json:"nodes"`   // approved, by name
-	Pending map[string]*Pending  `json:"pending"` // by name
-	Refused map[string]*Refusal  `json:"refused"` // by name, for RefusalMemory
-	Certs   map[string]*Cert     `json:"certs"`   // the latest of each node, by name
-	Revoked map[string]time.Time `json:"revoked"` // serial -> when it would have expired
+	Cluster     *Info                  `json:"cluster"`
+	Leader      *Leader                `json:"leader"`
+	Nodes       map[string]*Node       `json:"nodes"`   // approved, by name
+	Pending     map[string]*Pending    `json:"pending"` // by name
+	Refused     map[string]*Refusal    `json:"refused"` // by name, for RefusalMemory
+	Certs       map[string]*Cert       `json:"certs"`   // the latest of each node, by name
+	Revoked     map[string]time.Time   `json:"revoked"` // serial -> when it would have expired
+	Pools       map[string]*Pool       `json:"pools"`
+	Services    map[string]*Service    `json:"services"`
+	Offers      map[string]*Offers     `json:"offers"`      // by backend
+	Assignments map[string]*Assignment `json:"assignments"` // by AssignmentKey
 }
 
 func newState() *State {
 	return &State{
-		Nodes:   map[string]*Node{},
-		Pending: map[string]*Pending{},
-		Refused: map[string]*Refusal{},
-		Certs:   map[string]*Cert{},
-		Revoked: map[string]time.Time{},
+		Nodes:       map[string]*Node{},
+		Pending:     map[string]*Pending{},
+		Refused:     map[string]*Refusal{},
+		Certs:       map[string]*Cert{},
+		Revoked:     map[string]time.Time{},
+		Pools:       map[string]*Pool{},
+		Services:    map[string]*Service{},
+		Offers:      map[string]*Offers{},
+		Assignments: map[string]*Assignment{},
 	}
 }
 
@@ -388,6 +497,12 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 			s.Revoked[c.Serial] = c.NotAfter
 			delete(s.Certs, d.Name)
 		}
+		delete(s.Offers, d.Name)
+		for k, a := range s.Assignments {
+			if a.Node == d.Name {
+				delete(s.Assignments, k)
+			}
+		}
 		return nil
 	case TypeCert:
 		var d Cert
@@ -398,6 +513,134 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 			return fmt.Errorf("%s is not a node of this cluster", d.Name)
 		}
 		s.Certs[d.Name] = &d
+		return nil
+	case TypePoolAdd:
+		var d Pool
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if _, ok := s.Pools[d.Name]; ok {
+			return fmt.Errorf("a pool named %s exists", d.Name)
+		}
+		d.By, d.At = e.By, e.At
+		s.Pools[d.Name] = &d
+		return nil
+	case TypePoolRemove:
+		var d Name
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if _, ok := s.Pools[d.Name]; !ok {
+			return fmt.Errorf("no pool named %s", d.Name)
+		}
+		for _, v := range s.Services {
+			if v.Pool == d.Name {
+				return fmt.Errorf("the pool %s holds the VIP of the service %s", d.Name, v.Name)
+			}
+		}
+		delete(s.Pools, d.Name)
+		return nil
+	case TypeServiceAdd:
+		var d Service
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if _, ok := s.Services[d.Name]; ok {
+			return fmt.Errorf("a service named %s exists", d.Name)
+		}
+		if _, ok := s.Pools[d.Pool]; !ok {
+			return fmt.Errorf("no pool named %s", d.Pool)
+		}
+		for _, v := range s.Services {
+			if v.VIP == d.VIP && v.Proto == d.Proto && v.Port == d.Port {
+				return fmt.Errorf("%s %s/%d is the service %s's", d.VIP, d.Proto, d.Port, v.Name)
+			}
+		}
+		d.By, d.At = e.By, e.At
+		s.Services[d.Name] = &d
+		return nil
+	case TypeServiceRemove:
+		var d Name
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if _, ok := s.Services[d.Name]; !ok {
+			return fmt.Errorf("no service named %s", d.Name)
+		}
+		delete(s.Services, d.Name)
+		for k, a := range s.Assignments {
+			if a.Service == d.Name {
+				delete(s.Assignments, k)
+			}
+		}
+		return nil
+	case TypeOffers:
+		var d SetOffers
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if n := s.Nodes[d.Node]; n == nil || n.Role != "backend" {
+			return fmt.Errorf("%s is not a backend of this cluster", d.Node)
+		}
+		s.Offers[d.Node] = &Offers{Offers: d.Offers, Since: e.At}
+		// An assignment whose offer was withdrawn ends.
+		for k, a := range s.Assignments {
+			if a.Node != d.Node {
+				continue
+			}
+			kept := false
+			for _, o := range d.Offers {
+				kept = kept || (o.Proto == a.Proto && o.Port == a.Port)
+			}
+			if !kept {
+				delete(s.Assignments, k)
+			}
+		}
+		return nil
+	case TypeAssign:
+		var d Assign
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		for _, a := range d.Assignments {
+			if s.Services[a.Service] == nil {
+				return fmt.Errorf("no service named %s", a.Service)
+			}
+			if n := s.Nodes[a.Node]; n == nil || n.Role != "backend" {
+				return fmt.Errorf("%s is not a backend of this cluster", a.Node)
+			}
+		}
+		for _, a := range d.Assignments {
+			a.By, a.At = e.By, e.At
+			k := AssignmentKey(a.Service, a.Node)
+			if old, ok := s.Assignments[k]; ok && old.Proto == a.Proto && old.Port == a.Port {
+				a.Healthy = old.Healthy // a new weight: still as healthy as it was
+			}
+			c := a
+			s.Assignments[k] = &c
+		}
+		return nil
+	case TypeUnassign:
+		var d Unassign
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		k := AssignmentKey(d.Service, d.Node)
+		if _, ok := s.Assignments[k]; !ok {
+			return fmt.Errorf("%s is not assigned to %s", d.Node, d.Service)
+		}
+		delete(s.Assignments, k)
+		return nil
+	case TypeHealth:
+		var d Health
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		a, ok := s.Assignments[AssignmentKey(d.Service, d.Node)]
+		if !ok {
+			return fmt.Errorf("%s is not assigned to %s", d.Node, d.Service)
+		}
+		a.Healthy = d.Healthy
 		return nil
 	default:
 		return fmt.Errorf("%w: %q at index %d", ErrUnknownEntry, e.Type, index)
@@ -438,6 +681,18 @@ func (f *FSM) Restore(r io.ReadCloser) error {
 	}
 	if s.Revoked == nil {
 		s.Revoked = fresh.Revoked
+	}
+	if s.Pools == nil {
+		s.Pools = fresh.Pools
+	}
+	if s.Services == nil {
+		s.Services = fresh.Services
+	}
+	if s.Offers == nil {
+		s.Offers = fresh.Offers
+	}
+	if s.Assignments == nil {
+		s.Assignments = fresh.Assignments
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

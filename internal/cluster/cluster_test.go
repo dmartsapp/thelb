@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestAnOlderTermDoesNotReplaceTheLeader(t *testing.T) {
 
 func TestAnUnknownEntryStopsTheDirector(t *testing.T) {
 	for name, entry := range map[string]Entry{
-		"type":    {V: EntryVersion, Type: "service.add", At: t0},
+		"type":    {V: EntryVersion, Type: "k8s.allocate", At: t0},
 		"version": {V: EntryVersion + 1, Type: TypeLeader, At: t0},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -211,6 +212,68 @@ func TestSnapshotAndRestore(t *testing.T) {
 	g.Read(func(s *State) {
 		if s.Cluster == nil || s.Cluster.ID != "7f3c91a2" || s.Nodes["lb-1"] == nil || s.Pending["lb-2"] == nil || s.Refused == nil {
 			t.Errorf("restored %+v", s)
+		}
+	})
+}
+
+func TestPoolsServicesOffersAssignments(t *testing.T) {
+	a := created(t)
+	web := Claim{Name: "web-1", Role: "backend", Address: "10.0.0.21", MAC: "52:54:00:00:00:21", Fingerprint: "fp-web-1"}
+	_ = a.apply(TypePending, "lb-1", t0, Pending{Claim: web, Since: t0})
+	_ = a.apply(TypeApprove, "lb-1", t0, Names{Names: []string{"web-1"}})
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(a.apply(TypePoolAdd, "lb-1", t0, Pool{Name: "external", First: "10.10.1.20", Bits: 24, Count: 10}))
+	if err := a.apply(TypePoolAdd, "lb-1", t0, Pool{Name: "external", First: "10.10.2.20", Bits: 24, Count: 1}); err == nil {
+		t.Error("two pools with one name")
+	}
+	must(a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "nginx", Pool: "external", VIP: "10.10.1.20", Proto: "tcp", Port: 80, Scheduler: "wrr"}))
+	if err := a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "other", Pool: "external", VIP: "10.10.1.20", Proto: "tcp", Port: 80, Scheduler: "wrr"}); err == nil {
+		t.Error("two services on one VIP, protocol and port")
+	}
+	must(a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "dns", Pool: "external", VIP: "10.10.1.20", Proto: "udp", Port: 53, Scheduler: "wrr"}))
+	if err := a.apply(TypeOffers, "web-1", t0, SetOffers{Node: "lb-1", Offers: []Offer{{Proto: "tcp", Port: 80}}}); err == nil {
+		t.Error("a director made offers")
+	}
+	must(a.apply(TypeOffers, "web-1", t0, SetOffers{Node: "web-1", Offers: []Offer{{Proto: "tcp", Port: 80, Check: "tcp"}, {Proto: "udp", Port: 53, Check: "none"}}}))
+	must(a.apply(TypeAssign, "lb-1", t0, Assign{Assignments: []Assignment{{Service: "nginx", Node: "web-1", Proto: "tcp", Port: 80, Weight: 3}, {Service: "dns", Node: "web-1", Proto: "udp", Port: 53, Weight: 1}}}))
+	must(a.apply(TypeHealth, "lb-1", t0, Health{Service: "nginx", Node: "web-1", Healthy: true}))
+	// A new weight keeps the health it had.
+	must(a.apply(TypeAssign, "lb-1", t0, Assign{Assignments: []Assignment{{Service: "nginx", Node: "web-1", Proto: "tcp", Port: 80, Weight: 5}}}))
+	a.f.Read(func(s *State) {
+		x := s.Assignments[AssignmentKey("nginx", "web-1")]
+		if x == nil || x.Weight != 5 || !x.Healthy || x.By != "lb-1" {
+			t.Errorf("assignment %+v", x)
+		}
+		if p := s.Pools["external"]; !p.Contains(netip.MustParseAddr("10.10.1.29")) || p.Contains(netip.MustParseAddr("10.10.1.30")) {
+			t.Error("the pool's range")
+		}
+	})
+	if err := a.apply(TypePoolRemove, "lb-1", t0, Name{Name: "external"}); err == nil {
+		t.Error("a pool in use was removed")
+	}
+	// Withdrawing an offer ends its assignment.
+	must(a.apply(TypeOffers, "web-1", t0, SetOffers{Node: "web-1", Offers: []Offer{{Proto: "tcp", Port: 80, Check: "tcp"}}}))
+	a.f.Read(func(s *State) {
+		if s.Assignments[AssignmentKey("dns", "web-1")] != nil || s.Assignments[AssignmentKey("nginx", "web-1")] == nil {
+			t.Errorf("after withdrawing udp/53: %v", s.Assignments)
+		}
+	})
+	must(a.apply(TypeServiceRemove, "lb-1", t0, Name{Name: "nginx"}))
+	must(a.apply(TypeServiceRemove, "lb-1", t0, Name{Name: "dns"}))
+	must(a.apply(TypePoolRemove, "lb-1", t0, Name{Name: "external"}))
+	// Removing a backend removes its offers and assignments.
+	must(a.apply(TypePoolAdd, "lb-1", t0, Pool{Name: "p", First: "10.10.1.20", Bits: 24, Count: 1}))
+	must(a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "s", Pool: "p", VIP: "10.10.1.20", Proto: "tcp", Port: 80}))
+	must(a.apply(TypeAssign, "lb-1", t0, Assign{Assignments: []Assignment{{Service: "s", Node: "web-1", Proto: "tcp", Port: 80, Weight: 1}}}))
+	must(a.apply(TypeRemove, "lb-1", t0, Name{Name: "web-1"}))
+	a.f.Read(func(s *State) {
+		if len(s.Assignments) != 0 || len(s.Offers) != 0 {
+			t.Errorf("after removing the backend: %v %v", s.Assignments, s.Offers)
 		}
 	})
 }

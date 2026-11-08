@@ -14,9 +14,10 @@ import (
 	"github.com/dmartsapp/thelb/internal/table"
 )
 
-// Status is a director's view of the cluster.
+// Status is a director's view of the cluster - or, on a backend, Mine alone.
 type Status struct {
 	View         string        `json:"view"`
+	Mine         *Mine         `json:"mine,omitempty"`
 	Cluster      *Cluster      `json:"cluster"`
 	Nodes        []Node        `json:"nodes"`
 	Certificates []Certificate `json:"certificates"`
@@ -128,9 +129,42 @@ type Backend struct {
 	LastCheckInSeconds float64 `json:"last_check_in_seconds"`
 }
 
-// Tables are the tables, in the order `status` shows them; a table's name picks
-// it alone (`thelb status nodes`).
+// Mine is a backend's view of itself: what it is, the cluster's name, its
+// offers with the service each is assigned to - never the service's VIP - and
+// its node fingerprint.
+type Mine struct {
+	Role            string      `json:"role"`
+	Cluster         string      `json:"cluster"`
+	State           string      `json:"state"`
+	Offers          []MineOffer `json:"offers"`
+	NodeFingerprint string      `json:"node_fingerprint"`
+}
+
+// MineOffer is one of a backend's offers.
+type MineOffer struct {
+	Offer   string `json:"offer"`
+	Check   string `json:"check"`
+	Own     string `json:"own_check"`
+	Service string `json:"service"`
+}
+
+// Tables are the tables, in the order `status all` shows them.
 var Tables = []string{"cluster", "nodes", "certificates", "pending", "pools", "offers", "vips", "services", "backends"}
+
+// Views are what `thelb status` shows by name: a part of the cluster, or all
+// of it. Without a name, it shows the summary. Any table's name shows that
+// table alone - except vips and backends, which are views holding those
+// tables and the ones that go with them.
+var Views = map[string][]string{
+	"summary":   {"cluster", "summary"},
+	"directors": {"cluster", "nodes:director", "pending:director", "certificates:director"},
+	"backends":  {"nodes:backend", "pending:backend", "offers", "backends", "certificates:backend"},
+	"vips":      {"vips", "services", "pools"},
+	"all":       Tables,
+}
+
+// Names are every name status takes, for its help and its errors.
+var Names = []string{"directors", "backends", "vips", "all", "cluster", "nodes", "certificates", "pending", "pools", "offers", "services"}
 
 // Normalize turns missing tables into empty ones, so JSON always has a list.
 func (s *Status) Normalize() {
@@ -160,23 +194,186 @@ func (s *Status) Normalize() {
 	}
 }
 
-// Text renders the tables named in only (all of them when it is empty), with a
-// blank line between them. now dates the "ago" columns.
-func (s Status) Text(now time.Time, only ...string) (string, error) {
-	want := map[string]bool{}
-	for _, name := range only {
-		if !isTable(name) {
-			return "", fmt.Errorf("no table %q: the tables are %s", name, strings.Join(Tables, ", "))
-		}
-		want[name] = true
+// parts are the tables a selection shows, each with its filter: "nodes:backend"
+// is the nodes table with backends only.
+func parts(only []string) ([]string, error) {
+	if len(only) == 0 {
+		only = []string{"summary"}
 	}
 	var out []string
-	for _, name := range Tables {
-		if len(want) == 0 || want[name] {
-			out = append(out, s.render(name, now))
+	seen := map[string]bool{}
+	for _, name := range only {
+		ps, ok := Views[name]
+		if !ok {
+			if !isTable(name) {
+				return nil, fmt.Errorf("no view or table %q: name one of %s", name, strings.Join(Names, ", "))
+			}
+			ps = []string{name}
+		}
+		for _, p := range ps {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
 		}
 	}
-	return strings.Join(out, "\n"), nil
+	return out, nil
+}
+
+// Text renders a selection - views, or tables, by name; the summary when none is
+// named - with a blank line between tables. now dates the "ago" columns.
+func (s Status) Text(now time.Time, only ...string) (string, error) {
+	if s.Mine != nil {
+		return s.Mine.text(), nil
+	}
+	ps, err := parts(only)
+	if err != nil {
+		return "", err
+	}
+	var out []string
+	for _, p := range ps {
+		out = append(out, s.filter(p).render(strings.SplitN(p, ":", 2)[0], now))
+	}
+	text := strings.Join(out, "\n")
+	if len(only) == 0 {
+		text += "\nMore: thelb status directors | backends | vips | all\n"
+	}
+	return text, nil
+}
+
+// Pick is a selection as JSON: one key per table.
+func (s Status) Pick(only ...string) (any, error) {
+	if s.Mine != nil {
+		return s.Mine, nil
+	}
+	if len(only) == 0 {
+		only = []string{"all"}
+	}
+	ps, err := parts(only)
+	if err != nil {
+		return nil, err
+	}
+	s.Normalize()
+	full := map[string]any{
+		"view": s.View, "cluster": s.Cluster, "summary": s.summary(), "nodes": s.Nodes, "certificates": s.Certificates, "pending": s.Pending,
+		"pools": s.Pools, "offers": s.Offers, "vips": s.VIPs, "services": s.Services, "backends": s.Backends,
+	}
+	out := map[string]any{"view": s.View}
+	for _, p := range ps {
+		name := strings.SplitN(p, ":", 2)[0]
+		f := s.filter(p)
+		f.Normalize()
+		switch name {
+		case "nodes":
+			out[name] = f.Nodes
+		case "pending":
+			out[name] = f.Pending
+		case "certificates":
+			out[name] = f.Certificates
+		default:
+			out[name] = full[name]
+		}
+	}
+	return out, nil
+}
+
+// filter is the status with a part's filter applied: a role, for nodes, pending
+// nodes and certificates.
+func (s Status) filter(part string) Status {
+	name, role, ok := strings.Cut(part, ":")
+	if !ok {
+		return s
+	}
+	f := s
+	switch name {
+	case "nodes":
+		f.Nodes = nil
+		for _, n := range s.Nodes {
+			if n.Role == role || (role == "director" && n.Role == "leader") {
+				f.Nodes = append(f.Nodes, n)
+			}
+		}
+	case "pending":
+		f.Pending = nil
+		for _, p := range s.Pending {
+			if p.Role == role {
+				f.Pending = append(f.Pending, p)
+			}
+		}
+	case "certificates":
+		f.Certificates = nil
+		for _, c := range s.Certificates {
+			if c.Kind == role || (role == "director" && c.Kind == "ca") {
+				f.Certificates = append(f.Certificates, c)
+			}
+		}
+	}
+	return f
+}
+
+// SummaryRow is one line of the summary.
+type SummaryRow struct {
+	What    string `json:"what"`
+	Total   int    `json:"total"`
+	Up      int    `json:"up"`
+	Down    int    `json:"down"`
+	Pending *int   `json:"pending"`
+}
+
+func (s Status) summary() []SummaryRow {
+	rows := []SummaryRow{{What: "directors"}, {What: "backends"}, {What: "services"}, {What: "vips"}}
+	for i := range 2 {
+		zero := 0
+		rows[i].Pending = &zero
+	}
+	for _, n := range s.Nodes {
+		r := &rows[0]
+		if n.Role == "backend" {
+			r = &rows[1]
+		}
+		r.Total++
+		if n.State == "up" {
+			r.Up++
+		} else {
+			r.Down++
+		}
+	}
+	for _, p := range s.Pending {
+		if p.Role == "backend" {
+			*rows[1].Pending++
+		} else {
+			*rows[0].Pending++
+		}
+	}
+	for _, v := range s.Services {
+		rows[2].Total++
+		if v.BackendsUp > 0 {
+			rows[2].Up++
+		} else {
+			rows[2].Down++
+		}
+	}
+	for _, v := range s.VIPs {
+		rows[3].Total++
+		if v.HeldBy != "" && v.HeldBy != "-" {
+			rows[3].Up++
+		} else {
+			rows[3].Down++
+		}
+	}
+	return rows
+}
+
+func (m *Mine) text() string {
+	headers := []string{"role", "cluster", "state", "offer", "check", "own check", "service", "node fingerprint"}
+	var rows [][]string
+	for _, o := range m.Offers {
+		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, o.Offer, o.Check, o.Own, o.Service, m.NodeFingerprint})
+	}
+	if len(rows) == 0 {
+		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, "-", "-", "-", "-", m.NodeFingerprint})
+	}
+	return table.Render(headers, rows)
 }
 
 func isTable(name string) bool {
@@ -190,6 +387,16 @@ func isTable(name string) bool {
 
 func (s Status) render(name string, now time.Time) string {
 	switch name {
+	case "summary":
+		var rows [][]string
+		for _, r := range s.summary() {
+			pending := "-"
+			if r.Pending != nil {
+				pending = strconv.Itoa(*r.Pending)
+			}
+			rows = append(rows, []string{r.What, strconv.Itoa(r.Total), strconv.Itoa(r.Up), strconv.Itoa(r.Down), pending})
+		}
+		return table.Render([]string{"what", "total", "up", "down", "pending"}, rows, 1, 2, 3, 4)
 	case "cluster":
 		var rows [][]string
 		if c := s.Cluster; c != nil {
@@ -247,7 +454,7 @@ func (s Status) render(name string, now time.Time) string {
 		for _, b := range s.Backends {
 			rows = append(rows, []string{b.Service, b.VIP + ":" + strconv.Itoa(b.Port), b.Backend, b.Address + ":" + strconv.Itoa(b.AppPort),
 				b.OwnCheck + " / " + b.DirectorCheck, strconv.Itoa(b.Weight), strconv.FormatUint(b.Connections, 10), strconv.FormatUint(b.Packets, 10),
-				bytesText(b.Bytes), seconds(b.LastCheckInSeconds) + " ago"})
+				bytesText(b.Bytes), agoSeconds(b.LastCheckInSeconds)})
 		}
 		return table.Render([]string{"service", "vip", "backend", "at", "checks", "weight", "connections", "packets", "bytes", "last check-in"}, rows, 5, 6, 7)
 	}
@@ -283,6 +490,13 @@ func seconds(s float64) string {
 	default:
 		return strconv.Itoa(int(s/3600)) + " h"
 	}
+}
+
+func agoSeconds(s float64) string {
+	if s < 0 {
+		return "-"
+	}
+	return seconds(s) + " ago"
 }
 
 func short(fp string) string {

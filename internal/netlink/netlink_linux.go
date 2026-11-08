@@ -98,8 +98,8 @@ func parseAttrs(b []byte) []attr {
 	return out
 }
 
-func socket() (int, error) {
-	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, syscall.NETLINK_ROUTE)
+func socket(proto int) (int, error) {
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, proto)
 	if err != nil {
 		return -1, fmt.Errorf("netlink: %w", err)
 	}
@@ -115,7 +115,11 @@ func socket() (int, error) {
 // do sends one request and returns the messages answering it: the dump's, or
 // nothing for an acknowledged change.
 func do(typ, flags uint16, body []byte) ([]syscall.NetlinkMessage, error) {
-	fd, err := socket()
+	return doProto(syscall.NETLINK_ROUTE, typ, flags, body)
+}
+
+func doProto(proto int, typ, flags uint16, body []byte) ([]syscall.NetlinkMessage, error) {
+	fd, err := socket(proto)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +135,10 @@ func do(typ, flags uint16, body []byte) ([]syscall.NetlinkMessage, error) {
 		return nil, fmt.Errorf("netlink: %w", err)
 	}
 	var out []syscall.NetlinkMessage
-	buf := make([]byte, 1<<16)
 	for {
+		// A new buffer for every read: the messages kept from one read point
+		// into it, and the next read must not overwrite them.
+		buf := make([]byte, 1<<16)
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
 		if err != nil {
 			return nil, fmt.Errorf("netlink: %w", err)
@@ -297,4 +303,153 @@ func cstring(b []byte) string {
 		}
 	}
 	return string(b)
+}
+
+// Link attributes and flags the standard library does not name.
+const (
+	iflaLinkInfo = 18 // IFLA_LINKINFO
+	iflaInfoKind = 1  // IFLA_INFO_KIND
+	nlaNested    = 1 << 15
+)
+
+func ifinfomsg(index int, flags, change uint32) []byte {
+	b := make([]byte, syscall.SizeofIfInfomsg)
+	b[0] = syscall.AF_UNSPEC
+	native.PutUint32(b[4:8], uint32(int32(index)))
+	native.PutUint32(b[8:12], flags)
+	native.PutUint32(b[12:16], change)
+	return b
+}
+
+// AddDummy creates a dummy interface, up and without ARP.
+func AddDummy(name string) error {
+	b := ifinfomsg(0, syscall.IFF_UP|syscall.IFF_NOARP, syscall.IFF_UP|syscall.IFF_NOARP)
+	b = appendAttr(b, syscall.IFLA_IFNAME, append([]byte(name), 0))
+	info := appendAttr(nil, iflaInfoKind, []byte("dummy"))
+	b = appendAttr(b, iflaLinkInfo|nlaNested, info)
+	_, err := do(syscall.RTM_NEWLINK, syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_EXCL, b)
+	return err
+}
+
+// DelLink removes an interface.
+func DelLink(index int) error {
+	_, err := do(syscall.RTM_DELLINK, syscall.NLM_F_ACK, ifinfomsg(index, 0, 0))
+	return err
+}
+
+func ndmsg(index int, ip netip.Addr, state uint16) []byte {
+	b := make([]byte, 12)
+	if ip.Is4() {
+		b[0] = syscall.AF_INET
+	} else {
+		b[0] = syscall.AF_INET6
+	}
+	native.PutUint32(b[4:8], uint32(int32(index)))
+	native.PutUint16(b[8:10], state)
+	return b
+}
+
+// PinNeighbour makes ip's neighbour entry on the interface mac, permanently:
+// nothing on the network can change it by answering ARP or neighbour
+// discovery.
+func PinNeighbour(index int, ip netip.Addr, mac net.HardwareAddr) error {
+	ip = ip.Unmap()
+	b := ndmsg(index, ip, NUDPermanent)
+	b = appendAttr(b, ndaDst, ip.AsSlice())
+	b = appendAttr(b, ndaLLAddr, mac)
+	_, err := do(syscall.RTM_NEWNEIGH, syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_REPLACE, b)
+	return err
+}
+
+// UnpinNeighbour removes ip's neighbour entry on the interface; the kernel
+// learns it again as it needs it.
+func UnpinNeighbour(index int, ip netip.Addr) error {
+	ip = ip.Unmap()
+	b := ndmsg(index, ip, 0)
+	b = appendAttr(b, ndaDst, ip.AsSlice())
+	_, err := do(syscall.RTM_DELNEIGH, syscall.NLM_F_ACK, b)
+	return err
+}
+
+// Generic netlink: the families IPVS and others use.
+
+const (
+	genlIDCtrl         = 0x10
+	ctrlCmdGetFamily   = 3
+	ctrlAttrFamilyID   = 1
+	ctrlAttrFamilyName = 2
+	netlinkGeneric     = 16
+	genlHdrLen         = 4
+)
+
+// Attr is a netlink attribute, for callers that build or read their own.
+type Attr struct {
+	Type uint16
+	Data []byte
+}
+
+// AppendAttr appends an attribute to b.
+func AppendAttr(b []byte, typ uint16, data []byte) []byte { return appendAttr(b, typ, data) }
+
+// AppendNested appends a nested attribute holding attrs.
+func AppendNested(b []byte, typ uint16, attrs []byte) []byte {
+	return appendAttr(b, typ|nlaNested, attrs)
+}
+
+// ParseAttrs reads attributes.
+func ParseAttrs(b []byte) []Attr {
+	var out []Attr
+	for _, a := range parseAttrs(b) {
+		out = append(out, Attr{Type: a.typ, Data: a.data})
+	}
+	return out
+}
+
+// Genl is a generic netlink family.
+type Genl struct {
+	ID      uint16
+	Version uint8
+}
+
+// GenlFamily resolves a generic netlink family by name.
+func GenlFamily(name string, version uint8) (Genl, error) {
+	b := []byte{ctrlCmdGetFamily, 1, 0, 0}
+	b = appendAttr(b, ctrlAttrFamilyName, append([]byte(name), 0))
+	msgs, err := doProto(netlinkGeneric, genlIDCtrl, syscall.NLM_F_ACK, b)
+	if err != nil {
+		return Genl{}, fmt.Errorf("generic netlink family %s: %w", name, err)
+	}
+	for _, m := range msgs {
+		if len(m.Data) < genlHdrLen {
+			continue
+		}
+		for _, a := range parseAttrs(m.Data[genlHdrLen:]) {
+			if a.typ == ctrlAttrFamilyID && len(a.data) >= 2 {
+				return Genl{ID: native.Uint16(a.data), Version: version}, nil
+			}
+		}
+	}
+	return Genl{}, fmt.Errorf("generic netlink family %s: not found", name)
+}
+
+// Do sends cmd with attrs; dump asks for every object. It returns each answer's
+// attributes.
+func (g Genl) Do(cmd uint8, dump bool, attrs []byte) ([][]Attr, error) {
+	b := append([]byte{cmd, g.Version, 0, 0}, attrs...)
+	flags := uint16(syscall.NLM_F_ACK)
+	if dump {
+		flags = syscall.NLM_F_DUMP
+	}
+	msgs, err := doProto(netlinkGeneric, g.ID, flags, b)
+	if err != nil {
+		return nil, err
+	}
+	var out [][]Attr
+	for _, m := range msgs {
+		if len(m.Data) < genlHdrLen {
+			continue
+		}
+		out = append(out, ParseAttrs(m.Data[genlHdrLen:]))
+	}
+	return out, nil
 }

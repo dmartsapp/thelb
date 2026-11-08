@@ -2,7 +2,9 @@
 #
 #   make build          the Linux binaries, in bin/
 #   make check          everything a change must pass: format, vet, tests, lint, vulnerabilities
-#   make e2e            the built binary in a lab of network namespaces, as root, on this Linux machine
+#   make e2e            the kernel tests as root, and the built binary in a lab of network namespaces
+#   make lab            a lab to try by hand, on this Linux machine: see test/lab.sh
+#   make lab-down       take it away
 #   make remote-check REMOTE=<ssh host>   the same checks on a Linux machine, over ssh
 #   make remote-e2e   REMOTE=<ssh host>   the end-to-end test there (needs passwordless sudo)
 
@@ -20,7 +22,7 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build check tools fmt-check vet test lint vuln e2e remote-sync remote-check remote-e2e clean
+.PHONY: build check tools fmt-check vet test lint vuln e2e lab lab-down remote-sync remote-check remote-e2e clean
 
 build:
 	@for arch in amd64 arm64; do \
@@ -58,9 +60,18 @@ vuln:
 	@$(GOVULNCHECK) ./...
 
 e2e:
+	@echo "==> the kernel tests, as root, each in a network namespace of its own"
+	@sudo -n env "PATH=$$PATH" "HOME=$$HOME" "GOCACHE=$$($(GO) env GOCACHE)" "GOMODCACHE=$$($(GO) env GOMODCACHE)" $(GO) test -count=1 -run '^TestRoot' ./...
 	@echo "==> end to end, as root"
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb
 	@sudo -n test/e2e.sh bin/thelb
+
+lab:
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb
+	@sudo test/lab.sh up bin/thelb
+
+lab-down:
+	@sudo test/lab.sh down
 
 remote-sync:
 	@[ -n "$(REMOTE)" ] || { echo "say where: make $@ REMOTE=<ssh host>"; exit 1; }

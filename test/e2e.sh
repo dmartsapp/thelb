@@ -54,6 +54,7 @@ bin="$tmp/bin/thelb"
 declare -A pid addr4 addr6 mac
 cleanup() {
 	for n in "${!pid[@]}"; do kill -9 "${pid[$n]}" 2>/dev/null; done
+	for n in "${!web[@]}"; do kill "${web[$n]}" 2>/dev/null; done
 	wait 2>/dev/null
 	for ns in $(ip netns list | awk '{print $1}'); do
 		case $ns in $P-*) ip netns del "$ns" ;; esac
@@ -73,8 +74,8 @@ echo "== the lab: a switch, four director nodes and a client, in network namespa
 ip netns add $SW
 ip -n $SW link add br0 type bridge mcast_snooping 0
 ip -n $SW link set br0 up
-for n in d1 d2 d3 d4 c; do
-	case $n in c) i=100 ;; *) i=$((10 + ${n#d})) ;; esac
+for n in d1 d2 d3 d4 b1 b2 b3 c; do
+	case $n in c) i=100 ;; b*) i=$((30 + ${n#b})) ;; *) i=$((10 + ${n#d})) ;; esac
 	addr4[$n]=$NET4.$i
 	addr6[$n]=$NET6:$i
 	ip netns add $P-$n
@@ -87,7 +88,7 @@ for n in d1 d2 d3 d4 c; do
 	mac[$n]=$(ip netns exec $P-$n cat /sys/class/net/eth0/address)
 	install -d -m 0700 "$tmp/$n"
 done
-echo "   $NET4.0/24, control VIP $VIP4 port $PORT; directors d1-d4 at $NET4.11-14, the client at $NET4.100"
+echo "   $NET4.0/24, control VIP $VIP4 port $PORT; directors d1-d4 at $NET4.11-14, backends b1-b3 at $NET4.31-33, the client at $NET4.100"
 
 # start <node> <log> [flags]: a director on the node, with a /run of its own.
 start() {
@@ -99,6 +100,36 @@ start() {
 		--secret-file "$tmp/$n/director.secret" --backend-secret-file "$tmp/$n/backend.secret" "$@" >>"$log" 2>&1 &
 	pid[$n]=$!
 }
+# startb <node> <log> [flags]: a backend on the node, offering its web server.
+startb() {
+	local n=$1 log=$2
+	shift 2
+	ip netns exec $P-$n unshare --mount --propagation private \
+		sh -c 'mount -t tmpfs -o mode=0755 tmpfs /run && exec "$@"' sh \
+		"$bin" backend --join $VIP4:$PORT --name $n --secret-file "$tmp/$n/backend.secret" --offer tcp/80,check=http:/ "$@" >>"$log" 2>&1 &
+	pid[$n]=$!
+}
+declare -A web
+# app <node> up|down: the backend's web server, answering with its name.
+app() {
+	if [ "$2" = up ]; then
+		install -d -m 0755 "$tmp/$1/www"
+		echo "$1" >"$tmp/$1/www/index.html"
+		ip netns exec $P-$1 python3 -m http.server 80 --bind 0.0.0.0 --directory "$tmp/$1/www" >/dev/null 2>&1 &
+		web[$1]=$!
+	else
+		kill "${web[$1]}" 2>/dev/null
+		wait "${web[$1]}" 2>/dev/null
+		unset "web[$1]"
+	fi
+}
+# answers <n>: which backends answered n requests from the client to the service.
+answers() {
+	for _ in $(seq 1 "$1"); do ip netns exec $P-c curl -s --max-time 2 "http://$SVC/" || echo none; done | sort | uniq -c | awk '{print $2 "=" $1}' | xargs
+}
+ipvs_on() { ip netns exec $P-$1 ipvsadm -Ln 2>/dev/null; }
+weight_is() { ipvs_on "$1" | grep -qE -- "-> ${addr4[$2]}:80 +Route +$3 "; }
+answers_include() { answers 9 | grep -q "$1="; }
 # stop <node> [signal]: and return its exit status.
 stop() {
 	local n=$1 sig=${2:-TERM} code
@@ -180,7 +211,7 @@ check "with theLB's label, eth0:thelb" "echo \"\$line\" | grep -q 'eth0:thelb'"
 check "and theLB's address protocol, 116" "echo \"\$line\" | grep -q 'proto 0x74'"
 check "/run/thelb is root's, mode 0700" "[ \"\$(on d1 stat -c '%U %a' /run/thelb)\" = 'root 700' ]"
 check "the socket is root's, mode 0600" "[ \"\$(on d1 stat -c '%U %a' /run/thelb/thelb.sock)\" = 'root 600' ]"
-on d1 "$bin" status >"$tmp/status" 2>&1
+on d1 "$bin" status all >"$tmp/status" 2>&1
 check "status shows the cluster, led by d1" "grep -qE '^ e2e +\\| [0-9a-f]{8} \\| .* \\| d1 +\\| +[0-9]+ \\|' $tmp/status"
 check "status shows the CA and d1's certificate" "grep -q 'theLB e2e CA | ca' $tmp/status && grep -qE '^ d1 +\\| director' $tmp/status"
 check "status shows the control VIP, held by d1" "grep -qE '^ $VIP4 +\\| control +\\| - +\\| eth0 +\\| d1' $tmp/status"
@@ -236,6 +267,7 @@ echo "== d1 comes back - with --bootstrap, as it was started - and rejoins witho
 ip -n $P-d1 link set eth0 up
 start d1 "$tmp/d1.rejoin.log" --vip $VIP4 --bootstrap
 check "it removes the control VIP its crash left" "within 10 logged $tmp/d1.rejoin.log 'WARN removed the control VIP an earlier run left vip=$VIP4 interface=eth0'"
+check "the VIP is no longer on d1's eth0" "! holds d1 $VIP4"
 check "it finds the cluster and rejoins" "within 30 logged $tmp/d1.rejoin.log 'OK joined the cluster cluster=e2e id=$cluster1'"
 check "without waiting for approval" "! logged $tmp/d1.rejoin.log 'waiting for approval'"
 check "the leader says so" "within 10 eval \"grep -q 'OK director rejoined: approved before node=d1' $tmp/$new*.log\""
@@ -306,6 +338,76 @@ start d2 "$tmp/d2.full.log" --vip $VIP4
 check "d2 joins it, and waits for approval again" "within 20 logged $tmp/d2.full.log 'OK waiting for approval'"
 check "and is a member once approved" "on d1 $bin admin approve d2 >/dev/null && within 20 logged $tmp/d2.full.log 'OK director ready'"
 for n in d1 d2; do stop $n; done
+
+echo "== services: three backends, a pool, a service, and traffic through IPVS"
+SVC=$NET4.20
+start d1 "$tmp/d1.svc.log" --vip $VIP4 --bootstrap
+check "d1 creates a cluster" "within 30 logged $tmp/d1.svc.log 'OK control VIP taken'"
+for n in d2 d3; do start $n "$tmp/$n.svc.log" --vip $VIP4; done
+check "d2 and d3 join, once approved" "within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK waiting for approval' && on d1 $bin admin approve --match 'd[23]' --yes >/dev/null && within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK director ready'"
+for n in b1 b2 b3; do
+	cp -p "$tmp/d1/backend.secret" "$tmp/$n/"
+	app $n up
+	startb $n "$tmp/$n.log"
+done
+check "the backends enrol, and wait for approval" "within 20 eval 'logged $tmp/b1.log \"OK waiting for approval\" && logged $tmp/b2.log \"OK waiting for approval\" && logged $tmp/b3.log \"OK waiting for approval\"'"
+check "approve --match 'b[1-3]' --yes" "on d1 $bin admin approve --match 'b[1-3]' --yes | grep -q 'approved: b1, b2, b3'"
+check "the backends are members" "within 20 eval 'logged $tmp/b1.log \"OK backend ready\" && logged $tmp/b2.log \"OK backend ready\" && logged $tmp/b3.log \"OK backend ready\"'"
+check "a backend's own status shows only itself, waiting for an assignment" "on b1 $bin status | grep -qE '^ backend \| e2e +\| a member of the cluster \| tcp/80 \| http / \| (ok|fail|-) +\| - '"
+check "admin pool add: a pool that would hold a backend's address is refused" "! on d2 $bin admin pool add bad --vip $NET4.30/24 --vippool-count 5 2>/dev/null"
+check "admin pool add lab, from a follower" "on d2 $bin admin pool add lab --vip $SVC/24 --vippool-count 10 | grep -q 'pool lab: $SVC - $NET4.29, on eth0'"
+check "admin service add web: the pool's first address" "on d1 $bin admin service add web --pool lab --proto tcp --port 80 | grep -q 'service web: $SVC tcp/80'"
+check "admin assign web b1 b2 b3" "on d1 $bin admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 | grep -q 'assigned to web: b1, b2, b3'"
+check "the leader holds the service VIP" "within 10 holds d1 $SVC"
+check "each backend holds it on thelb0, with theLB's address protocol" "within 10 eval 'ip -n $P-b1 -o addr show dev thelb0 | grep -q \" $SVC/32 .*proto 0x74\" && ip -n $P-b3 -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
+check "and answers no ARP for it: arp_ignore 1, arp_announce 2" "[ \"\$(ip netns exec $P-b1 cat /proc/sys/net/ipv4/conf/all/arp_ignore /proc/sys/net/ipv4/conf/all/arp_announce | xargs)\" = '1 2' ]"
+check "the leader pins each backend's address to its MAC address" "within 10 eval '[ \$(ip -n $P-d1 neigh show nud permanent | grep -c lladdr) = 3 ]'"
+if command -v ipvsadm >/dev/null; then
+	check "IPVS on the leader: direct routing to the three, weight 1 (ipvsadm)" "within 20 eval 'weight_is d1 b1 1 && weight_is d1 b2 1 && weight_is d1 b3 1'"
+	ipvs_on d1 | sed 's/^/      /'
+fi
+check "the client's requests are spread across b1, b2 and b3" "[ \"\$(answers 12)\" = 'b1=4 b2=4 b3=4' ]"
+check "status: the service up, 3 of 3" "on d2 $bin status vips | grep -qE '^ web +\| $SVC +\| tcp/80 +\| wrr +\| direct +\| 3 of 3'"
+check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep -c '| ok / ok |') = 3 ]"
+on d1 "$bin" status >"$tmp/summary"
+check "status, alone, is the summary" "grep -qE '^ directors +\| +3 \| +3 \|' $tmp/summary && grep -qE '^ backends +\| +3 \| +3 \|' $tmp/summary && grep -q 'More: thelb status' $tmp/summary"
+on d1 "$bin" status backends | sed 's/^/      /'
+
+echo "== a backend's application fails, and comes back"
+app b2 down
+check "b2's weight goes to 0" "within 20 weight_is d1 b2 0"
+check "the leader says why" "logged $tmp/d1.svc.log 'WARN backend not serving: weight 0 service=web node=b2'"
+check "the client is served by b1 and b3 only" "! answers 9 | grep -q b2="
+app b2 up
+check "b2 serves again" "within 20 weight_is d1 b2 1 && within 10 answers_include b2"
+
+echo "== the leader crashes, with the services"
+stop d1 KILL
+ip -n $P-d1 link set eth0 down
+check "another director takes the service VIP" "within 20 held_not_by $SVC d1"
+new=$(holder $SVC)
+check "and programs IPVS the same way" "within 20 eval 'weight_is $new b1 1 && weight_is $new b2 1 && weight_is $new b3 1'"
+check "the client's neighbour entry follows, to $new" "within 5 neigh_is $SVC ${mac[$new]}"
+check "the client is served by all three again" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+ip -n $P-d1 link set eth0 up
+start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
+check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
+check "and the IPVS service" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
+check "so d1's kernel holds none of it" "! holds d1 $SVC && ! ipvs_on d1 | grep -q Route"
+
+echo "== a backend stops, one is removed, the service is taken down"
+stop b3
+code=$?
+check "b3 stops cleanly on SIGTERM" "[ $code = 0 ] && logged $tmp/b3.log 'OK stopped'"
+check "removing thelb0, and with it the VIP" "! ip -n $P-b3 link show thelb0 >/dev/null 2>&1"
+check "and restoring arp_ignore and arp_announce" "[ \"\$(ip netns exec $P-b3 cat /proc/sys/net/ipv4/conf/all/arp_ignore /proc/sys/net/ipv4/conf/all/arp_announce | xargs)\" = '0 0' ]"
+check "after telling the leader, which drained it: weight 0 at once" "weight_is $new b3 0 && logged $tmp/b3.log 'OK the leader drains this backend'"
+check "admin remove b2: b2 stops, removed" "on $new $bin admin remove b2 >/dev/null && { ended b2; [ \$? = 1 ]; } && grep -q 'removed from the cluster' $tmp/b2.log"
+check "its destination leaves IPVS" "within 10 eval '! ipvs_on $new | grep -q \"${addr4[b2]}:80\"'"
+check "admin unassign web b1" "on $new $bin admin unassign web b1 | grep -q 'unassigned: b1 from web' && within 10 eval '! ipvs_on $new | grep -q \"${addr4[b1]}:80\"'"
+check "admin service remove web: the VIP is given up, the IPVS service removed" "on $new $bin admin service remove web >/dev/null && within 10 eval '! holds $new $SVC && ! ipvs_on $new | grep -q $SVC'"
+for n in b1 d1 d2 d3; do [ -n "${pid[$n]:-}" ] && stop $n; done
+for n in b1 b2 b3; do app $n down; done
 
 if [ $have6 = 1 ]; then
 	echo "== IPv6: the control VIP $VIP6"

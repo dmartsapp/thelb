@@ -159,6 +159,7 @@ type world struct {
 	local   hostnet.Address
 	net     *loopNet
 	machine string
+	plane   Dataplane // nil: none
 	logs    *syncBuffer
 	started chan struct{}
 	stop    context.CancelFunc
@@ -214,6 +215,12 @@ func (w *world) deps() Deps {
 		PeerUID:     func(*net.UnixConn) (int, error) { return 0, nil },
 		Ready:       func() { close(started) },
 		ProbeWindow: 300 * time.Millisecond,
+		Dataplane: func() (Dataplane, error) {
+			if w.plane == nil {
+				return nothing{}, nil
+			}
+			return w.plane, nil
+		},
 	}
 }
 

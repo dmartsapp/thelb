@@ -16,9 +16,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
+	"github.com/dmartsapp/thelb/internal/backend"
+	"github.com/dmartsapp/thelb/internal/check"
+	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/ctlnet"
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
@@ -38,6 +43,7 @@ var (
 	now         = time.Now
 	hostInputs  = fingerprint.ReadHost
 	runDirector = director.Run
+	runBackend  = backend.Run
 	logOutput   io.Writer // nil: standard error
 	stdin       io.Reader = os.Stdin
 	isTerminal            = func() bool {
@@ -105,7 +111,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "director":
 		return runDirectorCmd(ctx, rest, stderr)
 	case "backend":
-		return notYet("the backend")
+		return runBackendCmd(ctx, rest, stderr)
 	case "status":
 		return statusCmd(ctx, rest, stdout)
 	case "doctor":
@@ -225,6 +231,100 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 			}
 			return n, nil
 		},
+		Dataplane: func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
+	})
+}
+
+// offerFlags collects --offer, which may be given more than once.
+type offerFlags []string
+
+func (o *offerFlags) String() string     { return strings.Join(*o, " ") }
+func (o *offerFlags) Set(v string) error { *o = append(*o, v); return nil }
+
+// parseOffer reads an offer: tcp/8080, or tcp/8080,check=http:/healthz.
+func parseOffer(spec string) (cluster.Offer, error) {
+	main, opts, _ := strings.Cut(spec, ",")
+	proto, portText, ok := strings.Cut(main, "/")
+	port, err := strconv.Atoi(portText)
+	if !ok || err != nil || port < 1 || port > 65535 || (proto != "tcp" && proto != "udp" && proto != "sctp") {
+		return cluster.Offer{}, fmt.Errorf("an offer is <tcp|udp|sctp>/<port>[,check=tcp|none|http:<path>], not %q", spec)
+	}
+	chk := ""
+	if opts != "" {
+		v, ok := strings.CutPrefix(opts, "check=")
+		if !ok {
+			return cluster.Offer{}, fmt.Errorf("an offer's option is check=..., not %q", opts)
+		}
+		chk = v
+	}
+	if chk, err = check.Parse(chk, proto); err != nil {
+		return cluster.Offer{}, fmt.Errorf("--offer %s: %w", spec, err)
+	}
+	return cluster.Offer{Proto: proto, Port: port, Check: chk}, nil
+}
+
+func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
+	fs := newFlags("backend")
+	joinTo := fs.String("join", "", "")
+	secretFile := fs.String("secret-file", "", "")
+	name := fs.String("name", "", "")
+	iface := fs.String("interface", "", "")
+	var offers offerFlags
+	fs.Var(&offers, "offer", "")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return usagef("thelb backend: unexpected %q", fs.Arg(0))
+	}
+	var cfg backend.Config
+	ap, err := netip.ParseAddrPort(*joinTo)
+	if err != nil || ap.Port() == 0 {
+		return usagef("thelb backend: --join is the control VIP and port, as 10.0.0.10:7443 or [fd00::10]:7443: %q", *joinTo)
+	}
+	cfg.Join = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+	if *secretFile == "" || !filepath.IsAbs(*secretFile) {
+		return usagef("thelb backend: --secret-file, the backends' secret, is required, as an absolute path")
+	}
+	cfg.SecretFile = filepath.Clean(*secretFile)
+	seen := map[string]bool{}
+	for _, spec := range offers {
+		o, err := parseOffer(spec)
+		if err != nil {
+			return usagef("thelb backend: %v", err)
+		}
+		if seen[o.Key()] {
+			return usagef("thelb backend: %s is offered twice", o.Key())
+		}
+		seen[o.Key()] = true
+		cfg.Offers = append(cfg.Offers, o)
+	}
+	cfg.Name = *name
+	if cfg.Name == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			return fmt.Errorf("thelb backend: this node's hostname: %w; name it with --name", err)
+		}
+		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
+	}
+	if !nameRE.MatchString(cfg.Name) {
+		return usagef("thelb backend: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
+	}
+	cfg.Interface = *iface
+	if goos != "linux" {
+		return errors.New("thelb backend runs only on Linux")
+	}
+	out := logOutput
+	if out == nil {
+		out = stderr
+	}
+	log := logx.New(out, "thelb")
+	return runBackend(ctx, cfg, backend.Deps{
+		RunDir: runDir,
+		Log:    log,
+		Now:    now,
+		Host:   hostInputs,
+		Kernel: func() (backend.Kernel, error) { return backendKernel(log.Module("kernel")) },
 	})
 }
 
@@ -235,10 +335,10 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := parse(fs, args); err != nil {
 		return err
 	}
-	tables := fs.Args()
-	for _, t := range tables {
-		if !contains(status.Tables, t) {
-			return usagef("thelb status: no table %q: the tables are %s", t, strings.Join(status.Tables, ", "))
+	names := fs.Args()
+	for _, t := range names {
+		if !contains(status.Names, t) {
+			return usagef("thelb status: no view or table %q: name one of %s", t, strings.Join(status.Names, ", "))
 		}
 	}
 	show := func() error {
@@ -250,11 +350,15 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 			return errors.New("theLB answered without a status")
 		}
 		if *asJSON {
+			v, err := resp.Status.Pick(names...)
+			if err != nil {
+				return err
+			}
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
-			return enc.Encode(resp.Status)
+			return enc.Encode(v)
 		}
-		text, err := resp.Status.Text(now(), tables...)
+		text, err := resp.Status.Text(now(), names...)
 		if err != nil {
 			return err
 		}
@@ -302,9 +406,22 @@ func generateCmd(args []string, stdout io.Writer) error {
 	}
 }
 
+// change asks the running director to change the cluster, and prints what it
+// did.
+func change(stdout io.Writer, c api.Change) error {
+	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &c})
+	if err != nil {
+		return err
+	}
+	if r := resp.Result; r != nil && r.Message != "" {
+		_, _ = fmt.Fprintln(stdout, r.Message)
+	}
+	return nil
+}
+
 func adminCmd(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usagef("thelb admin: say what to change: approve, refuse, remove, secret show (pool, service, assign and unassign come later)")
+		return usagef("thelb admin: say what to change: approve, refuse, remove, pool, service, assign, unassign, secret show")
 	}
 	switch args[0] {
 	case "approve":
@@ -317,16 +434,49 @@ func adminCmd(args []string, stdout io.Writer) error {
 		if fs.NArg() != 1 {
 			return usagef("thelb admin %s: name one node", args[0])
 		}
-		op := localsock.OpRefuse
-		if args[0] == "remove" {
-			op = localsock.OpRemove
-		}
-		resp, err := localsock.Call(runDir, localsock.Request{Op: op, Names: fs.Args()})
+		resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: args[0], Names: fs.Args()}})
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], strings.Join(resp.Names, ", "))
+		done := fs.Args()
+		if resp.Result != nil && len(resp.Result.Names) > 0 {
+			done = resp.Result.Names
+		}
+		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], strings.Join(done, ", "))
 		return nil
+	case "pool":
+		return poolCmd(args[1:], stdout)
+	case "service":
+		return serviceCmd(args[1:], stdout)
+	case "assign":
+		fs := newFlags("admin assign")
+		weights := fs.String("weight", "", "")
+		// The service and offers come first, the flags after them, as in the help.
+		pos, flags := splitFlags(args[1:])
+		if err := parse(fs, flags); err != nil {
+			return err
+		}
+		pos = append(pos, fs.Args()...)
+		if len(pos) < 2 {
+			return usagef("thelb admin assign <service> <node>:<proto>/<port> ... [--weight node=N,...]")
+		}
+		w := map[string]int{}
+		if *weights != "" {
+			for _, kv := range strings.Split(*weights, ",") {
+				k, v, ok := strings.Cut(kv, "=")
+				n, err := strconv.Atoi(v)
+				if !ok || err != nil {
+					return usagef("thelb admin assign: --weight is node=N[,node=N], not %q", *weights)
+				}
+				w[k] = n
+			}
+		}
+		return change(stdout, api.Change{Op: "assign", Names: pos[:1], Offers: pos[1:], Weights: w})
+	case "unassign":
+		if len(args) != 3 {
+			return usagef("thelb admin unassign <service> <node>")
+		}
+		return change(stdout, api.Change{Op: "unassign", Names: args[1:]})
 	case "secret":
 		if len(args) < 2 {
 			return usagef("thelb admin secret: show (rotate and retire come later)")
@@ -352,11 +502,79 @@ func adminCmd(args []string, stdout io.Writer) error {
 		default:
 			return usagef("thelb admin secret: %q is not a secret command", args[1])
 		}
-	case "pool", "service", "assign", "unassign":
-		return notYet("thelb admin " + args[0])
 	default:
 		return usagef("thelb admin: %q is not an admin command", args[0])
 	}
+}
+
+// splitFlags separates leading arguments from the flags after them.
+func splitFlags(args []string) (pos, flags []string) {
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return args[:i], args[i:]
+		}
+	}
+	return args, nil
+}
+
+func poolCmd(args []string, stdout io.Writer) error {
+	if len(args) < 2 || (args[0] != "add" && args[0] != "remove") {
+		return usagef("thelb admin pool add <name> --vip <first address/prefix> --vippool-count <n> [--interface <name>] [--default], or pool remove <name>")
+	}
+	name := args[1]
+	if args[0] == "remove" {
+		if len(args) != 2 {
+			return usagef("thelb admin pool remove <name>")
+		}
+		return change(stdout, api.Change{Op: "pool.remove", Pool: name})
+	}
+	fs := newFlags("admin pool add")
+	vip := fs.String("vip", "", "")
+	count := fs.Int("vippool-count", 0, "")
+	iface := fs.String("interface", "", "")
+	def := fs.Bool("default", false, "")
+	if err := parse(fs, args[2:]); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return usagef("thelb admin pool add: unexpected %q", fs.Arg(0))
+	}
+	if _, err := netip.ParsePrefix(*vip); err != nil {
+		return usagef("thelb admin pool add: --vip is the pool's first address and its network's prefix, as 10.10.1.20/24: %q", *vip)
+	}
+	if *count < 1 {
+		return usagef("thelb admin pool add: --vippool-count, how many addresses, is required")
+	}
+	return change(stdout, api.Change{Op: "pool.add", Pool: name, VIP: *vip, Count: *count, Interface: *iface, Default: *def})
+}
+
+func serviceCmd(args []string, stdout io.Writer) error {
+	if len(args) < 2 || (args[0] != "add" && args[0] != "remove") {
+		return usagef("thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr], or service remove <name>")
+	}
+	name := args[1]
+	if args[0] == "remove" {
+		if len(args) != 2 {
+			return usagef("thelb admin service remove <name>")
+		}
+		return change(stdout, api.Change{Op: "service.remove", Names: []string{name}})
+	}
+	fs := newFlags("admin service add")
+	pool := fs.String("pool", "", "")
+	vip := fs.String("vip", "", "")
+	proto := fs.String("proto", "", "")
+	port := fs.Int("port", 0, "")
+	sched := fs.String("scheduler", "", "")
+	if err := parse(fs, args[2:]); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return usagef("thelb admin service add: unexpected %q", fs.Arg(0))
+	}
+	if *proto == "" || *port == 0 {
+		return usagef("thelb admin service add: --proto and --port are required")
+	}
+	return change(stdout, api.Change{Op: "service.add", Names: []string{name}, Pool: *pool, VIP: *vip, Proto: *proto, Port: *port, Scheduler: *sched})
 }
 
 // approveCmd approves pending nodes by name, or every one whose name matches
@@ -412,11 +630,15 @@ func approveCmd(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpApprove, Names: names})
+	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "approve", Names: names}})
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(stdout, "approved: %s\n", strings.Join(resp.Names, ", "))
+	done := names
+	if resp.Result != nil && len(resp.Result.Names) > 0 {
+		done = resp.Result.Names
+	}
+	_, _ = fmt.Fprintf(stdout, "approved: %s\n", strings.Join(done, ", "))
 	return nil
 }
 

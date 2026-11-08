@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dmartsapp/thelb/internal/api"
+	"github.com/dmartsapp/thelb/internal/backend"
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
@@ -79,6 +81,17 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"admin", "approve", "--match", "web-.*", "web-1"},
 		{"admin", "refuse"},
 		{"admin", "remove", "web-1", "web-2"},
+		{"backend", "--join", "10.0.0.10", "--secret-file", "/b"},
+		{"backend", "--join", "10.0.0.10:7443"},
+		{"backend", "--join", "10.0.0.10:7443", "--secret-file", "/b", "--offer", "tcp/80,check=icmp"},
+		{"backend", "--join", "10.0.0.10:7443", "--secret-file", "/b", "--offer", "udp/53,check=tcp"},
+		{"backend", "--join", "10.0.0.10:7443", "--secret-file", "/b", "--offer", "tcp/80", "--offer", "tcp/80"},
+		{"admin", "pool", "add", "external", "--vip", "10.10.1.20", "--vippool-count", "10"},
+		{"admin", "pool", "add", "external", "--vip", "10.10.1.20/24"},
+		{"admin", "service", "add", "nginx", "--port", "80"},
+		{"admin", "assign", "nginx"},
+		{"admin", "assign", "nginx", "web-1:tcp/80", "--weight", "web-1"},
+		{"admin", "unassign", "nginx"},
 	} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 2 {
@@ -88,7 +101,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestNotYetExitsOne(t *testing.T) {
-	for _, args := range [][]string{{"backend"}, {"doctor"}, {"generate", "systemd"}, {"admin", "pool"}, {"admin", "secret", "rotate"}} {
+	for _, args := range [][]string{{"doctor"}, {"generate", "systemd"}, {"admin", "secret", "rotate"}} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 1 || !strings.Contains(errOut, "not in this build") {
 			t.Errorf("%v: exit %d, %q", args, code, errOut)
@@ -154,9 +167,9 @@ func (fakeNode) Status() status.Status {
 // adminCalls are the changes the fake node was asked for.
 var adminCalls []string
 
-func (fakeNode) Admin(op string, names []string) ([]string, error) {
-	adminCalls = append(adminCalls, op+" "+strings.Join(names, ","))
-	return names, nil
+func (fakeNode) Admin(c api.Change) (api.Result, error) {
+	adminCalls = append(adminCalls, c.Op+" "+strings.Join(c.Names, ","))
+	return api.Result{Names: c.Names}, nil
 }
 
 func (fakeNode) SecretText(role string) (string, error) {
@@ -190,12 +203,16 @@ func withRunningTheLB(t *testing.T) {
 func TestStatusAsTablesAndJSON(t *testing.T) {
 	withRunningTheLB(t)
 	code, out, errOut := as(t, 0, "status")
-	if code != 0 || !strings.Contains(out, " prod    | 7f3c91a2 |") || !strings.Contains(out, "(0 rows)") {
+	if code != 0 || !strings.Contains(out, " prod    | 7f3c91a2 |") || !strings.Contains(out, " directors |     1 |") || !strings.Contains(out, "More: thelb status") {
 		t.Errorf("status: exit %d, %s %s", code, out, errOut)
 	}
 	code, out, _ = as(t, 0, "status", "nodes")
 	if code != 0 || !strings.HasPrefix(out, " node ") || strings.Contains(out, "cluster") {
 		t.Errorf("status nodes: %s", out)
+	}
+	code, out, _ = as(t, 0, "status", "all")
+	if code != 0 || !strings.Contains(out, "(0 rows)") || !strings.Contains(out, " pool ") {
+		t.Errorf("status all: %s", out)
 	}
 	code, out, _ = as(t, 0, "status", "--json")
 	var st status.Status
@@ -268,6 +285,52 @@ func TestApprove(t *testing.T) {
 		code, out, _ := run(false, "", "admin", c.op, "web-1")
 		if code != 0 || out != c.want || strings.Join(adminCalls, ";") != c.op+" web-1" {
 			t.Errorf("%s: exit %d, %q, %v", c.op, code, out, adminCalls)
+		}
+	}
+}
+
+func TestBackendFlagsReachTheBackend(t *testing.T) {
+	var got backend.Config
+	saved := runBackend
+	runBackend = func(_ context.Context, cfg backend.Config, d backend.Deps) error {
+		got = cfg
+		if d.RunDir != runDir || d.Log == nil || d.Kernel == nil {
+			t.Errorf("deps %+v", d)
+		}
+		return nil
+	}
+	t.Cleanup(func() { runBackend = saved })
+	savedOS := goos
+	goos = "linux"
+	t.Cleanup(func() { goos = savedOS })
+	code, _, errOut := as(t, 0, "backend", "--join", "10.0.0.10:7443", "--secret-file", "/etc/thelb/backend.secret", "--name", "web-1",
+		"--offer", "tcp/8080,check=http:/healthz", "--offer", "udp/53")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if got.Join.String() != "10.0.0.10:7443" || got.Name != "web-1" || got.SecretFile != "/etc/thelb/backend.secret" || len(got.Offers) != 2 ||
+		got.Offers[0].Check != "http:/healthz" || got.Offers[1].Check != "none" || got.Offers[1].Proto != "udp" {
+		t.Errorf("config %+v", got)
+	}
+}
+
+func TestAdminChanges(t *testing.T) {
+	withRunningTheLB(t)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"admin", "pool", "add", "external", "--vip", "10.10.1.20/24", "--vippool-count", "10"}, "pool.add "},
+		{[]string{"admin", "service", "add", "nginx", "--pool", "external", "--proto", "tcp", "--port", "80"}, "service.add nginx"},
+		{[]string{"admin", "assign", "nginx", "web-1:tcp/80", "web-2:tcp/80", "--weight", "web-1=3"}, "assign nginx"},
+		{[]string{"admin", "unassign", "nginx", "web-2"}, "unassign nginx,web-2"},
+		{[]string{"admin", "service", "remove", "nginx"}, "service.remove nginx"},
+		{[]string{"admin", "pool", "remove", "external"}, "pool.remove "},
+	} {
+		adminCalls = nil
+		code, _, errOut := as(t, 0, c.args...)
+		if code != 0 || strings.Join(adminCalls, ";") != c.want {
+			t.Errorf("%v: exit %d %s, calls %v", c.args, code, errOut, adminCalls)
 		}
 	}
 }

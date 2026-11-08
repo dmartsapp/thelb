@@ -13,7 +13,7 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 ## Status
 
-**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. Backends, IPVS, pools and services come next.
+**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. And backends: pools, services, assignments, and the kernel's IPVS forwarding to them by direct routing, with health checks from both sides. Port mapping on the backend, `doctor` and `generate` come next.
 
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
 - [Design](docs/design.md) - how it works, and the questions still open;
@@ -29,6 +29,22 @@ make check                         # gofmt, go vet, go test -race, golangci-lint
 make e2e                           # the built binary in a lab of network namespaces, as root (Linux, passwordless sudo)
 make remote-check REMOTE=<host>    # make check on a Linux machine, over ssh
 make remote-e2e REMOTE=<host>      # make e2e there
+make lab                           # a lab to try by hand, on one Linux machine (root)
+make lab-down                      # take it away
+```
+
+### Trying it on one machine
+
+`make lab` builds, in network namespaces on `198.18.0.0/24` - so nothing reaches the machine's own network - a cluster of three directors, three backends each running a small web server, and a client; then a pool, a service on `198.18.0.20:80`, and the backends assigned to it. `test/lab.sh` drives it:
+
+```text
+sudo test/lab.sh curl 12                    # the client fetches the service 12 times, and counts who answered
+sudo test/lab.sh run d1 thelb status        # the summary; then status directors, backends, vips, all
+sudo test/lab.sh run d1 ipvsadm -Ln         # what theLB programmed in IPVS, on the leader
+sudo test/lab.sh app b2 down                # a backend's application fails: weight 0; app b2 up brings it back
+sudo test/lab.sh kill d1                    # the leader crashes: another director takes the VIPs
+sudo test/lab.sh start d1                   # it comes back, cleans up what it left, and rejoins
+sudo test/lab.sh down                       # takes it all away
 ```
 
 ## License

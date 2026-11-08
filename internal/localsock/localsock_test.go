@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/status"
 )
@@ -21,7 +22,7 @@ func (fake) Status() status.Status {
 	return status.Status{View: "director", Cluster: &status.Cluster{Name: "prod", ID: "7f3c91a2"}}
 }
 
-func (fake) Admin(op string, names []string) ([]string, error) { return names, nil }
+func (fake) Admin(c api.Change) (api.Result, error) { return api.Result{Names: c.Names}, nil }
 
 func (fake) SecretText(role string) (string, error) {
 	if role == "director" {

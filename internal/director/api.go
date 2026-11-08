@@ -8,47 +8,18 @@ import (
 	"sort"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/version"
 	"github.com/dmartsapp/thelb/internal/wire"
 	"github.com/hashicorp/raft"
 )
 
-// The API between directors: one request and one answer per connection, except
-// check-ins, which stream - one a second, each answered.
-const (
-	opCheckIn  = "checkin"
-	opCheckIns = "checkins"
-	opApprove  = "approve"
-	opRefuse   = "refuse"
-	opRemove   = "remove"
-	opRenew    = "renew"
-)
-
-type (
-	apiRequest struct {
-		V       int      `json:"v"`
-		Op      string   `json:"op"`
-		Names   []string `json:"names,omitempty"`
-		CSR     []byte   `json:"csr,omitempty"`
-		RaftID  string   `json:"raft_id,omitempty"`
-		Applied uint64   `json:"applied,omitempty"`
-		Version string   `json:"version,omitempty"`
-	}
-	apiResponse struct {
-		V        int       `json:"v"`
-		OK       bool      `json:"ok"`
-		Error    string    `json:"error,omitempty"`
-		Names    []string  `json:"names,omitempty"`
-		Cert     []byte    `json:"cert,omitempty"`
-		CheckIns []checkIn `json:"check_ins,omitempty"`
-	}
-)
-
 var errNotLeader = errors.New("this director does not lead: ask the leader")
 
-// serveAPI answers another director. TLS has checked that it is one of this
-// cluster's, with a certificate not revoked.
+// serveAPI answers a member. TLS has checked that it is one of this cluster's,
+// with a certificate not revoked: a director, or - on the control VIP - a
+// backend.
 func (s *session) serveAPI(c *tls.Conn) {
 	peer, ok := wire.PeerName(c)
 	if !ok {
@@ -56,55 +27,75 @@ func (s *session) serveAPI(c *tls.Conn) {
 	}
 	w := wire.NewConn(c)
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	var req apiRequest
+	var req api.Request
 	if w.Recv(&req) != nil {
 		return
 	}
+	fail := func(err error) { _ = w.Send(api.Response{V: wire.Version, Error: err.Error()}) }
 	if req.V != wire.Version {
-		_ = w.Send(apiResponse{V: wire.Version, Error: fmt.Sprintf("this director speaks version %d of the API, not %d", wire.Version, req.V)})
+		fail(fmt.Errorf("this director speaks version %d of the API, not %d", wire.Version, req.V))
 		return
 	}
-	approved := false
+	member := false
 	s.fsm.Read(func(st *cluster.State) {
 		n := st.Nodes[peer.Name]
-		approved = n != nil && n.Role == "director"
+		member = n != nil && n.Role == peer.Role
 	})
-	if !approved {
-		_ = w.Send(apiResponse{V: wire.Version, Error: peer.Name + " is not a director of this cluster"})
+	if !member {
+		if peer.Role == "backend" && req.Op == api.OpBackend {
+			_ = w.Send(api.Response{V: wire.Version, OK: true, Orders: &api.Orders{Removed: true}})
+			return
+		}
+		fail(fmt.Errorf("%s is not a %s of this cluster", peer.Name, peer.Role))
 		return
 	}
-	if req.Op == opCheckIn {
+	if peer.Role == "backend" {
+		switch req.Op {
+		case api.OpBackend:
+			s.serveBackend(c, w, peer.Name, req)
+		case api.OpRenew:
+			s.answer(w, peer.Name, req)
+		default:
+			fail(fmt.Errorf("a backend may not %s", req.Op))
+		}
+		return
+	}
+	if req.Op == api.OpCheckIn {
 		s.serveCheckIns(c, w, peer.Name, req)
 		return
 	}
-	resp := apiResponse{V: wire.Version, OK: true}
+	s.answer(w, peer.Name, req)
+}
+
+func (s *session) answer(w *wire.Conn, by string, req api.Request) {
+	resp := api.Response{V: wire.Version, OK: true}
 	var err error
 	switch {
 	case s.leading() == nil:
 		err = errNotLeader
-	case req.Op == opCheckIns:
-		for _, ci := range s.checkInsCopy() {
-			resp.CheckIns = append(resp.CheckIns, ci)
-		}
-	case req.Op == opApprove || req.Op == opRefuse || req.Op == opRemove:
-		resp.Names, err = s.change(peer.Name, req.Op, req.Names)
-	case req.Op == opRenew:
-		resp.Cert, err = s.sign(peer.Name, req.CSR)
+	case req.Op == api.OpLive:
+		resp.CheckIns, resp.Live = s.liveNow()
+	case req.Op == api.OpChange && req.Change != nil:
+		var r api.Result
+		r, err = s.change(by, *req.Change)
+		resp.Result = &r
+	case req.Op == api.OpRenew:
+		resp.Cert, err = s.sign(by, req.CSR)
 	default:
 		err = fmt.Errorf("this director does not know %q", req.Op)
 	}
 	if err != nil {
-		resp = apiResponse{V: wire.Version, Error: err.Error()}
+		resp = api.Response{V: wire.Version, Error: err.Error()}
 	}
 	_ = w.Send(resp)
 }
 
 // serveCheckIns records a director's check-ins, while this director leads, and
 // promotes a non-voter to voter once it has caught up with its admission.
-func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req apiRequest) {
+func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.Request) {
 	for {
 		if s.leading() == nil {
-			_ = w.Send(apiResponse{V: wire.Version, Error: errNotLeader.Error()})
+			_ = w.Send(api.Response{V: wire.Version, Error: errNotLeader.Error()})
 			return
 		}
 		var n cluster.Node
@@ -115,7 +106,7 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req apiR
 			}
 		})
 		if !found || n.RaftID != req.RaftID {
-			_ = w.Send(apiResponse{V: wire.Version, Error: "that member identity is not " + name + "'s"})
+			_ = w.Send(api.Response{V: wire.Version, Error: "that member identity is not " + name + "'s"})
 			return
 		}
 		s.mu.Lock()
@@ -124,7 +115,7 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req apiR
 		if req.Applied >= n.AdmitIndex {
 			s.promote(name, n)
 		}
-		if w.Send(apiResponse{V: wire.Version, OK: true}) != nil {
+		if w.Send(api.Response{V: wire.Version, OK: true}) != nil {
 			return
 		}
 		_ = c.SetReadDeadline(time.Now().Add(liveFor + 2*checkInEvery))
@@ -187,12 +178,12 @@ func (s *session) checkInLoop() {
 			if _, now := s.r.LeaderWithID(); now != id {
 				break
 			}
-			req := apiRequest{V: wire.Version, Op: opCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version}
+			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version}
 			if w.Send(req) != nil {
 				break
 			}
 			_ = tc.SetReadDeadline(time.Now().Add(liveFor))
-			var resp apiResponse
+			var resp api.Response
 			if w.Recv(&resp) != nil || !resp.OK {
 				break
 			}
@@ -211,28 +202,28 @@ func (s *session) sleep(d time.Duration) {
 }
 
 // callLeader asks the leader, under this director's identity.
-func (s *session) callLeader(req apiRequest) (apiResponse, error) {
+func (s *session) callLeader(req api.Request) (api.Response, error) {
 	addr, id := s.r.LeaderWithID()
 	if id == "" {
-		return apiResponse{}, errors.New("the cluster has no leader at the moment")
+		return api.Response{}, errors.New("the cluster has no leader at the moment")
 	}
 	if string(id) == s.raftID {
-		return apiResponse{}, errors.New("this director leads")
+		return api.Response{}, errors.New("this director leads")
 	}
 	tc, err := s.dialMember(string(addr), wire.ALPNAPI, 3*time.Second)
 	if err != nil {
-		return apiResponse{}, fmt.Errorf("reaching the leader: %w", err)
+		return api.Response{}, fmt.Errorf("reaching the leader: %w", err)
 	}
 	defer func() { _ = tc.Close() }()
 	_ = tc.SetDeadline(time.Now().Add(10 * time.Second))
 	w := wire.NewConn(tc)
 	req.V = wire.Version
 	if err := w.Send(req); err != nil {
-		return apiResponse{}, err
+		return api.Response{}, err
 	}
-	var resp apiResponse
+	var resp api.Response
 	if err := w.Recv(&resp); err != nil {
-		return apiResponse{}, fmt.Errorf("the leader's answer: %w", err)
+		return api.Response{}, fmt.Errorf("the leader's answer: %w", err)
 	}
 	if !resp.OK {
 		return resp, errors.New(resp.Error)
@@ -240,104 +231,46 @@ func (s *session) callLeader(req apiRequest) (apiResponse, error) {
 	return resp, nil
 }
 
-// admin is `thelb admin approve|refuse|remove` on this director: done here when
-// it leads, asked of the leader otherwise.
-func (s *session) admin(op string, names []string) ([]string, error) {
+// admin is `thelb admin` on this director: done here when it leads, asked of
+// the leader otherwise.
+func (s *session) admin(c api.Change) (api.Result, error) {
 	if s.leading() != nil {
-		return s.change(s.n.cfg.Name, op, names)
+		return s.change(s.n.cfg.Name, c)
 	}
-	resp, err := s.callLeader(apiRequest{Op: op, Names: names})
-	return resp.Names, err
-}
-
-// change approves, refuses or removes nodes, on the leader, for the director by.
-func (s *session) change(by, op string, names []string) ([]string, error) {
-	if len(names) == 0 {
-		return nil, errors.New("name a node")
-	}
-	switch op {
-	case opApprove:
-		var missing []string
-		s.fsm.Read(func(st *cluster.State) {
-			for _, name := range names {
-				if st.Pending[name] == nil {
-					missing = append(missing, name)
-				}
-			}
-		})
-		if len(missing) > 0 {
-			return nil, fmt.Errorf("not waiting for approval: %v", missing)
-		}
-		if err := s.apply(cluster.TypeApprove, by, cluster.Names{Names: names}); err != nil {
-			return nil, err
-		}
-		for _, name := range names {
-			s.log.OK("node approved", "node", name, "by", by)
-		}
-		return names, nil
-	case opRefuse:
-		if len(names) != 1 {
-			return nil, errors.New("refuse one node at a time")
-		}
-		if err := s.apply(cluster.TypeRefuse, by, cluster.Name{Name: names[0]}); err != nil {
-			return nil, err
-		}
-		s.log.OK("node refused", "node", names[0], "by", by)
-		return names, nil
-	case opRemove:
-		if len(names) != 1 {
-			return nil, errors.New("remove one node at a time")
-		}
-		name := names[0]
-		var n *cluster.Node
-		directors := 0
-		s.fsm.Read(func(st *cluster.State) {
-			if p := st.Nodes[name]; p != nil {
-				c := *p
-				n = &c
-			}
-			for _, x := range st.Nodes {
-				if x.Role == "director" {
-					directors++
-				}
-			}
-		})
-		if n == nil {
-			return nil, fmt.Errorf("%s is not a node of this cluster", name)
-		}
-		if n.Role == "director" && directors == 1 {
-			return nil, fmt.Errorf("%s is the cluster's only director: stop it instead", name)
-		}
-		if err := s.apply(cluster.TypeRemove, by, cluster.Name{Name: name}); err != nil {
-			return nil, err
-		}
-		s.log.OK("node removed", "node", name, "by", by)
-		if n.RaftID != "" {
-			if err := s.r.RemoveServer(raft.ServerID(n.RaftID), 0, 5*time.Second).Error(); err != nil {
-				s.log.Warn("removing the member from Raft failed", "node", name, "member", n.RaftID, "error", err)
-			}
-		}
-		return names, nil
-	default:
-		return nil, fmt.Errorf("no such change: %q", op)
-	}
-}
-
-// leaderCheckIns are the leader's check-ins: this director's own, or the
-// leader's, asked; ok is false when the leader cannot be asked.
-func (s *session) leaderCheckIns() (map[string]checkIn, bool) {
-	if s.leading() != nil {
-		return s.checkInsCopy(), true
-	}
-	resp, err := s.callLeader(apiRequest{Op: opCheckIns})
+	resp, err := s.callLeader(api.Request{Op: api.OpChange, Change: &c})
 	if err != nil {
-		return nil, false
+		return api.Result{}, err
+	}
+	if resp.Result == nil {
+		return api.Result{}, nil
+	}
+	return *resp.Result, nil
+}
+
+// leaderLive is what only the leader knows: check-ins and heartbeats, and each
+// assignment's checks, weight and counters - this director's own when it leads,
+// asked of the leader otherwise; ok is false when the leader cannot be asked.
+func (s *session) leaderLive() (map[string]checkIn, map[string]api.Live, bool) {
+	var cis []api.CheckIn
+	var live []api.Live
+	if s.leading() != nil {
+		cis, live = s.liveNow()
+	} else {
+		resp, err := s.callLeader(api.Request{Op: api.OpLive})
+		if err != nil {
+			return nil, nil, false
+		}
+		cis, live = resp.CheckIns, resp.Live
 	}
 	m := map[string]checkIn{}
-	for _, ci := range resp.CheckIns {
-		m[ci.Name] = ci
+	for _, ci := range cis {
+		m[ci.Name] = checkIn(ci)
 	}
-	return m, true
+	l := map[string]api.Live{}
+	for _, x := range live {
+		l[cluster.AssignmentKey(x.Service, x.Node)] = x
+	}
+	return m, l, true
 }
 
 func sortedNames[V any](m map[string]V) []string {

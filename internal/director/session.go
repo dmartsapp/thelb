@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/ca"
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/logx"
@@ -50,22 +51,20 @@ type session struct {
 	leadCtx   context.Context
 	leadStop  context.CancelFunc
 	vipSince  time.Time
-	checkIns  map[string]checkIn   // the leader's: by node name
-	asked     map[string]time.Time // the leader's: when each pending node last asked
+	served    chan struct{}          // closed when this leadership's data plane is cleared
+	plane     *plane                 // the leader's data plane
+	backends  map[string]backendLive // the leader's: each backend's last heartbeat
+	checkIns  map[string]checkIn     // the leader's: by node name
+	asked     map[string]time.Time   // the leader's: when each pending node last asked
 	promoting map[string]bool
 	conns     map[net.Conn]struct{}
 	authority *ca.Authority
 	closing   bool
 }
 
-// checkIn is a director's last check-in with the leader.
-type checkIn struct {
-	Name    string    `json:"name"`
-	RaftID  string    `json:"raft_id"`
-	At      time.Time `json:"at"`
-	Applied uint64    `json:"applied"`
-	Version string    `json:"version"`
-}
+// checkIn is a member's last check-in with the leader: a director's, or a
+// backend's heartbeat.
+type checkIn api.CheckIn
 
 // newSession starts a Raft member: it listens on the node's address, and - if
 // it creates the cluster - bootstraps a configuration of itself alone.
@@ -79,7 +78,7 @@ func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, c
 	}
 	s := &session{
 		n: n, log: n.log, raftID: raftID, key: key, id: id, fsm: cluster.New(), creating: creating,
-		endc: make(chan error, 1), checkIns: map[string]checkIn{}, asked: map[string]time.Time{},
+		endc: make(chan error, 1), checkIns: map[string]checkIn{}, asked: map[string]time.Time{}, backends: map[string]backendLive{},
 		promoting: map[string]bool{}, conns: map[net.Conn]struct{}{},
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -104,7 +103,7 @@ func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, c
 		wire.ALPNAPI:  s.track(s.serveAPI),
 		wire.ALPNJoin: s.track(s.serveJoin),
 	}}
-	go s.mux.Serve(ln, id.ServerConfig(wire.ALPNRaft, wire.ALPNAPI))
+	go s.mux.Serve(ln, id.ServerConfig([]string{"director"}, wire.ALPNRaft, wire.ALPNAPI))
 
 	s.trans = raft.NewNetworkTransportWithConfig(&raft.NetworkTransportConfig{
 		Stream:  s.stream,
@@ -337,11 +336,13 @@ func (s *session) lead() {
 			}
 		}
 	})
+	served := make(chan struct{})
 	s.mu.Lock()
-	s.leadCtx, s.leadStop, s.vipSince = ctx, stop, now
+	s.leadCtx, s.leadStop, s.vipSince, s.served = ctx, stop, now, served
 	s.checkIns = fresh
+	s.backends = map[string]backendLive{}
 	s.mu.Unlock()
-	go s.mux.Serve(ln, s.id.ServerConfig(wire.ALPNJoin, wire.ALPNAPI))
+	go s.mux.Serve(ln, s.id.ServerConfig([]string{"director", "backend"}, wire.ALPNJoin, wire.ALPNAPI))
 
 	if created {
 		c := s.creating
@@ -354,23 +355,31 @@ func (s *session) lead() {
 	}
 	s.log.OK("leader", "node", s.n.cfg.Name, "term", term, "member", s.raftID)
 	s.log.OK("control VIP taken", "vip", s.n.cfg.ControlVIP, "port", s.n.cfg.ControlPort, "interface", s.n.addr.Interface)
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go func() {
 		defer s.wg.Done()
 		s.sweep(ctx)
+	}()
+	go func() {
+		defer s.wg.Done()
+		defer close(served)
+		s.serve(ctx)
 	}()
 }
 
 // unlead gives the control VIP up - at once: holding it needs leadership.
 func (s *session) unlead(why string) {
 	s.mu.Lock()
-	stop := s.leadStop
-	s.leadCtx, s.leadStop = nil, nil
+	stop, served := s.leadStop, s.served
+	s.leadCtx, s.leadStop, s.served = nil, nil, nil
 	s.mu.Unlock()
 	if stop == nil {
 		return
 	}
 	stop()
+	if served != nil {
+		<-served // the service VIPs and IPVS cleared first
+	}
 	s.n.net.Release()
 	s.log.OK("control VIP released", "vip", s.n.cfg.ControlVIP, "reason", why)
 }
@@ -500,6 +509,11 @@ func (s *session) waitMember() {
 		case !member && created && n != nil && n.RaftID == s.raftID:
 			member = true
 			s.n.member(s)
+			if s.leading() == nil {
+				if err := s.dp().Leftovers(s.known()); err != nil {
+					s.log.Warn("removing what an earlier run left in the kernel failed", "error", err)
+				}
+			}
 		case member && n == nil:
 			s.finish(errRemoved)
 			return
@@ -546,8 +560,8 @@ func (s *session) renew() error {
 	if s.leading() != nil {
 		der, err = s.sign(s.n.cfg.Name, csr)
 	} else {
-		var resp apiResponse
-		resp, err = s.callLeader(apiRequest{Op: opRenew, CSR: csr})
+		var resp api.Response
+		resp, err = s.callLeader(api.Request{Op: api.OpRenew, CSR: csr})
 		der = resp.Cert
 	}
 	if err != nil {
@@ -595,40 +609,44 @@ func (s *session) signer() (*ca.Authority, error) {
 	return a, nil
 }
 
-// sign signs, on the leader, a certificate for the approved director name - for
-// the key in its request, with its approved address and the control VIP - and
-// records it.
+// sign signs, on the leader, a renewed certificate for the approved node name
+// - for the key in its request, with its approved address, and a director's
+// the control VIP too - and records it.
 func (s *session) sign(name string, csrDER []byte) ([]byte, error) {
 	csr, err := ca.ParseRequest(csrDER)
 	if err != nil {
 		return nil, err
 	}
-	var addr string
+	var addr, role string
 	s.fsm.Read(func(st *cluster.State) {
-		if n := st.Nodes[name]; n != nil && n.Role == "director" {
-			addr = n.Address
+		if n := st.Nodes[name]; n != nil {
+			addr, role = n.Address, n.Role
 		}
 	})
 	ip, err := netip.ParseAddr(addr)
 	if err != nil {
-		return nil, fmt.Errorf("%s is not a director of this cluster", name)
+		return nil, fmt.Errorf("%s is not a node of this cluster", name)
+	}
+	ips := []netip.Addr{ip, s.n.cfg.ControlVIP}
+	if role == "backend" {
+		ips = []netip.Addr{ip}
 	}
 	a, err := s.signer()
 	if err != nil {
 		return nil, err
 	}
-	cert, der, err := a.Sign("director", name, []netip.Addr{ip, s.n.cfg.ControlVIP}, csr.PublicKey, s.n.d.Now(), ca.NodeLifetime)
+	cert, der, err := a.Sign(role, name, ips, csr.PublicKey, s.n.d.Now(), ca.NodeLifetime)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(cluster.TypeCert, s.n.cfg.Name, certRecord(name, cert)); err != nil {
+	if err := s.apply(cluster.TypeCert, s.n.cfg.Name, certRecord(name, role, cert)); err != nil {
 		return nil, err
 	}
 	return der, nil
 }
 
-func certRecord(name string, c *x509.Certificate) cluster.Cert {
-	return cluster.Cert{Name: name, Kind: "director", Serial: ca.Serial(c), Fingerprint: ca.Fingerprint(c.Raw), NotAfter: c.NotAfter.UTC()}
+func certRecord(name, kind string, c *x509.Certificate) cluster.Cert {
+	return cluster.Cert{Name: name, Kind: kind, Serial: ca.Serial(c), Fingerprint: ca.Fingerprint(c.Raw), NotAfter: c.NotAfter.UTC()}
 }
 
 // dialRaft connects to another director's Raft, with mutual TLS.
