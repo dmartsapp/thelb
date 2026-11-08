@@ -39,7 +39,7 @@ Two nodes announcing the same VIP is worse than a VIP that is briefly down: clie
 
 ## 5. The kernel forwards; theLB decides
 
-Traffic is forwarded by the kernel's IPVS, in direct-routing mode: the load balancer only rewrites the destination MAC address, and the backend answers the client directly. There is no proxy in the data path, no NAT and no `iptables`. theLB itself is the control plane: it decides what the kernel should do, and checks that it is still doing it.
+Traffic is forwarded by the kernel's IPVS with direct return: the load balancer only rewrites the destination MAC address (or, across subnets, wraps the packet in a tunnel), and the backend answers the client directly. There is no proxy in the data path and **no NAT on the director**. A backend uses NAT only when asked to - to map a service's port to the port its application really listens on - in theLB's own table, at runtime. theLB itself is the control plane: it decides what the kernel should do, and checks that it is still doing it.
 
 A proxying mode is a later, separate capability (see the [design](design.md#phases)). It will not change how direct routing works.
 
@@ -51,9 +51,8 @@ The same binary runs on every node involved - the directors that hold the VIPs a
 
 Nothing theLB does should be a surprise:
 
-- `thelb plan` prints every change it would make, before it makes any;
-- `thelb doctor` checks the machine and explains what it finds;
-- `thelb status` shows who holds which VIP, the health of every backend, and the IPVS counters;
+- `thelb doctor` checks the machine, explains what it finds, and prints every change theLB would make, before it makes any;
+- `thelb status` shows, in one place, who leads, every node and when it last checked in, who holds which VIP, and the health of every backend - as tables, or as JSON;
 - every change it makes is logged with what it changed, from what, and why.
 
 ## 8. Plain Linux first, Kubernetes on top
