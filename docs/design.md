@@ -52,7 +52,7 @@ Not in scope, for now: proxying (a later capability - see [Phases](#phases)), NA
 | **Control VIP** | The cluster's own VIP, held by the leader: the address backends and the command line talk to, on the control port. |
 | **Backend** | A node that serves a service's traffic: it holds the VIP without announcing it, and answers clients directly. IPVS calls it a real server. |
 | **Agent** | theLB running on a backend. On a Kubernetes node it is a pod of the agent DaemonSet. |
-| **Cluster secrets** | Two random secrets the user creates before the cluster exists - one for directors, one for backends - and gives to every node of that role, in a file. A node joins by proving it knows its role's secret. |
+| **Cluster secrets** | Two random secrets - one for directors, one for backends - created by the director that first bootstraps the cluster, in the files the user names, and copied by the user to every node of that role. A node joins by proving it knows its role's secret. |
 | **Attachment** | A backend serving a service: which backend, which service, the application's port, and how to check it. |
 
 ## Where it works
@@ -196,27 +196,57 @@ start ─▶ preflight ─▶ read the kernel ─▶ plan ─▶ apply ─▶ bo
 
 ## Bootstrapping and joining directors
 
-Every director is started the same way - the control VIP, the control port and the directors' secret, on the command line or in its systemd unit - and one of them also with `--bootstrap`.
+Every director is started the same way - the control VIP, the control port and the two secret files, on the command line or in its systemd unit - with `--bootstrap` on the director that starts the cluster (and on others too, if wanted - see [the bootstrap rule](#restarts-and-the-bootstrap-rule)).
 
 ```text
-# once, before anything runs: the user creates the two secrets. theLB prints them and writes nothing;
-# the user keeps them as files (mode 0600) and copies each to every node of its role
-thelb generate secret > director.secret
-thelb generate secret > backend.secret
+# the first director: checks the VIP and port are free, creates the cluster and - this first time - its secrets
+sudo thelb director --vip 10.0.0.10 --port 7443 --bootstrap \
+  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
 
-# every director - the same command; exactly one of them also has --bootstrap
-sudo thelb director --vip 10.0.0.10 --port 7443 --secret-file /etc/thelb/director.secret --bootstrap
-sudo thelb director --vip 10.0.0.10 --port 7443 --secret-file /etc/thelb/director.secret
+# the user copies director.secret and backend.secret to every other director, and backend.secret to every
+# backend; then every other director runs the same command (with or without --bootstrap)
+sudo thelb director --vip 10.0.0.10 --port 7443 \
+  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
 ```
 
-**Creating the cluster** (a director with `--bootstrap`, when no cluster answers):
+### The secret files
+
+A director decides what to do from its secret file and from what answers on the control VIP:
+
+| The secret file | `VIP:port` | The director |
+|---|---|---|
+| exists | a theLB cluster answers | **joins** it with the secret; if the cluster does not accept it, stops - see below |
+| exists | nothing answers (with `--bootstrap`) | **creates the cluster** with this secret |
+| exists | nothing answers (without `--bootstrap`) | waits, and retries, until a cluster answers |
+| missing | nothing answers (with `--bootstrap`) | **creates the secrets**, writes them to the files, and creates the cluster |
+| missing | anything else | stops: it has no secret, and says where to get one |
+| either | something that is not theLB answers | refuses: the VIP or port is taken |
+
+**Writing a secret file** is the one thing theLB writes to disk ([Philosophy](philosophy.md#1-one-binary-and-nothing-left-behind)), and it does so only then: the first time a cluster is bootstrapped, only to the files the user named, only when they do not exist, created readable by root only (mode `0600`), with an exclusive create, and never overwritten. The secrets go nowhere else - not to the log, not to standard output. A user who wants to create them beforehand can: `thelb generate secret` prints one.
+
+**A secret the cluster does not accept** means the file is out of date - the cluster's secret was rotated, or recreated - or belongs to another cluster; from outside, the two look the same, and theLB says nothing more about the cluster:
+
+```text
+thelb: the cluster at 10.0.0.10:7443 did not accept the secret in /etc/thelb/director.secret: it is out of
+date, or belongs to another cluster. On a director, run `sudo thelb admin secret show --role director`, put
+what it prints in /etc/thelb/director.secret, and start this director again.
+```
+
+theLB reads the secret only from `--secret-file`; it never takes one on the command line, where other users could see it in the process list.
+
+### Creating the cluster
+
+A director with `--bootstrap`, when nothing answers:
 
 1. Checks that the control VIP is free on the network (an ARP or NDP probe) and that nothing answers on `VIP:port`.
-2. Creates the cluster: a cluster ID, a **certificate authority** (key and certificate) and its own certificate - all in memory.
-3. Becomes a Raft cluster of one, and leader; takes the control VIP, announces it, and opens the control API on it, with mutual TLS once members have certificates.
-4. Logs that the cluster exists - and nothing secret. **The CA's key is never printed**: under systemd, standard output goes to the journal, which is on disk, so printing a key would store a copy of it.
+2. Creates the secrets if their files are missing, as above.
+3. Creates the cluster: a cluster ID, a **certificate authority** (key and certificate) and its own certificate - all in memory.
+4. Becomes a Raft cluster of one, and leader; takes the control VIP, announces it, and opens the control API on it, with mutual TLS once members have certificates.
+5. Logs that the cluster exists - and nothing secret. **The CA's key is never printed or written**: under systemd, standard output goes to the journal, which is on disk.
 
-**Joining it** (every other director, and the bootstrap director when it finds a cluster already running):
+### Joining it
+
+Every other director, and a bootstrap director that finds a cluster already running:
 
 1. Creates its key in memory and opens a TLS connection to `VIP:port`.
 2. **Both sides prove they know the directors' secret**: each sends an HMAC, keyed with the secret, over the TLS connection's exported keying material. The proof is bound to that one connection, so a machine in the middle cannot relay it, and the secret itself never crosses the network. The joiner now knows it reached the real cluster, and the cluster knows the joiner holds the secret.
@@ -224,33 +254,35 @@ sudo thelb director --vip 10.0.0.10 --port 7443 --secret-file /etc/thelb/directo
 4. The leader checks that the connection comes from one of the addresses claimed, and that the name is not held by a live member - or, with manual approval, holds the request until `thelb admin approve <name>`.
 5. The leader signs its certificate and adds it to Raft as a non-voter. It receives the replicated state, **the CA included**, and is promoted to voter once it has caught up.
 
-**The secrets must be strong**: `thelb generate secret` prints 256 random bits, and theLB refuses a secret shorter than that - a weak one could be guessed from a recorded proof.
+**The secrets are strong**: 256 random bits, whether theLB or `generate secret` made them, and theLB refuses a shorter one - a weak secret could be guessed from a recorded proof.
 
-**Why a secret, and not the CA certificate**: the CA certificate is public - the leader sends its certificate chain to anyone who connects - so having it would prove only that the joiner is talking to the real cluster, not that the cluster should trust the joiner. And a CA exists only once the cluster does, so no unit could carry it before the first start. The secret exists before the cluster, works in both directions, and outlives any one CA.
+**Why a secret, and not the CA certificate**: the CA certificate is public - the leader sends its certificate chain to anyone who connects - so having it would prove only that the joiner is talking to the real cluster, not that the cluster should trust the joiner. The secret works in both directions, and outlives any one CA: a cluster created again after a full stop has a new CA but the same secret, so no node needs anything new.
 
 **Why the CA is replicated, and not re-created after a failover**: with the CA key on every director, a new leader carries on with the same CA - no director or backend has to be issued a new certificate at the moment a node has just failed. A director can already send all of the cluster's traffic anywhere, so a compromised director is a compromised cluster either way; the CA key on every director adds little to that.
 
 ### Restarts, and the bootstrap rule
 
-Raft's state is in memory, so a restarted director remembers nothing of the cluster. The secret is what lets it find its way back:
+Raft's state is in memory, so a restarted director remembers nothing of the cluster. The secret file is what lets it find its way back:
 
-| Situation | The bootstrap director | Every other director |
+| Situation | A director with `--bootstrap` | A director without it |
 |---|---|---|
-| The first start | Nothing answers: creates the cluster | Joins it |
-| A restart while the cluster runs | Finds the cluster on the control VIP: **joins it**, with its secret | Joins it |
-| Every director stopped, then started | Nothing answers: creates a new cluster - a new CA, the same secrets | Joins the new one, with no change to its files |
-| The bootstrap director is gone for good | - | The cluster carries on. If every director stops, none creates a cluster until one is started with `--bootstrap` - by the user, on purpose |
+| The first start | Nothing answers: creates the secrets and the cluster | Joins it, with the copied secret |
+| A restart while the cluster runs | Finds the cluster on the control VIP: **joins it** | Joins it |
+| Every director stopped, then started | Nothing answers: creates a new cluster - a new CA, **the same secret** | Joins the new one, with no change to its files |
+| Its secret file was lost, while the cluster runs | Stops: no secret, and a cluster answers - the user copies the file back | The same |
+| Its secret file was lost, and every director stopped | Nothing answers: creates new secrets and a new cluster; every other node is then out of date until the user copies the new files | Waits for a cluster |
 
 To keep one cluster per control VIP:
 
 - **Only a director started with `--bootstrap` may create a cluster**, and only after probing the control VIP for longer than a failover takes and finding nothing on `VIP:port`. If a theLB cluster answers, it joins; if something else answers, it refuses.
 - **A director without `--bootstrap` only ever joins**, retrying until a cluster answers.
-- **A cluster that sees its control VIP claimed by another cluster stands down** - the younger of the two, by creation time - releasing every VIP: the safety net for the rare race, such as the bootstrap director restarting during the second-long gap of a failover.
+- **Several directors may carry `--bootstrap`.** They share the secret, so after a full stop, if more than one creates a cluster at the same moment, the safety net below makes them one again - and the cluster no longer depends on one particular director coming back.
+- **A cluster that sees its control VIP claimed by another cluster stands down** - the younger of the two, by creation time - releasing every VIP; its directors then join the elder cluster, with the same secret. A cluster whose secret is different cannot be joined, so its directors stop as out of date.
 - **`--peers`**, optional: the other directors' addresses. A bootstrapping director asks each of them first whether it already belongs to a cluster.
 
 ### Changing a secret
 
-`thelb admin secret rotate --role director|backend` creates a new secret in the cluster (replicated, in memory) and prints it once. The cluster accepts the old and the new one until `thelb admin secret retire --role ...`, so the user can copy the new file to every node first. A secret that leaked is rotated the same way, and retired at once.
+`thelb admin secret show --role director|backend` prints the current secret, on a director only, for a node that is out of date. `thelb admin secret rotate --role ...` creates a new one (replicated, in memory) and prints it once; the cluster accepts the old and the new one until `thelb admin secret retire --role ...`, so the user can copy the new one into every node's file first. theLB does not rewrite the files: a node still holding the old secret after it is retired is out of date, and says so. A secret that leaked is rotated the same way, and retired at once.
 
 ## Backends: enrolment, trust and services
 
@@ -425,12 +457,12 @@ Six commands, and `--version`. Everything else is a flag:
 
 | Command | Does |
 |---|---|
-| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret, `--backend-secret-file` for checking backends, `--bootstrap` on one of them, `--config` for the rest. |
+| `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--config` for the rest. |
 | `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--serve <service>=<port>[,check=...][,pool=...]` for each service it serves, `--config` for the rest. |
 | `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`nodes`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
 | `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, `config` - see below. |
-| `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>`, `remove <node>`, `service add|remove`, `secret rotate|retire`. |
+| `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>`, `remove <node>`, `service add|remove`, `secret show|rotate|retire`. |
 
 ### `thelb status`
 
@@ -498,9 +530,9 @@ Optional: everything above works from the command line. A YAML file that the use
 # a director
 director:
   control: { vip: 10.0.0.10, port: 7443 }
-  bootstrap: true                                  # only on the bootstrap director
-  secret_file: /etc/thelb/director.secret          # the user's files
-  backend_secret_file: /etc/thelb/backend.secret   # the leader checks backends with it
+  bootstrap: true                                  # where wanted
+  secret_file: /etc/thelb/director.secret          # written at the first bootstrap if missing
+  backend_secret_file: /etc/thelb/backend.secret   # the same; the leader checks backends with it
   enrollment: { approve: manual, backend_networks: [10.0.0.0/24, fd00::/64] }
 services:
   - { name: web, vip: 192.0.2.10, protocol: tcp, port: 443, scheduler: mh, allow: ["backend:web-*"] }
@@ -525,7 +557,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 
 | Command | Prints |
 |---|---|
-| `generate secret` | A new random secret (256 bits), for the user to keep as a role's secret file. |
+| `generate secret` | A new random secret (256 bits), for a user who wants to create a role's secret file before the first bootstrap. |
 | `generate systemd` | A unit file: `Type=notify`, `WatchdogSec=`, `Restart=always`, the capabilities it needs as `AmbientCapabilities=` and `CapabilityBoundingSet=`, `NoNewPrivileges=yes` and the other hardening settings that do not stop it working - but not `ProtectKernelTunables=`, which would make `/proc/sys` read-only. |
 | `generate sysctl` | A `sysctl.d` file with the parameters this node's roles need, for the user who wants them set from boot. |
 | `generate modules` | A `modules-load.d` file with the modules this node needs. |
@@ -545,7 +577,8 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Backends are checked by address and MAC address**, pinned once enrolled, allowed only the services their certificate's identity is allowed, and cut off when their lease or certificate lapses.
 - **Revocation**: removed members' certificate serials are denied until they would have expired; backend certificates last 24 hours.
 - **Privileges**: capabilities, not root, under systemd. In Kubernetes the agent must be privileged (kernel parameters are writable only so); the `thelb` namespace isolates it.
-- **No secrets in logs, `status` or standard output**, except the one-time output of `generate secret` and `admin secret rotate`; keys never.
+- **No secrets in logs, `status` or standard output**, except the output of `generate secret` and `admin secret show|rotate`, which exist to print one; keys never. Secrets are read only from files, never from the command line.
+- **The secret files** are the one thing theLB writes, at the first bootstrap only, if missing, mode `0600`, never overwritten.
 - **A security policy from the first release**: supported versions, private reporting, how dependencies' fixes are taken - as shint's `SECURITY.md` does - and `govulncheck` gating every release.
 
 ## Failure modes
@@ -556,7 +589,8 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | Network partition | The side with the majority keeps or takes the VIPs; the other side gives them up when its lease expires. With no majority anywhere, no one holds them. |
 | Every director stops | The cluster's state is gone. The bootstrap director creates a new one, with a new CA, and every node joins it again by itself, with its secret. See [When every director stops](#when-every-director-stops). |
 | The bootstrap director restarts while the cluster runs | It finds the cluster on the control VIP and joins it, with its secret. |
-| The bootstrap director is gone for good | The cluster carries on; after a full stop, the user starts another director with `--bootstrap`. |
+| The bootstrap director is gone for good | The cluster carries on; after a full stop, any other director with `--bootstrap` creates it again - with the same secret. |
+| A node's secret is out of date | It stops, and says how to get the current one (`admin secret show` on a director). |
 | A secret leaks | `admin secret rotate`, copy the new file to every node, `admin secret retire`; remove any member that should not be there. |
 | Two clusters on one control VIP | The younger stands down. |
 | A backend fails | Weight 0 after the failure threshold; back when healthy. |
@@ -597,7 +631,7 @@ Like shint, simpler:
 | Phase | Delivers |
 |---|---|
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO` and `ip_vs_mh`, Maglev and source hashing on failover, pinned neighbour entries. |
-| 1 - one director | `thelb generate secret`; `thelb director --bootstrap` with the control VIP and its CA; backends enrolling with their secret, attaching and mapping ports; services from the configuration and `admin`; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
+| 1 - one director | `thelb director --bootstrap` with the control VIP, the secret files and its CA; backends enrolling with their secret, attaching and mapping ports; services from the configuration and `admin`; health checks from both sides; `status`, `doctor`, `generate`; the watchdog loop; IPv4 and IPv6; the network lab in CI. |
 | 2 - the cluster | Directors joining with their secret; Raft with the replicated CA; the bootstrap rule and restarts; failover; fail closed; leadership hand-off on stop; chaos tests. |
 | 3 - Kubernetes | The provider; the agent DaemonSet; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
@@ -617,7 +651,7 @@ Like shint, simpler:
 - **Names: the domain `dmarts.app`**, in DNS order and lowercase: the Service class `dmarts.app/thelb`, annotations under `dmarts.app/` (`dmarts.app/thelb-pool`, `dmarts.app/thelb-shared-vip`, ...), and custom resources, when there are any, in the API group `thelb.dmarts.app` (`ippools.thelb.dmarts.app`, ...). Lowercase because Kubernetes matches the class exactly, and namespace and CRD names must be lowercase anyway.
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
-- **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the directors' secret - and one also with `--bootstrap`. The secrets are the user's, created before the cluster; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
+- **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the secret files - and one or more also with `--bootstrap`. The first bootstrap creates the secrets and writes them to the named files, once, if missing; the user copies them to the other nodes; a node whose secret the cluster does not accept stops as out of date; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.
 - **Backends enrol and prove themselves** with the backends' secret, then certificates from the cluster's CA, their address and MAC address, allow-lists and a heartbeat lease ([Backends](#backends-enrolment-trust-and-services)).
 - **The director never changes the port; a backend maps it**, in theLB's own nftables table, when its application's port differs ([Port mapping](#port-mapping-on-the-backend)).

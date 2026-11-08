@@ -12,6 +12,8 @@ theLB is a single static binary. There is nothing to install, no package, no hel
 
 **Persistence is the user's decision.** What theLB would need to survive a reboot, it prints - a systemd unit, a sysctl configuration file, Kubernetes manifests - for the user to read, change and install the way their machines are managed. `thelb generate` prints; it never writes a file.
 
+**One exception: the cluster's secret files.** The first time a cluster is bootstrapped, theLB writes its secrets to the files the user named with `--secret-file` and `--backend-secret-file` - only if they do not exist, readable by root only, never overwritten - because every node needs the same secret from its very first start. Nothing else is ever written.
+
 ## 2. The running kernel is the truth
 
 theLB decides what to do from the state of the running kernel - the current value of every kernel parameter it needs, the addresses on each interface, the IPVS table, the loaded modules - not from configuration files.
