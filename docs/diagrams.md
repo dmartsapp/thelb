@@ -115,19 +115,25 @@ sequenceDiagram
 
 ## 5. A backend, from enrolment to traffic
 
+A backend offers a protocol and a port; a director names the service, gives it a VIP, and checks both paths before any traffic is sent.
+
 ```mermaid
 flowchart TD
-    e(["thelb backend --join 10.0.0.10:7443<br/>--secret-file --serve web=8443"]) --> enrol["Enrol with the backends' secret"]
+    e(["thelb backend --join 10.0.0.10:7443<br/>--secret-file --offer tcp/8080"]) --> enrol["Enrol with the backends' secret"]
     enrol --> appr{"Approved by a director?"}
     appr -->|"not yet"| p["Pending: listed in<br/>a director's thelb status"]
     p --> appr
     appr -->|"refused"| r["Stop"]
     appr -->|"yes"| cert["24-hour certificate.<br/>Its MAC pinned on the director"]
-    cert --> allow{"Allowed to serve web?<br/>The allow-list, or a delegated pool"}
-    allow -->|"no"| deny["Attachment refused, and logged"]
-    allow -->|"yes"| prep["VIP on thelb0, ARP parameters set,<br/>port 443 mapped to 8443"]
+    cert --> offer["Offer tcp/8080: listed in status,<br/>waiting for a service"]
+    offer --> assign["A director assigns it:<br/>thelb admin assign nginx web-1:tcp/8080"]
+    assign --> fwd{"Forward path: no gateway to the backend,<br/>its MAC as pinned?"}
+    fwd -->|"no"| refuse1["Assignment refused, and reported"]
+    fwd -->|"yes"| ret{"Return path: a probe sent from the VIP<br/>reaches a director?"}
+    ret -->|"no"| refuse2["Assignment refused.<br/>The VIP removed from thelb0"]
+    ret -->|"yes"| prep["VIP on thelb0, ARP parameters set,<br/>port 80 mapped to 8080"]
     prep --> checks{"Its own check ok,<br/>the director's check ok,<br/>its lease current?"}
-    checks -->|"yes"| on["In the IPVS service:<br/>gets new connections"]
+    checks -->|"yes"| on["In the IPVS service, with its weight:<br/>gets new connections"]
     checks -->|"no"| off["Weight 0:<br/>no new connections"]
     on --> checks
     off --> checks
@@ -142,11 +148,11 @@ sequenceDiagram
     participant C as Client
     participant D as Director holding the VIP
     participant B as Backend
-    C->>D: SYN to 192.0.2.10:443
-    D->>D: IPVS picks a backend, by Maglev hashing
+    C->>D: SYN to 10.10.1.20:80
+    D->>D: IPVS picks a backend, by weighted round robin
     D->>B: the same packet, sent to the backend's MAC
-    B->>B: the VIP on thelb0 accepts it, mapped to port 8443 if asked
-    B->>C: SYN-ACK from 192.0.2.10:443, directly
+    B->>B: the VIP on thelb0 accepts it, port 80 mapped to 8080
+    B->>C: SYN-ACK from 10.10.1.20:80, directly, through its own gateway
     C->>D: the rest of the request
     D->>B: forwarded the same way
     B->>C: the response, directly
