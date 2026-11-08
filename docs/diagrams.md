@@ -8,7 +8,7 @@ The philosophy, as one flow: full authority or nothing, the running kernel as th
 
 ```mermaid
 flowchart TD
-    start(["thelb director or thelb backend starts"]) --> auth{"Full authority?<br/>capabilities, /proc/sys writable,<br/>IPVS, IPv6, Kubernetes permissions"}
+    start(["thelb director or thelb backend starts"]) --> auth{"Full authority?<br/>root, capabilities, /proc/sys writable,<br/>IPVS, IPv6, Kubernetes permissions"}
     auth -->|"no"| refuse["Change nothing.<br/>Say what is missing and how to grant it.<br/>Exit 1"]
     auth -->|"yes"| read["Read the running kernel:<br/>parameters, addresses, IPVS, modules"]
     read --> each{"For each thing it needs:<br/>already right?"}
@@ -91,14 +91,19 @@ sequenceDiagram
     Note over N,L: Both proved the secret. It never crossed the network.
     N->>L: name, addresses and MAC addresses, certificate request
     L->>L: check the address, the MAC against its neighbour table, the name
-    L-->>N: pending
-    O->>D: thelb status
-    D-->>O: the pending table, with the key fingerprint
-    O->>N: thelb status
-    N-->>O: its own key fingerprint
-    O->>D: thelb admin approve name
-    D->>L: approve, under the director's own identity
-    L->>L: record who approved, sign the certificate
+    alt approved before - same fingerprint, address and MAC
+        L-->>N: welcome back, no approval needed
+    else new, or changed
+        L-->>N: pending
+        O->>D: thelb status
+        D-->>O: the pending table, with the node fingerprint
+        O->>N: thelb status
+        N-->>O: its own node fingerprint
+        O->>D: thelb admin approve name
+        D->>L: approve, under the director's own identity
+        L->>L: record who approved
+    end
+    L->>L: sign the certificate
     L-->>N: certificate
     alt a director
         L->>N: Raft snapshot, the CA included

@@ -260,7 +260,8 @@ Every other director, and a bootstrap director that finds a cluster already runn
 
 - **Who approves**: any director that is itself an approved member - its certificate valid, not removed - with `sudo thelb admin approve <name>` (or `refuse <name>`) on that director. The local command asks its own director, which sends the approval to the leader under its own identity; the leader checks that the identity is a director's, and records who approved what, and when.
 - **Backends cannot approve**: `thelb backend` has no approval command, and the leader refuses an approval that does not come from a director.
-- **Where pending nodes appear**: in `thelb status` on any director - one `pending` table for both roles, with each node's name, role, address, MAC address, key fingerprint and how long it has waited (see [`thelb status`](#thelb-status)). `thelb status` on the pending node itself shows the same fingerprint, so the operator can compare the two before approving.
+- **Where pending nodes appear**: in `thelb status` on any director - one `pending` table for both roles, with each node's name, role, address, MAC address, **node fingerprint** and how long it has waited (see [`thelb status`](#thelb-status)). `thelb status` on the pending node itself shows the same fingerprint, so the operator can compare the two before approving.
+- **Approved once, rejoins by itself**: a node's keys live only in memory and change at every start, so approval is not tied to a key but to the **node** - its node fingerprint, which identifies the machine across restarts (what it is made of is an [open question](#open-questions)), with its addresses and MAC addresses. While the cluster remembers an approved node, that node restarting with the same fingerprint, the same address and MAC address on the wire, and the right secret rejoins without waiting. A changed fingerprint, address or MAC address waits for approval again; so does a node a director removed. Two live nodes with the same fingerprint - a cloned machine - are refused, and reported.
 - **A pending request** lasts as long as the node keeps asking; a node that stops asking is dropped from the list after an hour. A refused node is told so, and stops.
 
 **The secrets are strong**: 256 random bits, whether theLB or `generate secret` made them, and theLB refuses a shorter one - a weak secret could be guessed from a recorded proof.
@@ -366,7 +367,8 @@ Only the cluster's desired and decided state - small, and changed when someone o
 | The cluster: its ID, creation time, and **the CA's certificate and key** | bootstrap (and a CA rotation, if one is ever asked for) |
 | Directors: name, member identity, addresses, certificate serial, voter or not | a director joins, is promoted, is removed |
 | Rotated secrets, while old and new are both accepted (the original secrets come from the directors' files) | `admin secret rotate`, `admin secret retire` |
-| Pending nodes: name, role, addresses, MAC addresses, key fingerprint, since when | a node asks to join; a director approves or refuses it |
+| Pending nodes: name, role, addresses, MAC addresses, node fingerprint, since when | a node asks to join; a director approves or refuses it |
+| Approved nodes: name, role, node fingerprint, addresses, MAC addresses, who approved them and when - so a restart rejoins without approval | a director approves; a director removes |
 | Backends: name, addresses, pinned MAC addresses, certificate serial, labels; removed names | enrolment, removal |
 | Revoked certificate serials, until they would have expired | `admin remove` |
 | Services: VIP, protocol, port, scheduler, persistence, forwarding method, allow-list, where it came from (configuration, command line, Kubernetes) | the configuration is loaded, `admin service add`/`remove`, a Kubernetes Service changes |
@@ -462,11 +464,11 @@ Both check at startup that the API server answers and that they hold every permi
 
 ## Command line and configuration
 
-Six commands, and `--version`. Everything else is a flag:
+Six commands, and `--version`. Everything else is a flag. **Every command runs only with effective user ID 0** - root - and refuses otherwise; only the help (`thelb`, `--help`) and `--version`, which read nothing, run for anyone.
 
 | Command | Does |
 |---|---|
-| `thelb` | With no command: the help, exit status `0`. On a node where theLB is already running, first one line saying so - `theLB is running on this node as a backend, process 4321` - and the same for a director. |
+| `thelb` | With no command: the help, and nothing else, whether or not theLB is running; exit status `0`. |
 | `thelb director` | Runs this node as a director: `--vip` and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--config` for the rest. |
 | `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--serve <service>=<port>[,check=...][,pool=...]` for each service it serves, `--config` for the rest. |
 | `thelb status` | The whole cluster, in tables - see below. `--json` for the same as one JSON document; a table name (`nodes`, `vips`, `services`, `backends`) for one table; `--watch` to repeat. |
@@ -494,10 +496,10 @@ $ sudo thelb status
  db-1  | backend  | 10.0.0.31 | up    | v0.1.0  | 1.9 s ago
 (5 rows)
 
- pending | role     | address   | mac               | key fingerprint | waiting
----------+----------+-----------+-------------------+-----------------+---------
- lb-4    | director | 10.0.0.14 | 52:54:00:3a:19:04 | SHA256:Hk2fQ1sd | 2 min
- web-2   | backend  | 10.0.0.22 | 52:54:00:3a:19:22 | SHA256:9cQ1xZ0a | 15 s
+ pending | role     | address   | mac               | node fingerprint | waiting
+---------+----------+-----------+-------------------+------------------+---------
+ lb-4    | director | 10.0.0.14 | 52:54:00:3a:19:04 | 7c41e0a2f39b55d1 | 2 min
+ web-2   | backend  | 10.0.0.22 | 52:54:00:3a:19:22 | 0be98d17c46a2f83 | 15 s
 (2 rows)
 
  vip        | purpose | held by | since               | services
@@ -512,10 +514,10 @@ $ sudo thelb status
  db      | 192.0.2.10 | tcp/5432 | mh        | direct | 1 of 1
 (2 rows)
 
- service | backend | address   | app port | own check | director check | weight | connections | last check-in
----------+---------+-----------+----------+-----------+----------------+--------+-------------+---------------
- web     | web-1   | 10.0.0.21 |     8443 | ok        | ok             |      1 |         412 | 1.1 s ago
- db      | db-1    | 10.0.0.31 |     5432 | ok        | ok             |      1 |          37 | 1.9 s ago
+ service | vip             | backend | at             | checks  | weight | connections | packets | bytes  | last check-in
+---------+-----------------+---------+----------------+---------+--------+-------------+---------+--------+---------------
+ web     | 192.0.2.10:443  | web-1   | 10.0.0.21:8443 | ok / ok |      1 |         412 |  918244 | 1.1 GB | 1.1 s ago
+ db      | 192.0.2.10:5432 | db-1    | 10.0.0.31:5432 | ok / ok |      1 |          37 |   40116 | 9.8 MB | 1.9 s ago
 (2 rows)
 ```
 
@@ -528,34 +530,34 @@ $ sudo thelb status
     { "node": "lb-1", "role": "leader", "address": "10.0.0.11", "state": "up", "version": "v0.1.0", "last_check_in": null, "last_check_in_seconds": null },
     { "node": "web-1", "role": "backend", "address": "10.0.0.21", "state": "up", "version": "v0.1.0", "last_check_in": "2026-11-09T10:40:02Z", "last_check_in_seconds": 1.1 }
   ],
-  "pending": [ { "pending": "lb-4", "role": "director", "address": "10.0.0.14", "mac": "52:54:00:3a:19:04", "key_fingerprint": "SHA256:Hk2fQ1sd", "waiting_seconds": 120 } ],
+  "pending": [ { "pending": "lb-4", "role": "director", "address": "10.0.0.14", "mac": "52:54:00:3a:19:04", "node_fingerprint": "7c41e0a2f39b55d1", "waiting_seconds": 120 } ],
   "vips": [ { "vip": "192.0.2.10", "purpose": "service", "held_by": "lb-1", "since": "2026-11-09T10:02:14Z", "services": 2 } ],
   "services": [ { "service": "web", "vip": "192.0.2.10", "protocol": "tcp", "port": 443, "scheduler": "mh", "method": "direct", "backends_up": 1, "backends": 1 } ],
-  "backends": [ { "service": "web", "backend": "web-1", "address": "10.0.0.21", "app_port": 8443, "own_check": "ok", "director_check": "ok", "weight": 1, "connections": 412, "last_check_in_seconds": 1.1 } ]
+  "backends": [ { "service": "web", "vip": "192.0.2.10", "port": 443, "backend": "web-1", "address": "10.0.0.21", "app_port": 8443, "own_check": "ok", "director_check": "ok", "weight": 1, "connections": 412, "packets": 918244, "bytes": 1181116006, "last_check_in_seconds": 1.1 } ]
 }
 ```
 
-**On a director**, `status` shows the whole cluster, as above - everything except secret material: no secret and no key, ever. A director that is not the leader asks the leader for what only the leader knows (backends' last check-ins), and says so if it cannot reach it. A secret is shown only by `thelb admin secret show`, and only on a director.
+**On a director**, `status` shows the whole cluster, as above - everything except secret material: no secret and no key, ever. **Only an approved director can tell which service runs where**: on which node's address and port, behind which VIP, and how much traffic it has been sent - `checks` is the backend's own check and the director's, `packets` and `bytes` what IPVS forwarded to it (direct return means the replies never pass the director, so there is no outbound count). A director that is not the leader asks the leader for what only the leader knows (backends' last check-ins), and says so if it cannot reach it. A secret is shown only by `thelb admin secret show`, and only on a director.
 
-**On a backend**, `status` shows what that backend is, and nothing about the rest of the cluster: that it is a backend, the cluster's name, the services it is registered with, and its own key fingerprint.
+**On a backend**, `status` shows what that backend is, and nothing about the rest of the cluster: that it is a backend, the cluster's name, the services it has registered with the directors - by their names only, not their VIPs - and its node fingerprint.
 
 ```text
 $ sudo thelb status
- role    | cluster | services | key fingerprint
----------+---------+----------+-----------------
- backend | prod    | web, db  | SHA256:4fT2mQ8a
+ role    | cluster | services | node fingerprint
+---------+---------+----------+------------------
+ backend | prod    | web, db  | 0be98d17c46a2f83
 (1 row)
 ```
 
-`--json` gives the same row: `{ "role": "backend", "cluster": "prod", "services": ["web", "db"], "key_fingerprint": "SHA256:4fT2mQ8a" }`. While the backend waits for approval, its services are empty, and its fingerprint is the one a director's `pending` table shows for it.
+`--json` gives the same row: `{ "role": "backend", "cluster": "prod", "services": ["web", "db"], "node_fingerprint": "0be98d17c46a2f83" }`. While the backend waits for approval, its services are empty, and its fingerprint is the one a director's `pending` table shows for it.
 
 ### The local socket
 
 `thelb status`, `doctor` and `admin` do not read the running theLB's memory: they ask it, over a **Unix socket**, `/run/thelb/thelb.sock`, and it answers.
 
 - **Only what each command shows crosses it.** The daemon answers requests - the tables `status` shows, the checks `doctor` makes, the changes `admin` asks for - and never exposes its internals: no keys, no secrets except where `admin secret show` exists to print one, no Raft log.
-- **It knows who is asking.** The kernel tells the daemon the caller's user and process (`SO_PEERCRED`), so each request is authorised on its own: `status` and `doctor` for root, and for the members of a group named with `--socket-group`, if any; `admin` for root only. The socket is `0660`, in a directory only root can enter, unless a group is named.
-- **One theLB per node.** A second `thelb director` or `thelb backend` on the same node finds the socket answering, and stops with the running one's process ID; plain `thelb` shows that process ID above the help. A user who may not use the socket still sees the process ID: theLB looks for itself among the node's processes (unless `/proc` hides other users' processes). A socket file left by a crash - nothing listening - is removed and replaced.
+- **Root only.** The socket is `0600`, in a directory only root can enter, and the kernel tells the daemon who is calling (`SO_PEERCRED`): a request from anything but effective user ID 0 is refused, whatever the file's permissions.
+- **One theLB per node.** A second `thelb director` or `thelb backend` on the same node finds the socket answering, and stops: theLB is already running on this node. A socket file left by a crash - nothing listening - is removed and replaced.
 - **Nothing left behind**: `/run` is cleared at boot, and theLB removes the socket when it stops.
 - **In Kubernetes**, `kubectl exec` into an agent's pod and `thelb status` there reaches that agent the same way.
 
@@ -597,7 +599,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | Command | Prints |
 |---|---|
 | `generate secret` | A new random secret (256 bits), for a user who wants to create a role's secret file before the first bootstrap. |
-| `generate systemd` | A unit file: `Type=notify`, `WatchdogSec=`, `Restart=always`, the capabilities it needs as `AmbientCapabilities=` and `CapabilityBoundingSet=`, `NoNewPrivileges=yes` and the other hardening settings that do not stop it working - but not `ProtectKernelTunables=`, which would make `/proc/sys` read-only. |
+| `generate systemd` | A unit file: `Type=notify`, `WatchdogSec=`, `Restart=always`, running as root with `CapabilityBoundingSet=` limited to the capabilities theLB needs, `NoNewPrivileges=yes` and the other hardening settings that do not stop it working - but not `ProtectKernelTunables=`, which would make `/proc/sys` read-only. |
 | `generate sysctl` | A `sysctl.d` file with the parameters this node's roles need, for the user who wants them set from boot. |
 | `generate modules` | A `modules-load.d` file with the modules this node needs. |
 | `generate k8s` | The manifests in [Kubernetes](#the-manifests), as one YAML stream. |
@@ -615,7 +617,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Joining needs the role's secret**, proven over the TLS connection and never sent; directors and backends have separate secrets, both the user's files, rotatable - and every new director and backend also waits for an existing director's approval.
 - **Backends are checked by address and MAC address**, pinned once enrolled, allowed only the services their certificate's identity is allowed, and cut off when their lease or certificate lapses.
 - **Revocation**: removed members' certificate serials are denied until they would have expired; backend certificates last 24 hours.
-- **Privileges**: capabilities, not root, under systemd. In Kubernetes the agent must be privileged (kernel parameters are writable only so); the `thelb` namespace isolates it.
+- **Privileges**: theLB runs only as root (effective user ID 0), and every command checks it; under systemd its capability bounding set is limited to what it needs, so root does not mean every capability. In Kubernetes the agent must be privileged (kernel parameters are writable only so); the `thelb` namespace isolates it.
 - **No secrets in logs, `status` or standard output**, except the output of `generate secret` and `admin secret show|rotate`, which exist to print one; keys never. Secrets are read only from files, never from the command line.
 - **The secret files** are the one thing theLB writes, at the first bootstrap only, if missing, mode `0600`, never overwritten.
 - **A security policy from the first release**: supported versions, private reporting, how dependencies' fixes are taken - as shint's `SECURITY.md` does - and `govulncheck` gating every release.
@@ -679,11 +681,20 @@ Like shint, simpler:
 
 ## Open questions
 
-1. **Approving a node again after it restarts, and after a full stop.** A node's key lives only in memory, so every start gives it a new key and a new fingerprint. If approval followed the key, every backend reboot or upgrade, and every restarted director, would wait in `pending` again. Proposal: a director approves a **node** - its name, addresses and MAC addresses, with its fingerprint at that first approval - and while the cluster remembers it, the node restarting with the same name, addresses and MAC addresses and a valid secret rejoins without waiting; a new name, address or MAC address always waits. After a full stop the cluster remembers no one; for that, approving by pattern (`thelb admin approve 'web-*'`, after a look at `status`), a list of nodes the directors' configuration pre-approves (name, addresses, MAC addresses), which the user keeps, and, for Kubernetes, approving an agent whose node the API already lists at the agent's address.
-2. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
-3. **SCTP**, which IPVS supports: in scope, or later.
-4. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
-5. **The tunnel's encapsulation**: plain IP-in-IP (and its IPv6 equivalent), or GUE, which network equipment can balance by its UDP ports.
+1. **What a node fingerprint is made of.** It must stay the same across restarts and reboots, differ between machines - cloned ones included - and be readable in a container as on a host. Candidates, and their problems:
+   - `hostid`: on Linux usually derived from an IP address when `/etc/hostid` is missing, and identical on cloned machines - weak;
+   - **`/etc/machine-id`**: unique per installation, stable, readable in a container through a host mount; identical on clones of an image that did not reset it; and confidential, so it is used only through an application-specific hash, as systemd recommends - a strong candidate;
+   - **the SMBIOS system UUID** (`/sys/class/dmi/id/product_uuid`, root only): per machine or virtual machine, new on most hypervisors' clones; absent on some hardware - a strong candidate where it exists;
+   - every MAC address: changes whenever an interface comes or goes - container veths, bridges, VPNs, randomised Wi-Fi addresses - so a node would keep needing approval; only the MAC address of the interface the node joins through is stable enough, and the director checks that one on the wire anyway;
+   - the primary disk's UUID: undefined on some machines (which disk; a container's root is an overlay), changed by a reinstall, and identical on every machine built from one cloud image;
+   - the hostname: changed by DHCP and by people, and not unique (`localhost`) - a label to show, not an identity.
+
+   Proposal: a hash of the application-specific machine ID, the SMBIOS UUID where there is one, and the MAC address of the joining interface; the hostname shown beside it. Whatever it is made of, **the fingerprint is reported by the node itself**: only its address and MAC address can be checked on the wire. It recognises an approved machine; it cannot prove one - the secret and the first approval do that.
+2. **Approving nodes again after a full stop.** A cluster created again remembers no one, so every node that rejoins waits for approval again. Proposals: approving by pattern (`thelb admin approve 'web-*'`, after a look at `status`); a list of nodes the directors' configuration pre-approves (name, fingerprint, addresses, MAC addresses), which the user keeps; and, for Kubernetes, approving an agent whose node the API already lists at the agent's address.
+3. **Directors inside the cluster** - on dedicated nodes without kube-proxy, as a second DaemonSet with a node selector - or only outside it, as above.
+4. **SCTP**, which IPVS supports: in scope, or later.
+5. **Where Kubernetes pools are defined**: the `thelb-config` ConfigMap for a start; a custom resource later, if pools need their own lifecycle.
+6. **The tunnel's encapsulation**: plain IP-in-IP (and its IPv6 equivalent), or GUE, which network equipment can balance by its UDP ports.
 
 ### Decided
 
@@ -691,7 +702,9 @@ Like shint, simpler:
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
 - **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the secret files - and one or more also with `--bootstrap`. The first bootstrap creates the secrets and writes them to the named files, once, if missing; the user copies them to the other nodes; a node whose secret the cluster does not accept stops as out of date; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
-- **Every node that joins waits for a director's approval** - directors and backends alike; any approved director may approve; backends cannot; pending nodes appear in `thelb status` on any director ([Approval](#approval)).
+- **Every node that joins waits for a director's approval** - directors and backends alike; any approved director may approve; backends cannot; pending nodes appear in `thelb status` on any director. **An approved node rejoins after a restart without approval**, recognised by its node fingerprint, address and MAC address ([Approval](#approval)).
+- **Root only**: every command runs with effective user ID 0, or not at all - except the help and `--version`.
+- **What `status` shows**: on a director, everything but secret material, including which service runs on which node's address and port behind which VIP, and the traffic sent to it; on a backend, only its role, the cluster's name, its services by name and its node fingerprint.
 - **The local socket**: `status`, `doctor` and `admin` ask the running theLB over a Unix socket that authorises each caller and exposes only what each command shows - not shared memory ([The local socket](#the-local-socket)).
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.
 - **Backends enrol and prove themselves** with the backends' secret, then certificates from the cluster's CA, their address and MAC address, allow-lists and a heartbeat lease ([Backends](#backends-enrolment-trust-and-services)).
