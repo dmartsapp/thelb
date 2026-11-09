@@ -119,7 +119,7 @@ systemd, sysctl, modules, k8s and config come later.
   thelb admin remove <name>
   thelb admin pool add <name> --vip <first address/prefix> --vippool-count <n> [--interface <name>] [--default]
   thelb admin pool remove <name>
-  thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr]
+  thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr] [--method direct|tunnel]
   thelb admin service remove <name>
   thelb admin assign <service> <node>:<proto>/<port> ... [--weight <node>=<n>,...]
   thelb admin unassign <service> <node>
@@ -141,7 +141,9 @@ leader, under this director's identity.
                   director's interface in 10.10.1.0/24
   service add     creates a service: the lowest free address of its pool (or
                   --vip), probed on the network first, a protocol and a port;
-                  --scheduler wrr (the default), rr, wlc, lc, sh or mh
+                  --scheduler wrr (the default), rr, wlc, lc, sh or mh;
+                  --method direct (the default: backends on the director's
+                  network) or tunnel (IP-in-IP: backends anywhere routed, IPv4)
   assign          assigns backends' offers to a service, weight 1 unless
                   --weight says otherwise; the offer's protocol must be the
                   service's, and the director must reach the backend directly;

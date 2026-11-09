@@ -1,7 +1,8 @@
 #!/bin/bash
 # theLB's lab on one machine, to try by hand: a switch, three directors, three
 # backends each running two small web servers - one on port 80, one on a port
-# of its own (8080, 9090, 7070) - and a client - each a network namespace
+# of its own (8080, 9090, 7070) - a client, and, behind a router, a second
+# network (198.19.0.0/24) with a fourth backend, b4, reached by IP-in-IP - each a network namespace
 # of its own, on 198.18.0.0/24 (RFC 2544's benchmarking network), so nothing
 # reaches this machine's own network. Each theLB has its own /run, as if it ran
 # on a machine of its own.
@@ -39,6 +40,7 @@ addr() {
 	c) echo $NET.100 ;;
 	d*-web) addr "${1%-web}" ;;
 	d*) echo $NET.$((10 + ${1#d})) ;;
+	b4) echo 198.19.0.41 ;;
 	b*) echo $NET.$((30 + ${1#b})) ;;
 	*) die "no node $1: d1-d3, b1-b3, c" ;;
 	esac
@@ -71,6 +73,7 @@ start_node() {
 	case $n in
 	d1) args="director --vip $VIP --port $PORT --bootstrap --cluster lab" ;;
 	d*) args="director --vip $VIP --port $PORT --cluster lab" ;;
+	b4) args="backend --join $VIP:$PORT --offer tcp/80,check=http:/" ;;
 	b*) args="backend --join $VIP:$PORT --offer tcp/80,check=http:/ --offer tcp/$(altport $n),check=http:/" ;;
 	esac
 	local secrets="--secret-file $STATE/$n/director.secret --backend-secret-file $STATE/$n/backend.secret"
@@ -126,8 +129,10 @@ app() {
 		[ -e "$STATE/$n.app.pid" ] && kill -0 "$(cat "$STATE/$n.app.pid")" 2>/dev/null && return
 		ip netns exec $P-$n python3 -m http.server 80 --bind 0.0.0.0 --directory "$STATE/$n/www" >"$STATE/$n.app.log" 2>&1 &
 		echo $! >"$STATE/$n.app.pid"
-		ip netns exec $P-$n python3 -m http.server "$(altport $n)" --bind 0.0.0.0 --directory "$STATE/$n/www-alt" >"$STATE/$n.alt.log" 2>&1 &
-		echo $! >"$STATE/$n.alt.pid"
+		if [ "$n" != b4 ]; then
+			ip netns exec $P-$n python3 -m http.server "$(altport $n)" --bind 0.0.0.0 --directory "$STATE/$n/www-alt" >"$STATE/$n.alt.log" 2>&1 &
+			echo $! >"$STATE/$n.alt.pid"
+		fi
 		;;
 	down)
 		for f in "$STATE/$n.app.pid" "$STATE/$n.alt.pid"; do
@@ -162,11 +167,34 @@ up() {
 		ip -n $P-$n addr add "$(addr $n)/24" dev eth0
 		install -d -m 0700 "$STATE/$n"
 	done
+	echo "== a router, and behind it a second network with b4"
+	ip netns add $P-sw2
+	ip -n $P-sw2 link add br0 type bridge mcast_snooping 0
+	ip -n $P-sw2 link set br0 up
+	ip netns add $P-r
+	ip link add eth0 netns $P-r type veth peer name r netns $SW
+	ip link add eth1 netns $P-r type veth peer name r netns $P-sw2
+	ip -n $SW link set r master br0 up
+	ip -n $P-sw2 link set r master br0 up
+	for i in lo eth0 eth1; do ip -n $P-r link set $i up; done
+	ip -n $P-r addr add $NET.1/24 dev eth0
+	ip -n $P-r addr add 198.19.0.1/24 dev eth1
+	# The router forwards, and lets replies from the VIPs through.
+	ip netns exec $P-r sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward; for f in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 >$f; done'
+	ip netns add $P-b4
+	ip link add eth0 netns $P-b4 type veth peer name b4 netns $P-sw2
+	ip -n $P-sw2 link set b4 master br0 up
+	ip -n $P-b4 link set lo up
+	ip -n $P-b4 link set eth0 up
+	ip -n $P-b4 addr add "$(addr b4)/24" dev eth0
+	ip -n $P-b4 route add default via 198.19.0.1
+	install -d -m 0700 "$STATE/b4"
+	for n in $DIRECTORS; do ip -n $P-$n route add 198.19.0.0/24 via $NET.1; done
 
 	echo "== d1 bootstraps the cluster; d2 and d3 join, and are approved"
 	start_node d1
 	waitfor "$STATE/d1.log" "OK control VIP taken"
-	for n in d2 d3 $BACKENDS; do
+	for n in d2 d3 $BACKENDS b4; do
 		[ "${n#d}" != "$n" ] && cp -p "$STATE/d1/director.secret" "$STATE/$n/"
 		cp -p "$STATE/d1/backend.secret" "$STATE/$n/"
 	done
@@ -186,6 +214,14 @@ up() {
 	for n in $BACKENDS; do waitfor "$STATE/$n.log" "OK waiting for approval"; done
 	on d1 "$(bin)" admin approve --match 'b[1-3]' --yes >/dev/null
 	for n in $BACKENDS; do waitfor "$STATE/$n.log" "OK backend ready"; done
+	echo "== b4, behind the router, enrols too"
+	install -d -m 0755 "$STATE/b4/www"
+	echo "hello from b4, behind the router" >"$STATE/b4/www/index.html"
+	app b4 up
+	start_node b4
+	waitfor "$STATE/b4.log" "OK waiting for approval"
+	on d1 "$(bin)" admin approve b4 >/dev/null
+	waitfor "$STATE/b4.log" "OK backend ready"
 
 	echo "== a pool, a service on it, and the backends' offers assigned"
 	on d1 "$(bin)" admin pool add lab --vip $NET.20/24 --vippool-count 10
@@ -194,19 +230,26 @@ up() {
 	echo "== a second service, on port 80, served from each backend's own port: 8080, 9090, 7070"
 	on d1 "$(bin)" admin service add mapped --pool lab --proto tcp --port 80
 	on d1 "$(bin)" admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070
+	echo "== a third service, by IP-in-IP: from b4, behind the router, and b1"
+	on d1 "$(bin)" admin service add far --pool lab --proto tcp --port 80 --method tunnel
+	on d1 "$(bin)" admin assign far b4:tcp/80 b1:tcp/80
 	for n in $BACKENDS; do
 		waitfor "$STATE/$(leader).log" "OK backend serving service=web node=$n"
 		waitfor "$STATE/$(leader).log" "OK backend serving service=mapped node=$n"
 	done
+	waitfor "$STATE/$(leader).log" "OK backend serving service=far node=b4"
 
 	cat <<EOF
 
-The lab is up. Two services, each served by b1, b2 and b3:
-  web     $NET.20:80 - from port 80 on each backend
+The lab is up. Three services:
+  web     $NET.20:80 - from port 80 on b1, b2 and b3, by direct routing
   mapped  $NET.21:80 - from 8080 on b1, 9090 on b2, 7070 on b3: each backend maps the port
+  far     $NET.22:80 - from b4, behind a router, and b1, by IP-in-IP
 
   sudo $0 curl 12                 the client fetches web 12 times: who answered
   sudo $0 curl 9 $NET.21     the same for mapped
+  sudo $0 curl 8 $NET.22     and for far: b4's answers come back through the router
+  sudo $0 run b4 ip -d link show thelbt0     b4's IP-in-IP interface
   sudo $0 run b2 nft list table inet thelb   the port mapping on b2
   sudo $0 run d1 thelb status     the summary, on d1; then: directors, backends, vips, all
   sudo $0 run d2 thelb status backends

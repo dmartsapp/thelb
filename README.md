@@ -15,6 +15,7 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 **Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. And backends: pools, services, assignments, and the kernel's IPVS forwarding to them by direct routing, with health checks from both sides. A backend maps a service's port to its application's where they differ. `doctor`, `generate` and the configuration file come next.
 
+- [User manual](docs/manual.md) - installing theLB, building a cluster, serving services, and keeping it running;
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
 - [Design](docs/design.md) - how it works, and the questions still open;
 - [Diagrams](docs/diagrams.md) - both, in pictures;

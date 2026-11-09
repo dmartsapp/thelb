@@ -137,7 +137,7 @@ A service's forwarding method is a per-service setting:
 | Method | How | When |
 |---|---|---|
 | **Direct routing** (first) | The director rewrites the destination MAC address. | Directors and backends on one L2 network: the fastest, and no encapsulation. |
-| **IP-in-IP tunnelling** (next) | The director wraps the packet in an outer IP header to the backend's address; the backend's agent creates the tunnel interface and unwraps it. | Backends in other subnets, still with direct return. The outer header costs bytes, so `doctor` checks the path's MTU. |
+| **IP-in-IP tunnelling** (`--method tunnel`, IPv4 in this build) | The director wraps the packet in an outer IP header to the backend's address; the backend unwraps it on theLB's own IPIP interface, `thelbt0`, which takes packets from any director, and finds the VIP on `thelb0`. | Backends in other networks, still with direct return - the director needs only a route to them, and a backend may join a control VIP it reaches through a router. The outer header costs 20 bytes, so the backend clamps the MSS its handshakes announce, in theLB's nftables table; reverse-path filtering is off on `thelbt0`, and loose rather than strict for all interfaces if it was strict. The backend's network must let its replies, from the VIP's address, through: a router that checks source addresses drops them. |
 
 Neither changes the port, and neither lets the director see the replies: no L7, no TLS termination, and IPVS's connection state is kept from one direction only (its timeouts are tuned for that). The proxy, a later capability, is for what needs more.
 
@@ -188,7 +188,8 @@ The `net.ipv4.vs.*` parameters apply to IPv6 services too; IPVS keeps them all u
 | `net.ipv4.conf.all.arp_ignore` | `1` | Answer ARP only for addresses on the interface the request came in on - never for the VIP on `thelb0`. |
 | `net.ipv4.conf.all.arp_announce` | `2` | Never use the VIP as the source of the backend's own ARP requests. |
 | nftables table `inet thelb` | one rule per mapped port | Only with [port mapping](#port-mapping-on-the-backend); never created otherwise. |
-| Tunnel interface | created by theLB | Only for services that use tunnelling. |
+| Tunnel interface `thelbt0` | IPIP, from any sender (collect-metadata mode), up | Only while a tunnelled service is assigned to the backend; its own `rp_filter` 0, and `conf/all/rp_filter` 2 if it was 1 (recorded and restored). |
+| MSS clamp | a rule in `inet thelb`, chain `mss`, at output: `ip saddr <vip> tcp flags syn tcp option maxseg size > N tcp option maxseg size set N` | For each tunnelled VIP: N is the interface's MTU less 60. |
 
 **IPv6** has no `arp_ignore`. Linux answers neighbour solicitations only for addresses on the receiving interface, so a VIP on `thelb0` is not answered on `eth0`; phase 0 must prove this on every kernel theLB supports, before anything relies on it.
 
@@ -767,7 +768,7 @@ Like shint, simpler:
 | 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **port mapping** on the backend, in theLB's own nftables table; **To come:** the return-path check; IPVS's connection synchronisation; an SCTP check; `generate commands` (proposed); `doctor`, `generate`; the watchdog loop; the lab in CI. |
 | 2 - the cluster | **Begun in v0.1.0-dev, ahead of the rest of phase 1:** directors joining with their secret and waiting for approval (`admin approve`, `refuse`, `remove`); Raft with the replicated CA; the leader holding the control VIP; the bootstrap rule and restarts, approved directors rejoining by themselves; failover; fail closed; leadership hand-off on stop; the network lab (`make e2e`: a crash, a planned stop, a partition, a full stop). **To come:** a cluster that finds its control VIP claimed by another standing down; `--peers`; secret rotation; IPv6 in the lab on a kernel that has it; chaos tests under load. |
 | 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
-| 4 - tunnelling | IP-in-IP forwarding, for backends in other subnets. |
+| 4 - tunnelling | **Begun in v0.1.0-dev:** IP-in-IP as a per-service method (`--method tunnel`), IPv4: IPVS's tunnel forwarding, `thelbt0` on the backend, the MSS clamp, backends joining through a router. **To come:** IPv6 (ip6ip6), GUE as an option, the return-path check. |
 | 5 - active-active | Service VIPs spread across directors; optional IPVS connection synchronisation. |
 | 6 - proxy | A proxying mode, as a separate capability, for networks where direct return is not possible. |
 
@@ -775,12 +776,7 @@ Like shint, simpler:
 
 00. **Recreating the services after a full stop**, without a configuration file: proposed, `thelb generate commands` prints the `admin` commands for the running pools, services and assignments, for the user to keep as a script.
 
-1. **The tunnel's encapsulation**, for backends in other subnets (phase 4). Both are IPVS's own, and both keep direct return:
-   - **IP-in-IP** (IPv4 in IPv4; IPv6 in IPv6): 20 extra bytes a packet (40 for IPv6), in every kernel theLB supports, and the backend needs only the `ipip` (or `ip6_tunnel`) module. But the outer header has no ports, so all the traffic from one director to one backend looks like a single flow to the network: equal-cost multipath and link aggregation keep it on one path, and the backend's network card delivers it all to one receive queue - one CPU core unwraps it. Some firewalls and networks also drop IP protocol 4 outright.
-   - **GUE** (Generic UDP Encapsulation - IP in UDP; in IPVS since Linux 5.2, so RHEL 9 has it): 32 extra bytes a packet. The outer UDP source port varies with each inner connection, so multipath, link aggregation and the backend's receive queues spread the traffic, and UDP passes where protocol 4 does not. The backend needs the `fou` module and a UDP port to receive on, which its firewall must let in.
-   - Either way, the extra bytes come out of the path's MTU: a larger MTU between directors and backends, or clamping TCP's MSS on the backends, keeps packets from being too big.
-
-   Proposal: IP-in-IP by default, for its simplicity; GUE as a per-service option, for heavy traffic across a multipath network, or networks that drop protocol 4.
+1. **GUE**, beside IP-in-IP (built), as a per-service option for traffic across a multipath network or networks that drop IP protocol 4: 32 bytes a packet, a UDP port to open on the backend, the `fou` module.
 
 ### Decided
 
@@ -815,4 +811,4 @@ Like shint, simpler:
 - **Weighted round robin** is the default scheduler, with IPVS's connection synchronisation on by default so connections survive a failover.
 - **The director never changes the port; a backend maps it**, in theLB's own nftables table, when its application's port differs ([Port mapping](#port-mapping-on-the-backend)).
 - **One VIP, many services**, each with its own backends; in Kubernetes, Services share a VIP by annotation.
-- **Direct routing first, IP-in-IP tunnelling second**, as a per-service forwarding method; proxying later.
+- **Direct routing first, IP-in-IP tunnelling second**, as a per-service forwarding method (`--method direct|tunnel`); IP-in-IP's encapsulation is IPVS's IPIP, for its simplicity - GUE later, as an option; proxying later.

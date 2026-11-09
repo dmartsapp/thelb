@@ -125,6 +125,12 @@ ip -n $P-b4 addr add ${addr4[b4]}/24 dev eth0
 ip -n $P-b4 route add default via $NET4B.1
 mac[b4]=$(ip netns exec $P-b4 cat /sys/class/net/eth0/address)
 install -d -m 0700 "$tmp/b4"
+# link_up <director>: its link up again - and its route to the second network,
+# which went with the link.
+link_up() {
+	ip -n $P-$1 link set eth0 up
+	ip -n $P-$1 route replace $NET4B.0/24 via $NET4.1
+}
 for n in d1 d2 d3 d4; do ip -n $P-$n route add $NET4B.0/24 via $NET4.1; done
 echo "   $NET4.0/24, control VIP $VIP4 port $PORT; directors d1-d4 at $NET4.11-14, backends b1-b3 at $NET4.31-33, the client at $NET4.100"
 echo "   $NET4B.0/24 behind a router at $NET4.1: the backend b4 at ${addr4[b4]}"
@@ -314,7 +320,7 @@ check "the survivors agree on $new as leader" "within 10 leader_is d2 $new && wi
 check "and show d1 down" "within 10 is $new '[n[\"state\"] for n in s[\"nodes\"] if n[\"node\"] == \"d1\"][0]' down"
 
 echo "== d1 comes back - with --bootstrap, as it was started - and rejoins without approval"
-ip -n $P-d1 link set eth0 up
+link_up d1
 start d1 "$tmp/d1.rejoin.log" --vip $VIP4 --bootstrap
 check "it removes the control VIP its crash left" "within 10 logged $tmp/d1.rejoin.log 'WARN removed the control VIP an earlier run left vip=$VIP4 interface=eth0'"
 check "the VIP is no longer on d1's eth0" "! holds d1 $VIP4"
@@ -345,7 +351,7 @@ check "the cut-off leader $cut gives the VIP up" "within 10 eval '! holds $cut $
 check "saying it lost leadership" "grep -qF 'OK control VIP released vip=$VIP4 reason=\"leadership lost\"' $tmp/$cut*.log"
 check "the others elect a leader, who takes the VIP" "within 20 held_not_by $VIP4 $cut"
 new=$(holder $VIP4)
-ip -n $P-$cut link set eth0 up
+link_up $cut
 check "back on the network, $cut follows $new - the same process, the same member" "within 20 leader_is $cut $new && within 20 up_is $new 3"
 
 echo "== remove: the removed director stops, and waits for approval if it asks again"
@@ -459,7 +465,7 @@ new=$(holder $SVC)
 check "and programs IPVS the same way" "within 20 eval 'weight_is $new b1 1 && weight_is $new b2 1 && weight_is $new b3 1'"
 check "the client's neighbour entry follows, to $new" "within 5 neigh_is $SVC ${mac[$new]}"
 check "the client is served by all three again" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
-ip -n $P-d1 link set eth0 up
+link_up d1
 start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
 check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
 check "and the IPVS service" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
