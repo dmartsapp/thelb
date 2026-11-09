@@ -444,8 +444,8 @@ check "the directors ask again; the script's approve line approves them" "within
 check "the backends find the new cluster, and enrol again" "within 60 eval 'logged $tmp/b1.log \"another cluster answers\" && logged $tmp/b2.log \"another cluster answers\" && logged $tmp/b3.log \"another cluster answers\"'"
 # The line approves whichever of them ask: those that asked before the
 # directors were approved are members already.
-approve_again() { on d1 env "PATH=$tmp/bin:$PATH" sh -c "$approve_line --yes" >/dev/null 2>&1; is d1 'len(s["offers"])' "$1"; }
-check "the script's approve line approves them too: their offers are listed" "within 60 approve_again 3"
+approve_again() { on d1 env "PATH=$tmp/bin:$PATH" sh -c "$approve_line --yes" >/dev/null 2>&1; is d1 'len({o["node"] for o in s["offers"]})' "$1"; }
+check "the script's approve line approves them too: the three backends' offers are listed" "within 60 approve_again 3"
 check "the script creates the pool, the service and the assignment again" "on d1 env PATH=$tmp/bin:\$PATH sh $tmp/restore.sh >$tmp/restore.out 2>&1 && grep -q 'assigned to web: b1, b2, b3' $tmp/restore.out"
 check "on the VIP it had: the client is served as before" "within 30 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
 
