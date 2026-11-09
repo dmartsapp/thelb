@@ -1,18 +1,16 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, with offers by name on `wip/offers`.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after offers by name were merged.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
-| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (158 checks) |
+| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, offers by name made while a backend runs, a service's VIP held once a backend serves it, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (170 checks) |
 
-`wip/gencmds` was merged into `main` by fast-forward on 2026-11-09, after `wip/ipip` and `wip/portmap`.
+`wip/offers` was merged into `main` by fast-forward on 2026-11-09, after `wip/gencmds`, `wip/ipip` and `wip/portmap`; nothing is in progress on another branch.
 
-| `wip/offers` | offers by name, made while a backend runs, checked by the leader, kept through restarts and the directors' outage; a service's VIP held once a backend serves it | `make check` green; `make e2e` on JH: one check failed on the first run (offers made before the test's web servers answered, retried only after 10 s) - fixed by offering a flag once its own check passes; rerun pending. Merge into `main` once green. |
-
-**The user's flow, as built on `wip/offers`** (2026-11-09: "backends should be able to register their services on their own after it has registered and is in active communication with the director... director tcp checks if service is actually running... director will unassign that offering from the service... director ensures the backend service offer is still active, then runs the ipvs then brings up the vip"; and "if director dies, all offers from backend are removed too... backends dont need to suffer for director's outage... this is for single node director"):
+**The user's flow, as built (merged from `wip/offers`)** (2026-11-09: "backends should be able to register their services on their own after it has registered and is in active communication with the director... director tcp checks if service is actually running... director will unassign that offering from the service... director ensures the backend service offer is still active, then runs the ipvs then brings up the vip"; and "if director dies, all offers from backend are removed too... backends dont need to suffer for director's outage... this is for single node director"):
 1. a backend joins - with or without `--offer` - and is approved;
 2. it offers an application, named as it likes: `thelb offer add <name> <proto>/<port>[,check=...]`, or an `--offer [name=]...` flag - offered once its own check passes;
 3. the leader runs the offer's check (TCP connect by default) at the backend's address before recording it; refused with the reason otherwise;
