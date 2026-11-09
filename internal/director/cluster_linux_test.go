@@ -173,8 +173,11 @@ func TestACluster(t *testing.T) {
 	})
 	eventually(t, "the others to agree", func() bool {
 		st := d2.status(t)
-		return st.Cluster.Leader == leader && nodeRow(st, "lb-1") != nil && nodeRow(st, "lb-1").State == "down"
+		return st.Cluster.Leader == leader && nodeRow(st, "lb-1") != nil && nodeRow(st, "lb-1").State == "stopped"
 	})
+	if !strings.Contains(d1.logs.String(), "OK out of the vote") {
+		t.Errorf("the stopped leader did not leave the vote:\n%s", d1.logs)
+	}
 
 	// The old leader comes back - with --bootstrap, as it was started - finds the
 	// cluster, and rejoins without approval: the cluster remembers it.
@@ -191,7 +194,11 @@ func TestACluster(t *testing.T) {
 			lw = d
 		}
 	}
-	eventually(t, "the old identity removed", func() bool { return strings.Contains(lw.logs.String(), "OK old member identity removed node=lb-1") })
+	// The new leader took lb-1's identity out of Raft when it stopped: nothing
+	// is left to remove when it rejoins.
+	if !strings.Contains(lw.logs.String(), "OK director stopped: out of the vote until it starts again node=lb-1") || strings.Contains(lw.logs.String(), "OK old member identity removed node=lb-1") {
+		t.Errorf("the leader's log:\n%s", lw.logs)
+	}
 	if !strings.Contains(lw.logs.String(), "OK director rejoined: approved before node=lb-1") {
 		t.Errorf("the leader's log:\n%s", lw.logs)
 	}
@@ -255,3 +262,56 @@ func TestACluster(t *testing.T) {
 }
 
 func timeout() <-chan time.Time { return time.After(20 * time.Second) }
+
+// TestTwoDirectorsSurviveEitherOnesPlannedStop: with two voters, a planned stop
+// takes the stopping director out of the vote, so the one left keeps - or wins -
+// leadership alone; and the stopped one rejoins without approval.
+func TestTwoDirectorsSurviveEitherOnesPlannedStop(t *testing.T) {
+	l := newLab(t)
+	d1, d2 := l.director(t, 1), l.director(t, 2)
+	d1.start(t)
+	copySecrets(t, d1, d2)
+	d2.launch(t)
+	eventually(t, "lb-2 pending", func() bool { return pending(d1.status(t), "lb-2") != nil })
+	if _, err := admin(d1, "approve", "lb-2"); err != nil {
+		t.Fatal(err)
+	}
+	d2.waitReady(t)
+	eventually(t, "two voters up", func() bool { return allUp(d1.status(t), "lb-1", "lb-2") })
+
+	// The follower stops: the leader keeps its leadership.
+	if err := d2.halt(t); err != nil {
+		t.Fatalf("stopping the follower: %v", err)
+	}
+	if !strings.Contains(d2.logs.String(), "OK out of the vote") {
+		t.Errorf("the follower did not leave the vote:\n%s", d2.logs)
+	}
+	time.Sleep(3 * time.Second) // longer than a leader takes to find it has no majority
+	st := d1.status(t)
+	if st.Cluster.Leader != "lb-1" || vipLeader(t, d1) != "lb-1" || strings.Contains(d1.logs.String(), "stepping down") {
+		t.Fatalf("the leader, alone: leader %q\n%s", st.Cluster.Leader, d1.logs)
+	}
+	if n := nodeRow(st, "lb-2"); n == nil || n.State != "stopped" {
+		t.Errorf("lb-2 in status: %+v", n)
+	}
+
+	// It comes back by itself; then the leader stops, and lb-2 leads alone.
+	d2.cfg.Bootstrap = true
+	d2.logs = &syncBuffer{}
+	d2.start(t)
+	if strings.Contains(d2.logs.String(), "waiting for approval") {
+		t.Errorf("lb-2 waited for approval again:\n%s", d2.logs)
+	}
+	eventually(t, "two voters up again", func() bool { return allUp(d1.status(t), "lb-1", "lb-2") })
+	if err := d1.halt(t); err != nil {
+		t.Fatalf("stopping the leader: %v", err)
+	}
+	if !strings.Contains(d1.logs.String(), "OK leadership handed over to=lb-2") || !strings.Contains(d1.logs.String(), "OK out of the vote") {
+		t.Errorf("the leader's stop:\n%s", d1.logs)
+	}
+	eventually(t, "lb-2 leading", func() bool { return vipLeader(t, d2) == "lb-2" })
+	time.Sleep(3 * time.Second)
+	if st := d2.status(t); st.Cluster.Leader != "lb-2" || strings.Contains(d2.logs.String(), "stepping down") {
+		t.Fatalf("lb-2, alone: leader %q\n%s", st.Cluster.Leader, d2.logs)
+	}
+}

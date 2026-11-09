@@ -334,7 +334,8 @@ func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.Certificate
 		}
 		return
 	}
-	if old != "" && old != ready.RaftID {
+	// A crash leaves the old identity in Raft; a planned stop took it out.
+	if old != "" && old != ready.RaftID && s.inRaft(old) {
 		if err := s.r.RemoveServer(raft.ServerID(old), 0, 5*time.Second).Error(); err == nil {
 			s.log.OK("old member identity removed", "node", claim.Name, "member", old)
 		}

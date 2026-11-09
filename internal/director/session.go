@@ -188,7 +188,9 @@ func (s *session) run(ctx context.Context) error {
 }
 
 // close ends the session. On a planned stop a leader first hands leadership to
-// another voter, so a restart is a short, clean failover.
+// another voter, so a restart is a short, clean failover; and every director
+// then takes its member identity out of Raft, so the others keep their majority
+// without it - two directors survive either one's planned stop.
 func (s *session) close(planned bool) {
 	if planned && s.r != nil && s.r.State() == raft.Leader && s.voters() > 1 {
 		if err := s.r.LeadershipTransfer().Error(); err != nil {
@@ -202,6 +204,9 @@ func (s *session) close(planned bool) {
 			}
 			s.log.OK("leadership handed over", "to", s.nameOf(string(to)))
 		}
+	}
+	if planned && s.r != nil && s.inRaft(s.raftID) && s.voters() > 1 {
+		s.leaveRaft()
 	}
 	s.mu.Lock()
 	s.closing = true
@@ -224,6 +229,44 @@ func (s *session) close(planned bool) {
 	}
 	s.mu.Unlock()
 	s.mux.Wait()
+}
+
+// inRaft is whether a member identity is in Raft's configuration.
+func (s *session) inRaft(id string) bool {
+	f := s.r.GetConfiguration()
+	if f.Error() != nil {
+		return false
+	}
+	for _, srv := range f.Configuration().Servers {
+		if string(srv.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+// leaveRaft takes this stopping director's member identity out of Raft: the
+// leader is asked - for a few seconds, as one just handed leadership settles -
+// or, if this director still leads, it removes itself. If neither works the
+// others count it as a voter until it starts again, as after a crash.
+func (s *session) leaveRaft() {
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if s.r.State() == raft.Leader {
+			if err = s.r.RemoveServer(raft.ServerID(s.raftID), 0, 5*time.Second).Error(); err == nil {
+				break
+			}
+			continue
+		}
+		if _, err = s.callLeader(api.Request{Op: api.OpLeave, RaftID: s.raftID}); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		s.log.Warn("leaving the vote failed: the others count this director as a voter until it starts again", "error", err)
+		return
+	}
+	s.log.OK("out of the vote: the other directors keep their majority while this one is stopped")
 }
 
 func (s *session) voters() int {

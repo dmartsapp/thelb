@@ -77,6 +77,10 @@ func (s *session) answer(w *wire.Conn, by string, req api.Request) {
 	resp := api.Response{V: wire.Version, OK: true}
 	var err error
 	switch {
+	case req.Op == api.OpLeave:
+		// Raft's leadership is enough: a leader just handed leadership is
+		// asked at once, before it has taken the control VIP.
+		err = s.leave(by, req.RaftID)
 	case s.leading() == nil:
 		err = errNotLeader
 	case req.Op == api.OpLive:
@@ -98,6 +102,36 @@ func (s *session) answer(w *wire.Conn, by string, req api.Request) {
 		resp = api.Response{V: wire.Version, Error: err.Error()}
 	}
 	_ = w.Send(resp)
+}
+
+// leave takes a stopping director's member identity out of Raft. Raft is in
+// memory, so that identity never comes back - the director starts again as a
+// new one - and while it stays in the configuration it counts towards the
+// majority without ever voting: with two directors, the one left could neither
+// keep its leadership nor win an election. The director stays approved, and
+// rejoins without approval when it starts again.
+func (s *session) leave(name, raftID string) error {
+	if s.r.State() != raft.Leader {
+		return errNotLeader
+	}
+	var n cluster.Node
+	found := false
+	s.fsm.Read(func(st *cluster.State) {
+		if p := st.Nodes[name]; p != nil {
+			n, found = *p, true
+		}
+	})
+	if !found || n.Role != "director" || raftID == "" || n.RaftID != raftID {
+		return fmt.Errorf("that member identity is not %s's", name)
+	}
+	if raftID == s.raftID {
+		return errors.New("a leader takes itself out of Raft, not by asking")
+	}
+	if err := s.r.RemoveServer(raft.ServerID(raftID), 0, 5*time.Second).Error(); err != nil {
+		return fmt.Errorf("taking %s out of Raft: %w", name, err)
+	}
+	s.log.OK("director stopped: out of the vote until it starts again", "node", name, "member", raftID, "voters", s.voters())
+	return nil
 }
 
 // serveCheckIns records a director's check-ins, while this director leads, and

@@ -23,7 +23,9 @@ func (s *session) status() status.Status {
 	_, leaderID := s.r.LeaderWithID()
 	term := s.r.CurrentTerm()
 	suffrage := map[string]raft.ServerSuffrage{}
+	configured := false
 	if f := s.r.GetConfiguration(); f.Error() == nil {
+		configured = true
 		for _, srv := range f.Configuration().Servers {
 			suffrage[string(srv.ID)] = srv.Suffrage
 		}
@@ -62,6 +64,8 @@ func (s *session) status() status.Status {
 				row.Role, row.State = "leader", "up"
 			case !known:
 				row.State = "unknown"
+			case configured && n.Role == "director" && n.RaftID != "" && !member:
+				row.State = "stopped" // stopped by plan, out of the vote
 			case checked && now.Sub(ci.At) < lease && (member || n.Role == "backend"):
 				row.State = "up"
 				if suffrage[n.RaftID] == raft.Nonvoter {

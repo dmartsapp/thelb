@@ -19,6 +19,7 @@ const (
 	OpRenew   = "renew"   // a certificate, renewed
 	OpBackend = "backend" // a backend's heartbeat, streamed
 	OpOffer   = "offer"   // a backend offers an application, or withdraws one
+	OpLeave   = "leave"   // a director stopping: its member identity out of Raft
 )
 
 // Request is a member's.

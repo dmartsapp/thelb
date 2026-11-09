@@ -336,6 +336,7 @@ stop $old
 code=$?
 check "$old stops cleanly on SIGTERM" "[ $code = 0 ] && logged $tmp/$old.log 'OK stopped'"
 check "after handing leadership over" "logged $tmp/$old.log 'OK leadership handed over to=d'"
+check "and leaving the vote: the new leader takes its member identity out of Raft" "logged $tmp/$old.log 'OK out of the vote' && within 10 eval 'grep -q \"OK director stopped: out of the vote until it starts again node=$old\" $tmp/d*.log'"
 check "and giving the control VIP up" "! holds $old $VIP4"
 check "another director holds it" "within 10 held $VIP4"
 new=$(holder $VIP4)
@@ -393,6 +394,20 @@ check "a new one: a new ID, the same secrets" "isnt d1 's[\"cluster\"][\"id\"]' 
 start d2 "$tmp/d2.full.log" --vip $VIP4
 check "d2 joins it, and waits for approval again" "within 20 logged $tmp/d2.full.log 'OK waiting for approval'"
 check "and is a member once approved" "on d1 $bin admin approve d2 >/dev/null && within 20 logged $tmp/d2.full.log 'OK director ready'"
+
+echo "== two directors: either one's planned stop leaves the other leading"
+check "d2 votes: two voters" "within 20 up_is d1 2"
+stop d2
+check "the follower, d2, stops, and the leader takes it out of the vote" "logged $tmp/d2.full.log 'OK out of the vote' && logged $tmp/d1.full.log 'OK director stopped: out of the vote until it starts again node=d2'"
+check "d1 keeps leading alone: the control VIP stays, no step-down" "sleep 3; holds d1 $VIP4 && leader_is d1 d1 && ! logged $tmp/d1.full.log 'stepping down'"
+check "status says d2 is stopped, not down" "is d1 '[n[\"state\"] for n in s[\"nodes\"] if n[\"node\"] == \"d2\"][0]' stopped"
+start d2 "$tmp/d2.two.log" --vip $VIP4 --bootstrap
+check "d2 starts again - with --bootstrap - and rejoins without approval" "within 30 logged $tmp/d2.two.log 'OK director ready' && ! logged $tmp/d2.two.log 'waiting for approval' && within 20 up_is d1 2"
+stop d1
+check "the leader, d1, hands over to d2 and leaves the vote" "logged $tmp/d1.full.log 'OK leadership handed over to=d2' && logged $tmp/d1.full.log 'OK out of the vote'"
+check "d2 leads alone, and keeps the control VIP" "within 10 holds d2 $VIP4 && sleep 3 && holds d2 $VIP4 && leader_is d2 d2 && ! logged $tmp/d2.two.log 'stepping down'"
+start d1 "$tmp/d1.two.log" --vip $VIP4 --bootstrap
+check "d1 starts again - with --bootstrap - and rejoins d2's cluster without approval" "within 30 logged $tmp/d1.two.log 'OK director ready' && ! logged $tmp/d1.two.log 'waiting for approval' && within 20 up_is d2 2"
 for n in d1 d2; do stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"
