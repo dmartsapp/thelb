@@ -75,8 +75,18 @@ func (s *session) admission(c cluster.Claim) admission {
 			a = admission{verdict: verdictRefused, by: r.By, why: "refused by " + r.By}
 			return
 		}
+		if n := st.Nodes[c.Name]; n != nil && n.Role != c.Role {
+			a = admission{verdict: verdictRefused, why: fmt.Sprintf("the name %s is a %s's: give this %s a name of its own, with --name", c.Name, n.Role, c.Role)}
+			return
+		}
+		if p := st.Pending[c.Name]; p != nil && p.Role != c.Role {
+			a = admission{verdict: verdictRefused, why: fmt.Sprintf("a %s named %s is waiting for approval: give this %s a name of its own, with --name", p.Role, c.Name, c.Role)}
+			return
+		}
 		for name, n := range st.Nodes {
-			if name != c.Name && n.Fingerprint == c.Fingerprint && s.live(live, n) {
+			// One machine may be a director and a backend - two roles, two
+			// names, one fingerprint; two live nodes of one role may not.
+			if name != c.Name && n.Fingerprint == c.Fingerprint && n.Role == c.Role && s.live(live, n) {
 				a = admission{verdict: verdictClone, why: fmt.Sprintf("its node fingerprint is that of %s, which is running: two live nodes cannot share one (a cloned machine?)", name)}
 				return
 			}

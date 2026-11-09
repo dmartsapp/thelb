@@ -175,6 +175,9 @@ func (s *Server) Close() {
 		_ = os.Remove(filepath.Join(s.dir, lockName))
 		unlock(s.lock)
 		_ = os.Remove(s.dir) // only if empty
+		if parent := filepath.Dir(s.dir); filepath.Base(parent) == "thelb" {
+			_ = os.Remove(parent) // /run/thelb, once neither role is left in it
+		}
 	})
 }
 

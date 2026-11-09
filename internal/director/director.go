@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 // Config is how a director was started.
 type Config struct {
 	ControlVIP        netip.Addr
+	ControlVIPName    string // the name --vip gave, resolved at start; "" for an address
 	ControlPort       uint16
 	SecretFile        string
 	BackendSecretFile string
@@ -224,6 +226,9 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 	if err := n.net.Cleanup(); err != nil {
 		return err
+	}
+	if cfg.ControlVIPName != "" {
+		log.OK("control VIP resolved", "name", cfg.ControlVIPName, "vip", cfg.ControlVIP)
 	}
 	log.OK("node fingerprint", "node", cfg.Name, "fingerprint", n.claim.Fingerprint, "hostname", in.Hostname, "interface", addr.Interface, "address", addr.Prefix.Addr())
 
@@ -483,7 +488,7 @@ func (n *node) probeOnce(ctx context.Context) (probe, string, error) {
 
 // member is called when the director has become a member of a cluster.
 func (n *node) member(s *session) {
-	n.log.OK("director ready", "socket", n.d.RunDir+"/"+localsock.SocketName, "control_vip", n.cfg.ControlVIP, "port", n.cfg.ControlPort, "interface", n.addr.Interface, "member", s.raftID)
+	n.log.OK("director ready", "socket", filepath.Join(n.d.RunDir, localsock.SocketName), "control_vip", n.cfg.ControlVIP, "port", n.cfg.ControlPort, "interface", n.addr.Interface, "member", s.raftID)
 	_ = sdnotify.Notify("STATUS=a member of the cluster")
 	n.ready.Do(func() {
 		if n.d.Ready != nil {

@@ -1,13 +1,13 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-08.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
 | `main` | up to `54c83a3`: directors, Raft, the control VIP, backends, pools, services, IPVS direct routing, `status` views, the lab | `make check` green; `make e2e` green (110 checks) |
-| `wip/portmap` | port mapping on the backend (nftables), a planner fix, the no-configuration-file decision, this file | **one test fails** - see below; merge into `main` once it and `make e2e` pass |
+| `wip/portmap` | port mapping on the backend (nftables), a director's host as a backend, the control VIP by name, the stream-deadline and planner fixes, the no-configuration-file decision, this file | `make check` green here and on JH; merge into `main` once `make e2e` passes |
 
 ## What `wip/portmap` adds
 
@@ -18,26 +18,14 @@ Where the code is, what is broken, and what comes next - kept up to date at ever
 - The lab (`test/lab.sh`) has a second service, `mapped`, on `198.18.0.21:80`, from 8080 on b1, 9090 on b2 and 7070 on b3. The end-to-end test has the same scenario, and its `within` waits by a deadline, not a count of tries.
 - Docs: port mapping is nftables, not eBPF, and why; **no configuration file** (decided); `generate commands` proposed; the changelog, README and help updated.
 
-## Broken - fix first
+## Fixed in this branch
 
-**`TestABackendServesAService`** (`internal/director/backend_linux_test.go`) fails on JH:
-
-1. Just after the test's second service (`api`) is removed, the backend's heartbeat connection fails with `local error: tls: bad record MAC` - a TLS record that did not authenticate - and the backend reconnects.
-2. Later the leader removes the backend (`OK node removed node=web-1` in its log), but the backend never stops: it never gets the `Removed` order.
-
-What to look at:
-
-- **Why the record is corrupt.** Something must write to one end of that TLS connection from two places at once, or reuse a buffer - the netlink reader had the same kind of bug. Run the test with `-race` first. Suspects: the leader's `serveBackend` and anything else holding the same `*tls.Conn` or `wire.Conn`; the backend's `session`.
-- **Why the removal never arrives.** After the reconnect, either the new connection is not served, or the backend retries silently: once its certificate is revoked the handshake is refused, `serve` logs only the first loss (`lost` stays set), and `anotherCluster` sees the same CA, so it loops for ever. Whatever the cause, a backend whose handshakes keep being refused should ask - through the join protocol, with its secret - whether it is still a member, and stop if it was removed; and every distinct error should be logged, at most once a minute.
-
-To run it alone, on JH: `cd ~/thelb && go test -count=1 -race -run TestABackendServesAService -v ./internal/director/`.
-
-Then: `make remote-check REMOTE=JH`, and `make remote-e2e REMOTE=JH` - about 12 minutes, so in the background - then merge `wip/portmap` into `main` and push.
+- **The heartbeat stream's write deadline**: `serveAPI` set a 10-second deadline for the first request, which covers writes too, and the streams renewed only the read side - so 10 s into every backend's heartbeat connection the leader's writes failed and corrupted the TLS stream (`tls: bad record MAC`), and directors' check-in streams were cut every 10 s. Streams now clear it and set one per message. A backend refused by the cluster - its certificate revoked - had then retried in silence for ever: it now logs each distinct failure at most once a minute, and enrols again when its handshakes keep being refused.
 
 ## Next - the agreed order
 
-1. **Finish port mapping**: the two bugs above, the lab, the merge.
-1b. **A director that is also a backend** (the user: "we need to be able to do that", for small setups) - before IP-in-IP, because it changes the cluster's state: nodes keyed by name and role, not by name; certificates and check-ins likewise; `admin approve <name>` approves each pending role; the clone check exempts one machine's two roles. `thelb director ... --offer ...` runs the backend agent inside the director process (one socket); the agent still joins and heartbeats through the control VIP. Data path: IPVS local-node delivery for the node's own share while it leads; `thelb0` and the ARP parameters while it does not; its own offers on the service's port (no port mapping for itself - a prerouting rule would take the clients' packets before IPVS). A lab variant with d1 also serving. Design: [Roles](design.md#roles).
+1. **Finish port mapping**: `make e2e` on JH, then merge `wip/portmap` into `main`.
+1b. **Built in this branch: a director's host as a backend too** (the user: start the director first, register the backend later, keep systemd for backends): two daemons, `thelb backend` started after the director under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); the clone check is per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS delivers the host's share locally while it leads. `test/lab.sh serve dN`, and an end-to-end scenario. **Also built: the control VIP by name** (`--vip thelb-vip`, `--join thelb-vip:7443`), resolved at start.
 2. **IP-in-IP tunnelling**, a per-service method (`--method tunnel`); direct routing stays the default for backends on the director's network. Director: IPVS's tunnel forwarding (tunnel type IPIP). Backend: an `ipip` tunnel interface holding the VIP, `rp_filter` relaxed on it, MSS clamping or MTU guidance. The return-path check matters more here: networks drop replies from the VIP's address outside its subnet. GUE later, as an option.
 3. **Apply what changed, and repair drift**: the leader applies only the difference from what it last applied, and compares the whole kernel every 10 s - putting back what someone removed (the watchdog loop); systemd's watchdog is told only while that loop runs.
 4. **IPVS connection synchronisation**: the sync daemon as master on the VIP holder, backup on the other directors, following leadership - so connections in progress survive a failover.

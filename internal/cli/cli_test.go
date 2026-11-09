@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/dmartsapp/thelb/internal/hostnet"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +64,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"director", "--no-such-flag"},
 		{"director", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b"},
 		{"director", "--vip", "10.0.0.10/24", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b"},
-		{"director", "--vip", "ten", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b"},
+		{"director", "--vip", "not a name", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b"},
 		{"director", "--vip", "10.0.0.10", "--port", "0", "--secret-file", "/s", "--backend-secret-file", "/b"},
 		{"director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "rel/s", "--backend-secret-file", "/b"},
 		{"director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/s"},
@@ -114,7 +116,7 @@ func TestDirectorFlagsReachTheDirector(t *testing.T) {
 	saved := runDirector
 	runDirector = func(_ context.Context, cfg director.Config, d director.Deps) error {
 		got = cfg
-		if d.RunDir != runDir || d.Log == nil || d.Host == nil {
+		if d.RunDir != filepath.Join(runDir, "director") || d.Log == nil || d.Host == nil {
 			t.Errorf("deps %+v", d)
 		}
 		return nil
@@ -189,7 +191,7 @@ func withRunningTheLB(t *testing.T) {
 	saved := runDir
 	runDir = filepath.Join(base, "run")
 	t.Cleanup(func() { runDir = saved })
-	srv, err := localsock.Listen(runDir, fakeNode{}, logx.New(&bytes.Buffer{}, "socket"))
+	srv, err := localsock.Listen(filepath.Join(runDir, "director"), fakeNode{}, logx.New(&bytes.Buffer{}, "socket"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +296,7 @@ func TestBackendFlagsReachTheBackend(t *testing.T) {
 	saved := runBackend
 	runBackend = func(_ context.Context, cfg backend.Config, d backend.Deps) error {
 		got = cfg
-		if d.RunDir != runDir || d.Log == nil || d.Kernel == nil {
+		if d.RunDir != filepath.Join(runDir, "backend") || d.Log == nil || d.Kernel == nil {
 			t.Errorf("deps %+v", d)
 		}
 		return nil
@@ -332,5 +334,53 @@ func TestAdminChanges(t *testing.T) {
 		if code != 0 || strings.Join(adminCalls, ";") != c.want {
 			t.Errorf("%v: exit %d %s, calls %v", c.args, code, errOut, adminCalls)
 		}
+	}
+}
+
+func TestTheVIPMayBeAName(t *testing.T) {
+	savedLookup, savedFor, savedRun, savedOS := lookup, localFor, runDirector, goos
+	t.Cleanup(func() { lookup, localFor, runDirector, goos = savedLookup, savedFor, savedRun, savedOS })
+	goos = "linux"
+	answers := map[string][]netip.Addr{
+		"thelb-vip": {netip.MustParseAddr("10.0.0.10")},
+		"two-sites": {netip.MustParseAddr("192.168.9.10"), netip.MustParseAddr("10.0.0.10")},
+		"elsewhere": {netip.MustParseAddr("192.168.9.10")},
+		"ambiguous": {netip.MustParseAddr("10.0.0.10"), netip.MustParseAddr("10.0.0.11")},
+	}
+	lookup = func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		if a, ok := answers[host]; ok {
+			return a, nil
+		}
+		return nil, errors.New("no such host")
+	}
+	localFor = func(a netip.Addr, _ string) (hostnet.Address, error) {
+		if netip.MustParsePrefix("10.0.0.0/24").Contains(a) {
+			return hostnet.Address{}, nil
+		}
+		return hostnet.Address{}, errors.New("not here")
+	}
+	var got director.Config
+	runDirector = func(_ context.Context, cfg director.Config, _ director.Deps) error { got = cfg; return nil }
+	run := func(vip string) (int, string) {
+		code, _, errOut := as(t, 0, "director", "--vip", vip, "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b", "--name", "lb-1")
+		return code, errOut
+	}
+	for _, name := range []string{"thelb-vip", "two-sites"} {
+		got = director.Config{}
+		if code, errOut := run(name); code != 0 || got.ControlVIP.String() != "10.0.0.10" || got.ControlVIPName != name {
+			t.Errorf("%s: exit %d %s, config %+v", name, code, errOut, got)
+		}
+	}
+	for name, want := range map[string]string{
+		"elsewhere": "none of them is in a network of this node",
+		"ambiguous": "more than one address in this node's networks",
+		"nowhere":   "the name does not resolve",
+	} {
+		if code, errOut := run(name); code != 1 || !strings.Contains(errOut, want) {
+			t.Errorf("%s: exit %d, %q", name, code, errOut)
+		}
+	}
+	if code, _ := run("bad_name!"); code != 2 {
+		t.Errorf("a malformed name: exit %d", code)
 	}
 }

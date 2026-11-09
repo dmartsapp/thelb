@@ -41,7 +41,9 @@ and gives it up when it no longer leads. Stopped with SIGTERM, a leader first
 hands leadership to another director.
 
 Flags:
-  --vip <address>                the control VIP: an address, no prefix
+  --vip <address or name>        the control VIP: an address (no prefix), or a name,
+                                 resolved at start to its one address in this
+                                 node's networks
   --port <port>                  the control port
   --secret-file <file>           the directors' secret (absolute path)
   --backend-secret-file <file>   the backends' secret (absolute path)
@@ -61,7 +63,7 @@ its own interface, thelb0, without answering ARP for them. It never chooses a
 service: a director assigns its offers (thelb admin assign).
 
 Flags:
-  --join <address:port>   the control VIP and port
+  --join <address:port>   the control VIP - an address or a name - and port
   --secret-file <file>    the backends' secret (absolute path)
   --offer <offer>         what this node serves, as often as needed: tcp/8080,
                           udp/53 or sctp/2905, with ,check=tcp (TCP's default),
@@ -73,9 +75,12 @@ Flags:
 Where a service's port differs from its offer's - the service on 80, the
 application on 8080 - the backend maps it, in theLB's own nftables table,
 inet thelb.
+
+On a director's own host, a backend runs beside the director: start it after
+the director, with its own --name, and offer the service's port itself.
 `,
 	"status": `Usage:
-  thelb status [--json] [--watch] [view or table ...]
+  thelb status [--json] [--watch] [--role director|backend] [view or table ...]
 
 Shows the cluster, as the theLB running on this node sees it. Without a name, a
 summary: the cluster, and how many directors, backends, services and VIPs there
@@ -89,7 +94,8 @@ are, and how many are up. Name a view for one part of it:
 
 or one table: cluster, nodes, certificates, pending, pools, offers, services.
 --json prints the same as JSON - everything, without a name; --watch shows it
-again every 2 seconds. On a backend, status shows that backend alone.
+again every 2 seconds. On a backend, status shows that backend alone; on a
+host that runs both, status asks the director, and --role backend the backend.
 `,
 	"doctor": `Usage:
   thelb doctor [--json]

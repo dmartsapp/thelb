@@ -49,6 +49,12 @@ func (s *session) serveAPI(c *tls.Conn) {
 		fail(fmt.Errorf("%s is not a %s of this cluster", peer.Name, peer.Role))
 		return
 	}
+	if req.Op == api.OpBackend || req.Op == api.OpCheckIn {
+		// A stream: no deadline for its whole life - the deadline set for the
+		// first request covers writes too, and would cut it - but one per
+		// message, below.
+		_ = c.SetDeadline(time.Time{})
+	}
 	if peer.Role == "backend" {
 		switch req.Op {
 		case api.OpBackend:
@@ -115,6 +121,7 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.
 		if req.Applied >= n.AdmitIndex {
 			s.promote(name, n)
 		}
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if w.Send(api.Response{V: wire.Version, OK: true}) != nil {
 			return
 		}

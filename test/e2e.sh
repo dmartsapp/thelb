@@ -125,8 +125,8 @@ app() {
 		ip netns exec $P-$1 python3 -m http.server "$(altport $1)" --bind 0.0.0.0 --directory "$tmp/$1/www-alt" >/dev/null 2>&1 &
 		webalt[$1]=$!
 	else
-		kill "${web[$1]}" "${webalt[$1]}" 2>/dev/null
-		wait "${web[$1]}" "${webalt[$1]}" 2>/dev/null
+		kill "${web[$1]:-}" "${webalt[$1]:-}" 2>/dev/null
+		wait "${web[$1]:-}" "${webalt[$1]:-}" 2>/dev/null
 		unset "web[$1]" "webalt[$1]"
 	fi
 }
@@ -220,8 +220,8 @@ line=$(ip -n $P-d1 -o addr show dev eth0 | grep -F " $VIP4/32")
 check "the control VIP is on d1's eth0 as $VIP4/32" "[ -n \"\$line\" ]"
 check "with theLB's label, eth0:thelb" "echo \"\$line\" | grep -q 'eth0:thelb'"
 check "and theLB's address protocol, 116" "echo \"\$line\" | grep -q 'proto 0x74'"
-check "/run/thelb is root's, mode 0700" "[ \"\$(on d1 stat -c '%U %a' /run/thelb)\" = 'root 700' ]"
-check "the socket is root's, mode 0600" "[ \"\$(on d1 stat -c '%U %a' /run/thelb/thelb.sock)\" = 'root 600' ]"
+check "/run/thelb and the director's directory in it are root's, mode 0700" "[ \"\$(on d1 stat -c '%U %a' /run/thelb /run/thelb/director | xargs)\" = 'root 700 root 700' ]"
+check "the socket is root's, mode 0600" "[ \"\$(on d1 stat -c '%U %a' /run/thelb/director/thelb.sock)\" = 'root 600' ]"
 on d1 "$bin" status all >"$tmp/status" 2>&1
 check "status shows the cluster, led by d1" "grep -qE '^ e2e +\\| [0-9a-f]{8} \\| .* \\| d1 +\\| +[0-9]+ \\|' $tmp/status"
 check "status shows the CA and d1's certificate" "grep -q 'theLB e2e CA | ca' $tmp/status && grep -qE '^ d1 +\\| director' $tmp/status"
@@ -239,7 +239,7 @@ check "and creates no secret file" "[ ! -e $tmp/x.secret ] && [ ! -e $tmp/y.secr
 check "help runs for anyone" "runuser -u nobody -- $bin --help >/dev/null"
 check "--version runs for anyone" "runuser -u nobody -- $bin --version | grep -q '^thelb '"
 check "status refuses a user" "on d1 runuser -u nobody -- $bin status 2>&1 | grep -q 'runs only as root'"
-check "the socket refuses a user's process" "! on d1 runuser -u nobody -- python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"/run/thelb/thelb.sock\")' 2>/dev/null"
+check "the socket refuses a user's process" "! on d1 runuser -u nobody -- python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"/run/thelb/director/thelb.sock\")' 2>/dev/null"
 
 echo "== two more directors join, and wait for approval"
 for n in d2 d3; do
@@ -425,6 +425,48 @@ start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
 check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
 check "and the IPVS service" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
 check "so d1's kernel holds none of it" "! holds d1 $SVC && ! ipvs_on d1 | grep -q Route"
+
+echo "== a director that is also a backend: one host, two daemons, two names"
+host=$new
+# The backend on the leader's host: the same command as any backend's, started
+# later, in the director's namespaces - its own process, its own socket.
+# Its web server serves a directory of its own - never the director's, which
+# holds the secret files.
+install -d -m 0755 "$tmp/$host-www"
+echo "$host-web" >"$tmp/$host-www/index.html"
+ip netns exec $P-$host python3 -m http.server 80 --bind 0.0.0.0 --directory "$tmp/$host-www" >/dev/null 2>&1 &
+web[$host]=$!
+nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host --secret-file "$tmp/$host/backend.secret" --offer tcp/80,check=http:/ >"$tmp/$host-web.name.log" 2>&1 &
+cohost_try=$!
+check "a backend with its director's name is refused, and told to name itself" "{ wait $cohost_try; [ \$? = 1 ]; } && grep -q 'is a director.s: give this backend a name of its own, with --name' $tmp/$host-web.name.log"
+nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host-web --secret-file "$tmp/$host/backend.secret" --offer tcp/80,check=http:/ >"$tmp/$host-web.log" 2>&1 &
+pid[$host-web]=$!
+check "the director's host runs a backend beside it: its own socket" "within 20 logged $tmp/$host-web.log 'OK waiting for approval' && on $host stat /run/thelb/backend/thelb.sock >/dev/null"
+check "approved, it is a member" "on $host $bin admin approve $host-web >/dev/null && within 20 logged $tmp/$host-web.log 'OK backend ready'"
+check "status there is the director's view, which lists the host twice" "on $host $bin status backends | grep -qE '^ $host-web +\| backend' && on $host $bin status directors | grep -qE '^ $host +\| leader'"
+check "and --role backend is the backend's own view" "on $host $bin status --role backend | grep -qE '^ backend \| e2e +\| a member of the cluster'"
+check "admin assign web $host-web:tcp/80" "on $host $bin admin assign web $host-web:tcp/80 | grep -q 'assigned to web: $host-web'"
+if command -v ipvsadm >/dev/null; then
+	# Direct routing to one of its own addresses ends in its own stack: ipvsadm
+	# shows it as Route, or Local.
+	check "while it leads, IPVS gives it its share too" "within 20 eval 'ipvs_on $host | grep -qE \"-> ${addr4[$host]}:80 +(Local|Route) +1 \"'"
+	ipvs_on $host | sed 's/^/      /'
+fi
+check "the client is served by the director's host too" "within 20 answers_include $host-web"
+stop $host
+code=$?
+check "its director stops - the backend goes on" "[ $code = 0 ] && kill -0 ${pid[$host-web]} && within 20 held_not_by $SVC $host"
+new=$(holder $SVC)
+check "now the backend holds the VIP on thelb0 instead" "within 10 eval 'ip -n $P-$host -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
+if command -v ipvsadm >/dev/null; then
+	check "and the new leader, $new, sends it its share by direct routing" "within 20 eval 'ipvs_on $new | grep -qE \"-> ${addr4[$host]}:80 +Route +1 \"'"
+	ipvs_on $new | sed 's/^/      /'
+fi
+check "the client is still served by it" "within 20 answers_include $host-web"
+check "admin unassign web $host-web, and it stops cleanly" "on $new $bin admin unassign web $host-web >/dev/null && stop $host-web && logged $tmp/$host-web.log 'OK stopped'"
+app $host down
+start $host "$tmp/$host.back.log" --vip $VIP4
+check "its director starts again, and rejoins" "within 30 logged $tmp/$host.back.log 'OK director ready'"
 
 echo "== a backend stops, one is removed, the service is taken down"
 stop b3

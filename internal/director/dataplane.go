@@ -247,7 +247,9 @@ func (p *plane) step(ctx context.Context) error {
 				}
 			}
 		}
-		if !pinned[addr] {
+		// This director's own backend gets its share through the local stack
+		// (IPVS's local-node forwarding): nothing to pin.
+		if !pinned[addr] && addr != s.n.addr.Prefix.Addr() {
 			pinned[addr] = true
 			if ifc, err := s.n.local(addr, ""); err == nil && n.MAC != "" {
 				plan.Pins = append(plan.Pins, PlanPin{Addr: addr, MAC: n.MAC, Interface: ifc.Interface})
@@ -459,6 +461,7 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 			recorded = true
 		}
 		sort.Slice(orders.Assignments, func(i, j int) bool { return orders.Assignments[i].Service < orders.Assignments[j].Service })
+		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if w.Send(api.Response{V: wire.Version, OK: true, Orders: &orders}) != nil {
 			return
 		}
@@ -526,7 +529,7 @@ func (s *session) known() Plan {
 				continue
 			}
 			addr, err := netip.ParseAddr(n.Address)
-			if err != nil {
+			if err != nil || addr == s.n.addr.Prefix.Addr() {
 				continue
 			}
 			if ifc, err := s.n.local(addr, ""); err == nil {

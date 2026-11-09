@@ -45,6 +45,7 @@ sudo test/lab.sh run b2 nft list table inet thelb   # b2's port mapping: 80 to 9
 sudo test/lab.sh run d1 thelb status        # the summary; then status directors, backends, vips, all
 sudo test/lab.sh run d1 ipvsadm -Ln         # what theLB programmed in IPVS, on the leader
 sudo test/lab.sh app b2 down                # a backend's application fails: weight 0; app b2 up brings it back
+sudo test/lab.sh serve d1                   # a backend beside d1's director, on its host: d1-web
 sudo test/lab.sh kill d1                    # the leader crashes: another director takes the VIPs
 sudo test/lab.sh start d1                   # it comes back, cleans up what it left, and rejoins
 sudo test/lab.sh down                       # takes it all away

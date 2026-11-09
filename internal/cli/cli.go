@@ -11,11 +11,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +41,9 @@ import (
 var (
 	geteuid     = os.Geteuid
 	goos        = runtime.GOOS
-	runDir      = "/run/thelb"
+	runDir      = "/run/thelb" // each role has its own directory in it: director/, backend/
+	lookup      = net.DefaultResolver.LookupNetIP
+	localFor    = hostnet.For
 	now         = time.Now
 	hostInputs  = fingerprint.ReadHost
 	runDirector = director.Run
@@ -170,13 +174,17 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 	case *vip == "":
 		return usagef("thelb director: --vip, the control VIP, is required")
 	case strings.Contains(*vip, "/"):
-		return usagef("thelb director: --vip is the control VIP's address, without a prefix: %q", *vip)
+		return usagef("thelb director: --vip is the control VIP's address or name, without a prefix: %q", *vip)
 	}
-	addr, err := netip.ParseAddr(*vip)
+	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface)
 	if err != nil {
-		return usagef("thelb director: --vip %q is not an IP address", *vip)
+		var u usageError
+		if errors.As(err, &u) {
+			return usagef("thelb director: %v", err)
+		}
+		return fmt.Errorf("thelb director: %w", err)
 	}
-	cfg.ControlVIP = addr.Unmap()
+	cfg.ControlVIP, cfg.ControlVIPName = addr, vipName
 	if *port < 1 || *port > 65535 {
 		return usagef("thelb director: --port, the control port, must be 1 to 65535")
 	}
@@ -220,7 +228,7 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 	}
 	log := logx.New(out, "thelb")
 	return runDirector(ctx, cfg, director.Deps{
-		RunDir: runDir,
+		RunDir: roleDir("director"),
 		Log:    log,
 		Now:    now,
 		Host:   hostInputs,
@@ -233,6 +241,70 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 		},
 		Dataplane: func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
 	})
+}
+
+// roleDir is where a role's socket is: one director and one backend may run on
+// one node, each once.
+func roleDir(role string) string { return filepath.Join(runDir, role) }
+
+// callDirector asks the director running on this node.
+func callDirector(req localsock.Request) (localsock.Response, error) {
+	resp, err := localsock.Call(roleDir("director"), req)
+	if errors.Is(err, localsock.ErrNotRunning) {
+		if _, berr := localsock.Call(roleDir("backend"), localsock.Request{Op: localsock.OpStatus}); berr == nil {
+			return resp, errors.New("this node runs a backend, not a director: thelb admin runs on a director")
+		}
+		return resp, errors.New("no director runs on this node")
+	}
+	return resp, err
+}
+
+// callStatus asks for the status: of the role named, or of the director if one
+// runs here, of the backend otherwise.
+func callStatus(role string) (localsock.Response, error) {
+	req := localsock.Request{Op: localsock.OpStatus}
+	if role != "" {
+		return localsock.Call(roleDir(role), req)
+	}
+	resp, err := localsock.Call(roleDir("director"), req)
+	if errors.Is(err, localsock.ErrNotRunning) {
+		return localsock.Call(roleDir("backend"), req)
+	}
+	return resp, err
+}
+
+var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$`)
+
+// vipAddr is a --vip or --join host: an address as it is, or a name, resolved
+// now - at start - to the one address it has in a network of this node.
+func vipAddr(ctx context.Context, flag, host, iface string) (netip.Addr, string, error) {
+	if a, err := netip.ParseAddr(host); err == nil {
+		return a.Unmap(), "", nil
+	}
+	if !hostRE.MatchString(host) {
+		return netip.Addr{}, "", usagef("%s %q is neither an address nor a name", flag, host)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	addrs, err := lookup(ctx, "ip", host)
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("%s %s: the name does not resolve: %w", flag, host, err)
+	}
+	var in []netip.Addr
+	for _, a := range addrs {
+		a = a.Unmap()
+		if _, err := localFor(a, iface); err == nil && !slices.Contains(in, a) {
+			in = append(in, a)
+		}
+	}
+	switch len(in) {
+	case 1:
+		return in[0], host, nil
+	case 0:
+		return netip.Addr{}, "", fmt.Errorf("%s %s resolves to %v, and none of them is in a network of this node", flag, host, addrs)
+	default:
+		return netip.Addr{}, "", fmt.Errorf("%s %s resolves to more than one address in this node's networks, %v: name one address", flag, host, in)
+	}
 }
 
 // offerFlags collects --offer, which may be given more than once.
@@ -278,11 +350,20 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		return usagef("thelb backend: unexpected %q", fs.Arg(0))
 	}
 	var cfg backend.Config
-	ap, err := netip.ParseAddrPort(*joinTo)
-	if err != nil || ap.Port() == 0 {
-		return usagef("thelb backend: --join is the control VIP and port, as 10.0.0.10:7443 or [fd00::10]:7443: %q", *joinTo)
+	host, portText, err := net.SplitHostPort(*joinTo)
+	port, perr := strconv.Atoi(portText)
+	if err != nil || perr != nil || port < 1 || port > 65535 {
+		return usagef("thelb backend: --join is the control VIP, by address or name, and its port, as 10.0.0.10:7443, thelb-vip:7443 or [fd00::10]:7443: %q", *joinTo)
 	}
-	cfg.Join = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+	addr, joinName, err := vipAddr(ctx, "--join", host, *iface)
+	if err != nil {
+		var u usageError
+		if errors.As(err, &u) {
+			return usagef("thelb backend: %v", err)
+		}
+		return fmt.Errorf("thelb backend: %w", err)
+	}
+	cfg.Join, cfg.JoinName = netip.AddrPortFrom(addr, uint16(port)), joinName
 	if *secretFile == "" || !filepath.IsAbs(*secretFile) {
 		return usagef("thelb backend: --secret-file, the backends' secret, is required, as an absolute path")
 	}
@@ -320,7 +401,7 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	log := logx.New(out, "thelb")
 	return runBackend(ctx, cfg, backend.Deps{
-		RunDir: runDir,
+		RunDir: roleDir("backend"),
 		Log:    log,
 		Now:    now,
 		Host:   hostInputs,
@@ -332,8 +413,12 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := newFlags("status")
 	asJSON := fs.Bool("json", false, "")
 	watch := fs.Bool("watch", false, "")
+	role := fs.String("role", "", "")
 	if err := parse(fs, args); err != nil {
 		return err
+	}
+	if *role != "" && *role != "director" && *role != "backend" {
+		return usagef("thelb status: --role is director or backend")
 	}
 	names := fs.Args()
 	for _, t := range names {
@@ -342,7 +427,7 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}
 	show := func() error {
-		resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpStatus})
+		resp, err := callStatus(*role)
 		if err != nil {
 			return err
 		}
@@ -409,7 +494,7 @@ func generateCmd(args []string, stdout io.Writer) error {
 // change asks the running director to change the cluster, and prints what it
 // did.
 func change(stdout io.Writer, c api.Change) error {
-	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &c})
+	resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &c})
 	if err != nil {
 		return err
 	}
@@ -434,7 +519,7 @@ func adminCmd(args []string, stdout io.Writer) error {
 		if fs.NArg() != 1 {
 			return usagef("thelb admin %s: name one node", args[0])
 		}
-		resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: args[0], Names: fs.Args()}})
+		resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: args[0], Names: fs.Args()}})
 		if err != nil {
 			return err
 		}
@@ -491,7 +576,7 @@ func adminCmd(args []string, stdout io.Writer) error {
 			if *role != "director" && *role != "backend" {
 				return usagef("thelb admin secret show: --role director or --role backend")
 			}
-			resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpSecretShow, Role: *role})
+			resp, err := callDirector(localsock.Request{Op: localsock.OpSecretShow, Role: *role})
 			if err != nil {
 				return err
 			}
@@ -600,7 +685,7 @@ func approveCmd(args []string, stdout io.Writer) error {
 		if err != nil {
 			return usagef("thelb admin approve: --match %q: %v", *match, err)
 		}
-		resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpStatus})
+		resp, err := callDirector(localsock.Request{Op: localsock.OpStatus})
 		if err != nil {
 			return err
 		}
@@ -630,7 +715,7 @@ func approveCmd(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	resp, err := localsock.Call(runDir, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "approve", Names: names}})
+	resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "approve", Names: names}})
 	if err != nil {
 		return err
 	}

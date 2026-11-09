@@ -12,6 +12,8 @@
 #   sudo test/lab.sh shell <node>       a shell on a node
 #   sudo test/lab.sh curl [n] [vip]     the client fetches a service n times (10), and counts who answered:
 #                                       198.18.0.20 (web, port 80 everywhere) or 198.18.0.21 (mapped)
+#   sudo test/lab.sh serve <d1-d3>      a backend on a director's host, beside it: dN-web, with its own
+#                                       web server, approved and assigned to web
 #   sudo test/lab.sh kill <node>        crash a node's theLB (SIGKILL)
 #   sudo test/lab.sh stop <node>        stop it (SIGTERM)
 #   sudo test/lab.sh start <node>       start it again, as it was started
@@ -35,6 +37,7 @@ die() { echo "lab: $*" >&2; exit 1; }
 addr() {
 	case $1 in
 	c) echo $NET.100 ;;
+	d*-web) addr "${1%-web}" ;;
 	d*) echo $NET.$((10 + ${1#d})) ;;
 	b*) echo $NET.$((30 + ${1#b})) ;;
 	*) die "no node $1: d1-d3, b1-b3, c" ;;
@@ -55,6 +58,16 @@ start_node() {
 	b=$(bin)
 	alive "$n" && die "$n runs already"
 	local args
+	if [ "${n%-web}" != "$n" ]; then
+		# A backend beside its director: the same command as any backend's, in
+		# the director's namespaces - its network and its /run.
+		local d=${n%-web} dp
+		dp=$(pidof_node "$d") || die "$d's director is not running: sudo $0 start $d"
+		nsenter -t "$dp" -m -n "$b" backend --join $VIP:$PORT --name $n --secret-file "$STATE/$d/backend.secret" \
+			--offer tcp/80,check=http:/ >>"$STATE/$n.log" 2>&1 &
+		echo $! >"$STATE/$n.pid"
+		return
+	fi
 	case $n in
 	d1) args="director --vip $VIP --port $PORT --bootstrap --cluster lab" ;;
 	d*) args="director --vip $VIP --port $PORT --cluster lab" ;;
@@ -93,6 +106,21 @@ on() {
 
 app() {
 	local n=$1 what=$2
+	if [ "${n%-web}" != "$n" ]; then
+		case $what in
+		up)
+			install -d -m 0755 "$STATE/$n-www"
+			echo "hello from $n" >"$STATE/$n-www/index.html"
+			ip netns exec $P-${n%-web} python3 -m http.server 80 --bind 0.0.0.0 --directory "$STATE/$n-www" >"$STATE/$n.app.log" 2>&1 &
+			echo $! >"$STATE/$n.app.pid"
+			;;
+		down)
+			[ -e "$STATE/$n.app.pid" ] && kill "$(cat "$STATE/$n.app.pid")" 2>/dev/null
+			rm -f "$STATE/$n.app.pid"
+			;;
+		esac
+		return
+	fi
 	case $what in
 	up)
 		[ -e "$STATE/$n.app.pid" ] && kill -0 "$(cat "$STATE/$n.app.pid")" 2>/dev/null && return
@@ -227,6 +255,24 @@ down() {
 	echo "lab: down"
 }
 
+serve() {
+	local d=$1 n=$1-web
+	case $d in d1 | d2 | d3) ;; *) die "serve <d1-d3>" ;; esac
+	app $n up
+	start_node $n
+	waitfor "$STATE/$n.log" "OK waiting for approval"
+	on "$d" "$(bin)" admin approve $n >/dev/null
+	waitfor "$STATE/$n.log" "OK backend ready"
+	on "$d" "$(bin)" admin assign web $n:tcp/80
+	cat <<EOF
+$n runs on $d's host, beside its director: its own process, its own socket.
+  sudo $0 curl 12                     $n answers too
+  sudo $0 run $d thelb status backends   the host is listed twice: a director, and $n
+  sudo $0 run $d thelb status --role backend   $n's own view
+  sudo $0 run $(leader) ipvsadm -Ln       Local while $d leads; Route when another does
+EOF
+}
+
 curls() {
 	local n=${1:-10} vip=${2:-$NET.20} i out
 	declare -A got
@@ -254,6 +300,7 @@ kill) kill -KILL "$(pidof_node "${1:?kill <node>}")" && echo "lab: $1's theLB ki
 stop) kill -TERM "$(pidof_node "${1:?stop <node>}")" && echo "lab: $1's theLB stopped" ;;
 start) start_node "${1:?start <node>}" && echo "lab: $1's theLB started; its log: sudo $0 logs $1" ;;
 app) app "${1:?app <b1-b3> up|down}" "${2:?up or down}" ;;
+serve) serve "${1:?serve <d1-d3>}" ;;
 logs) tail -n 40 -f "$STATE/${1:?logs <node>}.log" ;;
-*) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+*) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -310,6 +310,16 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 	return api.Result{Message: fmt.Sprintf("service %s: %s %s/%d", name, want, c.Proto, c.Port)}, nil
 }
 
+// directorAt is whether a director has the address.
+func directorAt(nodes map[string]cluster.Node, addr string) bool {
+	for _, n := range nodes {
+		if n.Role == "director" && n.Address == addr {
+			return true
+		}
+	}
+	return false
+}
+
 // probe asks the network whether anything has addr: "" when nothing answers.
 func (s *session) probe(addr netip.Addr) string {
 	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
@@ -372,7 +382,10 @@ func (s *session) assign(by string, c api.Change) (api.Result, error) {
 		if err != nil {
 			return api.Result{}, err
 		}
-		if _, err := s.n.local(addr, ""); err != nil {
+		if port != svc.Port && directorAt(nodes, n.Address) {
+			return api.Result{}, fmt.Errorf("%s runs on a director, so its offer must be on the service's port, %d: while that director leads, a port mapping there would take the clients' packets before IPVS", node, svc.Port)
+		}
+		if _, err := s.n.local(addr, ""); err != nil && addr != s.n.addr.Prefix.Addr() {
 			return api.Result{}, fmt.Errorf("the forward path to %s: this director has no interface in %s's network - direct routing needs one", node, addr)
 		}
 		w := 1

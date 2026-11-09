@@ -43,6 +43,7 @@ import (
 // Config is how a backend was started.
 type Config struct {
 	Join       netip.AddrPort // the control VIP and port
+	JoinName   string         // the name --join gave, resolved at start; "" for an address
 	SecretFile string
 	Name       string
 	Interface  string
@@ -147,6 +148,9 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		return err
 	}
 	defer b.kernel.Restore()
+	if cfg.JoinName != "" {
+		log.OK("control VIP resolved", "name", cfg.JoinName, "vip", cfg.Join.Addr())
+	}
 	log.OK("node fingerprint", "node", cfg.Name, "fingerprint", b.claim.Fingerprint, "hostname", in.Hostname, "interface", addr.Interface, "address", addr.Prefix.Addr())
 
 	sctx, stopServing := context.WithCancel(ctx)
@@ -354,6 +358,7 @@ func (b *agent) clusterName() string {
 func (b *agent) serve(ctx context.Context, m *membership) error {
 	b.setPhase("connecting")
 	lost := time.Time{}
+	said := map[string]time.Time{}
 	renewAt := renewTime(m.id.Leaf())
 	for ctx.Err() == nil {
 		if time.Now().After(renewAt) {
@@ -371,20 +376,38 @@ func (b *agent) serve(ctx context.Context, m *membership) error {
 		if errors.Is(err, errRemoved) {
 			return err
 		}
+		if err == nil {
+			lost = time.Time{} // it served until its certificate was due
+			continue
+		}
 		if lost.IsZero() {
 			lost = time.Now()
+		}
+		if msg := err.Error(); time.Since(said[msg]) > time.Minute {
+			said[msg] = time.Now()
 			b.log.Warn("the connection to the cluster ended; reconnecting", "error", err)
 		}
-		if time.Since(lost) > strayAfter && b.anotherCluster(ctx, m) {
-			return errors.New("another cluster answers on the control VIP: the cluster was created again")
+		if time.Since(lost) > strayAfter {
+			if b.anotherCluster(ctx, m) {
+				return errors.New("another cluster answers on the control VIP: the cluster was created again")
+			}
+			if errors.As(err, new(handshakeError)) {
+				// The cluster refuses this backend's certificate - revoked when a
+				// director removed it - so it asks again, with its secret: a
+				// removed backend then waits for approval, and says so.
+				return fmt.Errorf("the cluster no longer accepts this backend's certificate: %w", err)
+			}
 		}
 		sleep(ctx, retry)
-		if err == nil {
-			lost = time.Time{}
-		}
 	}
 	return nil
 }
+
+// handshakeError is a TLS handshake with the leader that failed.
+type handshakeError struct{ err error }
+
+func (e handshakeError) Error() string { return "the TLS handshake with the leader: " + e.err.Error() }
+func (e handshakeError) Unwrap() error { return e.err }
 
 func renewTime(c *x509.Certificate) time.Time {
 	return c.NotBefore.Add(c.NotAfter.Sub(c.NotBefore) * 2 / 3)
@@ -404,13 +427,14 @@ func (b *agent) session(ctx context.Context, m *membership, until time.Time) err
 	defer stop()
 	_ = tc.SetDeadline(time.Now().Add(wire.HandshakeTimeout))
 	if err := tc.Handshake(); err != nil {
-		return fmt.Errorf("the TLS handshake with the leader: %w", err)
+		return handshakeError{err}
 	}
 	_ = tc.SetDeadline(time.Time{})
 	w := wire.NewConn(tc)
 	first := true
 	for ctx.Err() == nil && time.Now().Before(until) {
 		beat := b.beat(m)
+		_ = tc.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := w.Send(api.Request{V: wire.Version, Op: api.OpBackend, Beat: &beat}); err != nil {
 			return err
 		}
