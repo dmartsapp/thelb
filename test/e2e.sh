@@ -530,7 +530,11 @@ def serve(c):
 while True:
     c, _ = s.accept(); threading.Thread(target=serve, args=(c,), daemon=True).start()
 PY
-for n in b1 b2 b3; do ip netns exec $P-$n python3 "$tmp/echo.py" >/dev/null 2>&1 & done
+echos=
+for n in b1 b2 b3; do
+	ip netns exec $P-$n python3 "$tmp/echo.py" >/dev/null 2>&1 &
+	echos="$echos $!"
+done
 check "each backend offers its echo server" "within 15 eval 'on b1 $bin offer add echo tcp/9000 >/dev/null 2>&1 && on b2 $bin offer add echo tcp/9000 >/dev/null 2>&1 && on b3 $bin offer add echo tcp/9000 >/dev/null 2>&1'"
 out=$(on d1 "$bin" admin service add echo --pool lab --proto tcp --port 9000)
 ECHO=$(echo "$out" | sed -n 's/^service echo: \([0-9.]*\) tcp\/9000.*$/\1/p')
@@ -585,6 +589,8 @@ check "the six connections carried on through the failover, each to its backend"
 sed 's/^/      /' "$tmp/conns.out"
 on $new "$bin" admin service remove echo >/dev/null
 for n in b1 b2 b3; do on $n "$bin" offer remove echo >/dev/null; done
+kill $echos 2>/dev/null
+wait $echos 2>/dev/null
 link_up d1
 start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
 check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
