@@ -315,7 +315,7 @@ sudo thelb offer remove shop                               # withdrawn: its assi
 - `thelb offer add` with the name of an offer already made, and another port or check, replaces it: its assignments follow it to the new port.
 - **Your application** must listen on all addresses (`0.0.0.0`, `::`), or on the VIP: the VIP is added to the backend's own interface `thelb0`, not to `eth0`.
 - **What it changes**: it creates `thelb0` (no ARP) and puts the VIPs of its services on it; it sets `net.ipv4.conf.all.arp_ignore=1` and `arp_announce=2` (unless already stricter), so it never answers ARP for a VIP; it maps ports, and for tunnelled services creates `thelbt0` and clamps TCP's MSS (section 11). All of it is removed, and the parameters restored, when it stops.
-- **Stopping it** (`SIGTERM`, `systemctl stop`): it asks the leader to drain it, keeps its VIPs a moment longer so connections already sent to it are not lost, then removes everything.
+- **Stopping it** (`SIGTERM`, `systemctl stop`, `Ctrl+C`, or `SIGHUP` - a closed terminal or SSH session): it asks the leader to drain it, keeps its VIPs a moment longer so connections already sent to it are not lost, then removes everything.
 - **Removed by a director**, it stops; if it starts again, it waits for approval.
 - **`thelb status` on a backend** shows only that backend: its role, the cluster's name, its state, each offer - its name, port, check, its own check's state, whether the cluster holds it (`offered`), the service it is assigned to - never a VIP - and its node fingerprint.
 
@@ -420,7 +420,7 @@ One line per event, on standard error - in the journal, under systemd:
 | What | What happens |
 |---|---|
 | The leader dies | The other directors elect a leader - within 1.5 to 3 seconds in tests - which takes the control VIP and the service VIPs, announces them and programs IPVS the same way. New connections go on; **connections in progress are lost** (connection synchronisation is not built yet). |
-| The leader is stopped (`SIGTERM`) | It hands leadership to another director first: a short, clean failover. |
+| The leader is stopped (`SIGTERM`, `Ctrl+C`, or `SIGHUP` when its terminal or SSH session closes) | It hands leadership to another director first: a short, clean failover. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
 | Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). The backends lose nothing: each enrols again by itself and, once approved, offers again what it offered. |

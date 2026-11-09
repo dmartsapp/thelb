@@ -462,7 +462,9 @@ check "generate commands prints the pool, the service on its VIP, and the assign
 sed 's/^/      /' "$tmp/restore.sh"
 approve_line=$(sed -n 's/^#   \(thelb admin approve --match .*\)$/\1/p' "$tmp/restore.sh")
 check "and the nodes to approve, as a comment" "[ \"\$approve_line\" = \"thelb admin approve --match 'b1|b2|b3|d2|d3'\" ]"
-for n in d1 d2 d3; do stop $n; done
+# SIGHUP, as when a terminal or SSH session closes: a clean stop, like SIGTERM.
+for n in d1 d2 d3; do stop $n HUP; done
+check "every director stopped on SIGHUP, cleanly" "logged $tmp/d1.svc.log 'OK stopped' && logged $tmp/d2.svc.log 'OK stopped' && logged $tmp/d3.svc.log 'OK stopped'"
 check "every director stopped: no VIP is held" "[ -z \"\$(holder $SVC)\" ] && [ -z \"\$(holder $VIP4)\" ]"
 start d1 "$tmp/d1.restore.log" --vip $VIP4 --bootstrap
 check "d1 creates the cluster again - empty" "within 30 logged $tmp/d1.restore.log 'OK control VIP taken' && is d1 'len(s[\"services\"])' 0"
@@ -595,9 +597,9 @@ check "status: the service's method is tunnel" "on $new $bin status vips | grep 
 check "the client is served by both - b4's replies coming back through the router" "within 20 eval '[ \"\$(answers 8 $FAR)\" = \"b1=4 b4=4\" ]'"
 check "admin unassign far b1: b1's tunnel goes" "on $new $bin admin unassign far b1 >/dev/null && within 10 eval '! ip -n $P-b1 link show thelbt0 >/dev/null 2>&1'"
 check "admin service remove far: b4's tunnel, clamp and VIP go" "on $new $bin admin service remove far >/dev/null && within 10 eval '! ip -n $P-b4 link show thelbt0 >/dev/null 2>&1 && ! nft_on b4 >/dev/null && ! ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/\"'"
-stop b4
+stop b4 HUP
 code=$?
-check "b4 stops cleanly" "[ $code = 0 ] && logged $tmp/b4.log 'OK stopped'"
+check "b4 stops cleanly on SIGHUP, as when its terminal closes" "[ $code = 0 ] && logged $tmp/b4.log 'OK stopped'"
 app b4 down
 
 echo "== a backend stops, one is removed, the service is taken down"
