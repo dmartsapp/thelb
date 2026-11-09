@@ -441,7 +441,11 @@ start d1 "$tmp/d1.restore.log" --vip $VIP4 --bootstrap
 check "d1 creates the cluster again - empty" "within 30 logged $tmp/d1.restore.log 'OK control VIP taken' && is d1 'len(s[\"services\"])' 0"
 for n in d2 d3; do start $n "$tmp/$n.restore.log" --vip $VIP4; done
 check "the directors ask again; the script's approve line approves them" "within 20 both_logged $tmp/d2.restore.log $tmp/d3.restore.log 'OK waiting for approval' && on d1 env PATH=$tmp/bin:\$PATH sh -c \"\$approve_line --yes\" >/dev/null && within 20 both_logged $tmp/d2.restore.log $tmp/d3.restore.log 'OK director ready'"
-check "the backends find the new cluster and ask again; approved the same way" "within 60 is d1 'len(s[\"pending\"])' 3 && on d1 env PATH=$tmp/bin:\$PATH sh -c \"\$approve_line --yes\" >/dev/null && within 30 is d1 'len(s[\"offers\"])' 3"
+check "the backends find the new cluster, and enrol again" "within 60 eval 'logged $tmp/b1.log \"another cluster answers\" && logged $tmp/b2.log \"another cluster answers\" && logged $tmp/b3.log \"another cluster answers\"'"
+# The line approves whichever of them ask: those that asked before the
+# directors were approved are members already.
+approve_again() { on d1 env "PATH=$tmp/bin:$PATH" sh -c "$approve_line --yes" >/dev/null 2>&1; is d1 'len(s["offers"])' "$1"; }
+check "the script's approve line approves them too: their offers are listed" "within 60 approve_again 3"
 check "the script creates the pool, the service and the assignment again" "on d1 env PATH=$tmp/bin:\$PATH sh $tmp/restore.sh >$tmp/restore.out 2>&1 && grep -q 'assigned to web: b1, b2, b3' $tmp/restore.out"
 check "on the VIP it had: the client is served as before" "within 30 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
 
@@ -468,7 +472,7 @@ check "and the VIP" "within 10 eval '! holds d1 $MAPPED && ! ip -n $P-b1 -o addr
 echo "== a backend's application fails, and comes back"
 app b2 down
 check "b2's weight goes to 0" "within 20 weight_is d1 b2 0"
-check "the leader says why" "logged $tmp/d1.svc.log 'WARN backend not serving: weight 0 service=web node=b2'"
+check "the leader says why" "logged $tmp/d1.restore.log 'WARN backend not serving: weight 0 service=web node=b2'"
 check "the client is served by b1 and b3 only" "! answers 9 | grep -q b2="
 app b2 up
 check "b2 serves again" "within 20 weight_is d1 b2 1 && within 10 answers_include b2"
