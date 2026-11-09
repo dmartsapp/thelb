@@ -560,6 +560,7 @@ web[b4]=$!
 startb b4 "$tmp/b4.log"
 check "b4 joins through the router, and says it can serve only tunnelled services" "within 20 logged $tmp/b4.log 'OK the control VIP is behind a router: this backend can serve only tunnelled services'"
 check "and is a member once approved" "within 20 logged $tmp/b4.log 'OK waiting for approval' && on $new $bin admin approve b4 >/dev/null && within 20 logged $tmp/b4.log 'OK backend ready'"
+check "and offers its web server, once its own check passes - checked by the leader through the router" "within 20 eval 'on $new $bin status offers | grep -qE \"^ b4 +\\| web +\\| ${addr4[b4]} \"'"
 check "direct routing to b4 is refused: no interface in its network" "on $new $bin admin assign web b4:tcp/80 2>&1 | grep -q 'a service with --method tunnel reaches backends in other networks'"
 out=$(on $new "$bin" admin service add far --pool lab --proto tcp --port 80 --method tunnel)
 FAR=$(echo "$out" | sed -n 's/^service far: \([0-9.]*\) tcp\/80, by IP-in-IP$/\1/p')
