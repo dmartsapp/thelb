@@ -1,14 +1,14 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after drift repair was merged.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after the SIGHUP fix was merged.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
-| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, offers by name made while a backend runs, a service's VIP held once a backend serves it, drift repair and the systemd watchdog, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (177 checks) |
+| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, offers by name made while a backend runs, a service's VIP held once a backend serves it, drift repair and the systemd watchdog, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (178 checks) |
 
-`wip/drift` was merged into `main` by fast-forward on 2026-11-09, after `wip/offers`, `wip/gencmds`, `wip/ipip` and `wip/portmap`; nothing is in progress on another branch. The user runs their own director and backend on JH from `~/thelb/bin/thelb` (910d8d3): leave that binary alone.
+`wip/sighup` (SIGHUP stops theLB cleanly, as SIGTERM does - a closed SSH session had left the control VIP on JH's `ens3`) was merged into `main` by fast-forward on 2026-11-09, after `wip/drift`, `wip/offers`, `wip/gencmds`, `wip/ipip` and `wip/portmap`; nothing is in progress on another branch. The user runs their own director and backend on JH from `~/thelb/bin/thelb` (910d8d3): leave that binary alone.
 
 **The user's flow, as built (merged from `wip/offers`)** (2026-11-09: "backends should be able to register their services on their own after it has registered and is in active communication with the director... director tcp checks if service is actually running... director will unassign that offering from the service... director ensures the backend service offer is still active, then runs the ipvs then brings up the vip"; and "if director dies, all offers from backend are removed too... backends dont need to suffer for director's outage... this is for single node director"):
 1. a backend joins - with or without `--offer` - and is approved;
