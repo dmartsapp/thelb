@@ -429,6 +429,22 @@ on d1 "$bin" status >"$tmp/summary"
 check "status, alone, is the summary" "grep -qE '^ directors +\| +3 \| +3 \|' $tmp/summary && grep -qE '^ backends +\| +3 \| +3 \|' $tmp/summary && grep -q 'More: thelb status' $tmp/summary"
 on d1 "$bin" status backends | sed 's/^/      /'
 
+echo "== generate commands: every director stops, and the services come back from the script"
+on d1 "$bin" generate commands >"$tmp/restore.sh"
+check "generate commands prints the pool, the service on its VIP, and the assignment" "grep -qx 'thelb admin pool add lab --vip $SVC/24 --vippool-count 10' $tmp/restore.sh && grep -qx 'thelb admin service add web --pool lab --vip $SVC --proto tcp --port 80 --scheduler wrr --method direct' $tmp/restore.sh && grep -qx 'thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80' $tmp/restore.sh"
+sed 's/^/      /' "$tmp/restore.sh"
+approve_line=$(sed -n 's/^#   \(thelb admin approve --match .*\)$/\1/p' "$tmp/restore.sh")
+check "and the nodes to approve, as a comment" "[ \"\$approve_line\" = \"thelb admin approve --match 'b1|b2|b3|d2|d3'\" ]"
+for n in d1 d2 d3; do stop $n; done
+check "every director stopped: no VIP is held" "[ -z \"\$(holder $SVC)\" ] && [ -z \"\$(holder $VIP4)\" ]"
+start d1 "$tmp/d1.restore.log" --vip $VIP4 --bootstrap
+check "d1 creates the cluster again - empty" "within 30 logged $tmp/d1.restore.log 'OK control VIP taken' && is d1 'len(s[\"services\"])' 0"
+for n in d2 d3; do start $n "$tmp/$n.restore.log" --vip $VIP4; done
+check "the directors ask again; the script's approve line approves them" "within 20 both_logged $tmp/d2.restore.log $tmp/d3.restore.log 'OK waiting for approval' && on d1 env PATH=$tmp/bin:\$PATH sh -c \"\$approve_line --yes\" >/dev/null && within 20 both_logged $tmp/d2.restore.log $tmp/d3.restore.log 'OK director ready'"
+check "the backends find the new cluster and ask again; approved the same way" "within 60 is d1 'len(s[\"pending\"])' 3 && on d1 env PATH=$tmp/bin:\$PATH sh -c \"\$approve_line --yes\" >/dev/null && within 30 is d1 'len(s[\"offers\"])' 3"
+check "the script creates the pool, the service and the assignment again" "on d1 env PATH=$tmp/bin:\$PATH sh $tmp/restore.sh >$tmp/restore.out 2>&1 && grep -q 'assigned to web: b1, b2, b3' $tmp/restore.out"
+check "on the VIP it had: the client is served as before" "within 30 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+
 echo "== port mapping: a service on port 80, served from 8080 on b1, 9090 on b2, 7070 on b3"
 MAPPED=$NET4.21
 check "admin service add mapped: the pool's next address" "on d1 $bin admin service add mapped --pool lab --proto tcp --port 80 | grep -q 'service mapped: $MAPPED tcp/80'"

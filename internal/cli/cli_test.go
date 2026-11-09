@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"net"
 	"net/netip"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/backend"
@@ -172,6 +174,13 @@ var adminCalls []string
 func (fakeNode) Admin(c api.Change) (api.Result, error) {
 	adminCalls = append(adminCalls, c.Op+" "+strings.Join(c.Names, ","))
 	return api.Result{Names: c.Names}, nil
+}
+
+func (fakeNode) Generate(what string) (string, error) {
+	if what == "commands" {
+		return "#!/bin/sh\nthelb admin pool add lab --vip 10.0.0.20/24 --vippool-count 10\n", nil
+	}
+	return "", errors.New("no")
 }
 
 func (fakeNode) SecretText(role string) (string, error) {
@@ -382,5 +391,67 @@ func TestTheVIPMayBeAName(t *testing.T) {
 	}
 	if code, _ := run("bad_name!"); code != 2 {
 		t.Errorf("a malformed name: exit %d", code)
+	}
+}
+
+func TestGenerateCommandsAsksTheDirector(t *testing.T) {
+	withRunningTheLB(t)
+	code, out, errOut := as(t, 0, "generate", "commands")
+	if code != 0 || !strings.HasPrefix(out, "#!/bin/sh\n") || !strings.Contains(out, "pool add lab") {
+		t.Errorf("exit %d, %q %q", code, out, errOut)
+	}
+}
+
+// TestTheGeneratedCommandsAreCommands feeds every line director.Commands
+// prints back to the command line: each must be a change it accepts.
+func TestTheGeneratedCommandsAreCommands(t *testing.T) {
+	withRunningTheLB(t)
+	t0 := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	st := &cluster.State{
+		Cluster: &cluster.Info{Name: "prod"},
+		Nodes:   map[string]*cluster.Node{"lb-1": {}, "web-1": {}, "web-2": {}},
+		Pools: map[string]*cluster.Pool{
+			"main": {Name: "main", First: "10.0.0.20", Bits: 24, Count: 10, Default: true},
+			"dmz":  {Name: "dmz", First: "192.168.50.10", Bits: 24, Count: 5, Interface: "eth1"},
+		},
+		Services: map[string]*cluster.Service{
+			"web": {Name: "web", Pool: "main", VIP: "10.0.0.20", Proto: "tcp", Port: 80, Scheduler: "wrr"},
+			"far": {Name: "far", Pool: "dmz", VIP: "192.168.50.10", Proto: "tcp", Port: 443, Scheduler: "mh", Method: "tunnel"},
+		},
+		Assignments: map[string]*cluster.Assignment{
+			"web/web-1": {Service: "web", Node: "web-1", Proto: "tcp", Port: 8080, Weight: 3},
+			"web/web-2": {Service: "web", Node: "web-2", Proto: "tcp", Port: 9090, Weight: 1},
+			"far/web-1": {Service: "far", Node: "web-1", Proto: "tcp", Port: 443, Weight: 1},
+		},
+	}
+	script := director.Commands(st, "lb-1", t0)
+	for _, want := range []string{
+		"# cluster prod again, as they were at 2026-11-09T10:00:00Z, on lb-1.",
+		"#   thelb admin approve --match 'web-1|web-2'",
+		"thelb admin pool add dmz --vip 192.168.50.10/24 --vippool-count 5 --interface eth1\n",
+		"thelb admin pool add main --vip 10.0.0.20/24 --vippool-count 10 --default\n",
+		"thelb admin service add far --pool dmz --vip 192.168.50.10 --proto tcp --port 443 --scheduler mh --method tunnel\n",
+		"thelb admin service add web --pool main --vip 10.0.0.20 --proto tcp --port 80 --scheduler wrr --method direct\n",
+		"thelb admin assign web web-1:tcp/8080 web-2:tcp/9090 --weight web-1=3\n",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script lacks %q:\n%s", want, script)
+		}
+	}
+	var ops []string
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.HasPrefix(line, "thelb ") {
+			continue
+		}
+		adminCalls = nil
+		code, _, errOut := as(t, 0, strings.Fields(line)[1:]...)
+		if code != 0 || len(adminCalls) != 1 {
+			t.Errorf("%q: exit %d, %s, calls %v", line, code, errOut, adminCalls)
+			continue
+		}
+		ops = append(ops, strings.Fields(adminCalls[0])[0])
+	}
+	if strings.Join(ops, " ") != "pool.add pool.add service.add service.add assign assign" {
+		t.Errorf("the changes, in order: %v", ops)
 	}
 }

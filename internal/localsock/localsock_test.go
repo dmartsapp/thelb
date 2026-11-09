@@ -24,6 +24,8 @@ func (fake) Status() status.Status {
 
 func (fake) Admin(c api.Change) (api.Result, error) { return api.Result{Names: c.Names}, nil }
 
+func (fake) Generate(string) (string, error) { return "", nil }
+
 func (fake) SecretText(role string) (string, error) {
 	if role == "director" {
 		return "thelb1:director", nil

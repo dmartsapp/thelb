@@ -10,7 +10,7 @@ Commands:
   backend    run this node as a backend
   status     show the cluster, from the theLB running on this node
   doctor     check this node, and what theLB would change     (not in this build yet)
-  generate   print a file's content, and write nothing: secret
+  generate   print a file's content, and write nothing: secret, commands
   admin      change the cluster, on a director: approve, refuse, remove,
              pool, service, assign, unassign, secret show
 
@@ -104,13 +104,18 @@ Checks this node, and says what theLB would change on it. Not in this build yet.
 `,
 	"generate": `Usage:
   thelb generate secret
+  thelb generate commands
 
 Prints a file's content, and writes nothing.
 
-  secret    a new cluster secret, for a user who wants to create a secret file
-            before the first bootstrap: thelb generate secret > file
+  secret      a new cluster secret, for a user who wants to create a secret file
+              before the first bootstrap: thelb generate secret > file
+  commands    on a director: the thelb admin commands that create the cluster's
+              pools, services and assignments again, as they are - a script to
+              keep, and run after every director has stopped; theLB never
+              reads it: thelb generate commands > /root/thelb-restore.sh
 
-systemd, sysctl, modules, k8s and config come later.
+systemd, sysctl, modules and k8s come later.
 `,
 	"admin": `Usage:
   thelb admin approve <name> ...

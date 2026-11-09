@@ -474,7 +474,7 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 
 func generateCmd(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usagef("thelb generate: say what to generate: secret (systemd, sysctl, modules, k8s and config come later)")
+		return usagef("thelb generate: say what to generate: secret or commands (systemd, sysctl, modules and k8s come later)")
 	}
 	switch args[0] {
 	case "secret":
@@ -487,7 +487,17 @@ func generateCmd(args []string, stdout io.Writer) error {
 		}
 		_, _ = fmt.Fprintln(stdout, s.Encode())
 		return nil
-	case "systemd", "sysctl", "modules", "k8s", "config":
+	case "commands":
+		if len(args) > 1 {
+			return usagef("thelb generate commands: unexpected %q", args[1])
+		}
+		resp, err := callDirector(localsock.Request{Op: localsock.OpGenerate, What: "commands"})
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprint(stdout, resp.Text)
+		return nil
+	case "systemd", "sysctl", "modules", "k8s":
 		return notYet("thelb generate " + args[0])
 	default:
 		return usagef("thelb generate: %q is not something theLB generates", args[0])

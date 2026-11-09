@@ -255,6 +255,22 @@ An offer is `node:protocol/port`, as the backend made it. The leader checks that
 
 A backend's application may listen on another port than its service's: assign `web-1:tcp/8080` to a service on port 80, and the backend maps port 80 to 8080 itself, in its own nftables table - the director never changes the port. Each backend may use a port of its own: `web-1:tcp/8080 web-2:tcp/9090`.
 
+### Keeping them: `thelb generate commands`
+
+theLB keeps the cluster's state in memory only, and reads no configuration file, so after **every** director has stopped, the pools, services and assignments are gone. Keep them as a script, printed on any director:
+
+```text
+sudo thelb generate commands > /root/thelb-restore.sh     # again after every change you want kept
+```
+
+It holds the `thelb admin` commands that create them again - each service on the VIP it has now - and, as a comment, the `approve` command for the nodes that were members. After a full stop, once the cluster is created again:
+
+1. approve the directors and the backends as they ask - the script's comment has the command; compare fingerprints first;
+2. wait until `sudo thelb status backends` lists the backends' offers;
+3. run the script on a director: `sudo sh /root/thelb-restore.sh`.
+
+theLB prints the script and never reads it. Keep it with your other backups; it holds no secret.
+
 ### Health
 
 A backend gets traffic - its weight - only while all of these hold, and weight 0 otherwise (no new connections; open ones finish):
@@ -374,7 +390,7 @@ One line per event, on standard error - in the journal, under systemd:
 | The leader is stopped (`SIGTERM`) | It hands leadership to another director first: a short, clean failover. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
-| Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** with `thelb admin`. Keep the commands that created them in a script. |
+| Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). |
 | A backend's application fails | Weight 0 after 3 failed checks (about 6 seconds); back after 2 good ones. |
 | A backend dies | Weight 0 when its 10-second heartbeat lease lapses, or sooner by the leader's check. |
 | theLB crashes on a machine that stays up | Its kernel state stays - a leader's VIPs and IPVS rules keep answering - until theLB starts again (`Restart=always`) and removes it. |
@@ -412,6 +428,7 @@ thelb backend  --join <address|name>:<port> --secret-file <file> --offer <proto>
                [--name <name>] [--interface <name>]
 thelb status   [--json] [--watch] [--role director|backend] [directors|backends|vips|all|<table> ...]
 thelb generate secret
+thelb generate commands
 thelb admin approve <name> ... | --match '<regex>' [--yes]
 thelb admin refuse <name>
 thelb admin remove <name>

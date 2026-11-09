@@ -455,7 +455,7 @@ Only the cluster's desired and decided state - small, and changed when someone o
 
 ### When every director stops
 
-The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, **every one of them waits for approval again**; `thelb admin approve --match` approves many at once. Pools, services and assignments do not come back by themselves: theLB reads no configuration file - only its two secret files - so they are created again with `thelb admin`, by hand or from a script the user keeps (see the proposed [`generate commands`](#what-thelb-generate-prints)).
+The cluster's state is gone, by design; its secrets are not, because they are the user's files. The bootstrap director creates a new cluster, with a new CA, and every director and backend asks to join it again by itself - and, the cluster being new, **every one of them waits for approval again**; `thelb admin approve --match` approves many at once. Pools, services and assignments do not come back by themselves: theLB reads no configuration file - only its two secret files - so they are created again with `thelb admin`, by hand or from a script the user keeps (see [`generate commands`](#what-thelb-generate-prints)).
 
 ## Health checks
 
@@ -556,7 +556,7 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 | `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer <protocol>/<port>[,check=...]` for each application it serves, `--name`, `--interface`. |
 | `thelb status` | The cluster, in tables - see below: alone, a summary; `directors`, `backends` or `vips` for one part of it, `all` for everything, or a table's name (`cluster`, `nodes`, `certificates`, `pending`, `pools`, `offers`, `services`). `--json` for the same as JSON; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
-| `thelb generate` | Prints file content and writes nothing: `secret`, `systemd`, `sysctl`, `modules`, `k8s`, and - proposed - `commands` - see below. |
+| `thelb generate` | Prints file content and writes nothing: `secret`, `commands`, and - to come - `systemd`, `sysctl`, `modules`, `k8s` - see below. |
 | `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>` or `approve --match <regex>`, `refuse <node>`, `remove <node>`, `pool add|remove`, `service add|remove`, `assign|unassign`, `secret show|rotate|retire`. A backend has no `admin`. |
 
 ### `thelb status`
@@ -687,7 +687,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | `generate sysctl` | A `sysctl.d` file with the parameters this node's roles need, for the user who wants them set from boot. |
 | `generate modules` | A `modules-load.d` file with the modules this node needs. |
 | `generate k8s` | The manifests in [Kubernetes](#the-manifests), as one YAML stream. |
-| `generate commands` (proposed) | The `thelb admin` commands that would create the running pools, services and assignments again - a script for the user to keep and run after a full stop. theLB never reads it: it is not a configuration file. |
+| `generate commands` | On a director: the `thelb admin` commands that create the running pools, services and assignments again - each service on the VIP it has - with the nodes to approve as a comment, not a command. A script for the user to keep, and run after a full stop; theLB never reads it: it is not a configuration file. |
 
 ## Observability
 
@@ -768,7 +768,7 @@ Like shint, simpler:
 | Phase | Delivers |
 |---|---|
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
-| 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **port mapping** on the backend, in theLB's own nftables table; **To come:** the return-path check; IPVS's connection synchronisation; an SCTP check; `generate commands` (proposed); `doctor`, `generate`; the watchdog loop; the lab in CI. |
+| 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **port mapping** on the backend, in theLB's own nftables table; **To come:** the return-path check; IPVS's connection synchronisation; an SCTP check; `generate commands`; `doctor`, `generate`; the watchdog loop; the lab in CI. |
 | 2 - the cluster | **Begun in v0.1.0-dev, ahead of the rest of phase 1:** directors joining with their secret and waiting for approval (`admin approve`, `refuse`, `remove`); Raft with the replicated CA; the leader holding the control VIP; the bootstrap rule and restarts, approved directors rejoining by themselves; failover; fail closed; leadership hand-off on stop; the network lab (`make e2e`: a crash, a planned stop, a partition, a full stop). **To come:** a cluster that finds its control VIP claimed by another standing down; `--peers`; secret rotation; IPv6 in the lab on a kernel that has it; chaos tests under load. |
 | 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
 | 4 - tunnelling | **Begun in v0.1.0-dev:** IP-in-IP as a per-service method (`--method tunnel`), IPv4: IPVS's tunnel forwarding, `thelbt0` on the backend, the MSS clamp, backends joining through a router. **To come:** IPv6 (ip6ip6), GUE as an option, the return-path check. |
@@ -777,7 +777,6 @@ Like shint, simpler:
 
 ## Open questions
 
-00. **Recreating the services after a full stop**, without a configuration file: proposed, `thelb generate commands` prints the `admin` commands for the running pools, services and assignments, for the user to keep as a script.
 
 1. **GUE**, beside IP-in-IP (built), as a per-service option for traffic across a multipath network or networks that drop IP protocol 4: 32 bytes a packet, a UDP port to open on the backend, the `fou` module.
 
@@ -787,6 +786,7 @@ Like shint, simpler:
 - **Raft's state is kept in memory only** - no data directory, no opt-in: every start is a new member identity ([The cluster](#the-cluster-and-what-raft-carries)).
 - **A node can be both a director and a backend**, for small setups: two daemons, the backend started after the director with `thelb backend`, under a name of its own; one theLB per role per node ([Roles](#roles)).
 - **The control VIP may be named**: `--vip thelb-vip`, or `--join thelb-vip:7443` on a backend, is resolved when theLB starts - from `/etc/hosts` or DNS - to the one address it has in a network of the node; a name with no such address, or more than one, is refused. A change to what the name resolves to takes effect at the next start.
+- **`thelb generate commands`**, decided by the user: what a configuration file would have brought back after a full stop is a script of `admin` commands the user keeps.
 - **No configuration file**: theLB reads its two secret files and nothing else; everything else is a flag, or the cluster's state, changed with `thelb admin` ([No configuration file](#no-configuration-file)).
 - **Raft is hashicorp/raft**, theLB's first dependency, as the design always named it; its MPL-2.0 licence allows it in an MIT project's binary - its files are unchanged, and their source is public. theLB's own certificate authority stays its own: a few lines over Go's standard library, with the checks theLB needs (an issuer-chosen identity, SPIFFE IDs, a CA loaded from the replicated state).
 - **One control port, three protocols**, told apart by TLS ALPN: Raft, the API between directors, and joins ([The cluster](#the-cluster-and-what-raft-carries)).

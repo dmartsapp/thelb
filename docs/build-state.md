@@ -29,12 +29,14 @@ Where the code is, what is broken, and what comes next - kept up to date at ever
 5. **A scale test in the lab**: a few thousand services; time an apply, count netlink calls, watch memory.
 6. **Health checks spread across directors**, not all on the leader.
 
-Then decisions for the user: **NAT** (who routes the backends' replies back: their network, theLB's policy routes, or full NAT); **BGP with ECMP**, beside or instead of ARP; **`generate commands`**.
+Then decisions for the user: **NAT** (who routes the backends' replies back: their network, theLB's policy routes, or full NAT); **BGP with ECMP**, beside or instead of ARP.
+
+**Built after IP-in-IP: `thelb generate commands`** (the user: "proceed with the generate commands"): on a director, a script of the `admin` commands that create the pools, services and assignments again, each service on its VIP, with the members' `approve --match` as a comment; the lab's round trip - every director stopped, the cluster created again, the nodes approved with the script's own line, the script run - serves the same backends on the same VIP.
 
 ## Open with the user
 
 - **Kubernetes nodes as backends: decided - systemd, no DaemonSet** (confirmed 2026-11-09), and written into the design's [Kubernetes](design.md#where-thelb-runs) section with its reasoning: the leader is the one writer of Services' status; nodes need no API access; nothing of kube-proxy's or Cilium's is patched.
-- **`generate commands`**, NAT, BGP: see above.
+- **NAT** and **BGP**: see above.
 
 ## Still to build (from the design)
 

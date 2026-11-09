@@ -694,6 +694,11 @@ func (b *agent) SecretText(string) (string, error) {
 	return "", errors.New("a secret is shown only on a director")
 }
 
+// Generate refuses: what a backend could print, a director prints.
+func (b *agent) Generate(string) (string, error) {
+	return "", errors.New("thelb generate commands runs on a director")
+}
+
 // Admin refuses: a backend has no admin.
 func (b *agent) Admin(api.Change) (api.Result, error) {
 	return api.Result{}, errors.New("a backend cannot change the cluster: run thelb admin on a director")
