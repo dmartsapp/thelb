@@ -294,7 +294,7 @@ func (n *node) loop(ctx context.Context) error {
 			return n.noSecret()
 		}
 		n.setPhase("looking for the cluster on the control VIP")
-		p, err := n.probe(ctx)
+		p, takenBy, err := n.probe(ctx)
 		if err != nil {
 			return err
 		}
@@ -304,6 +304,11 @@ func (n *node) loop(ctx context.Context) error {
 		var s *session
 		switch decide(exists, n.cfg.Bootstrap, p) {
 		case actRefuseTaken:
+			if takenBy != tcpServer {
+				// It answers ARP, but no connection to the port: often a firewall
+				// on the holder - theLB's own leader among them - dropping it.
+				return fmt.Errorf("%s holds %s, but nothing accepts a connection on port %d: open the control port to the directors in that machine's firewall if it runs theLB, or choose another VIP", takenBy, n.cfg.ControlVIP, n.cfg.ControlPort)
+			}
 			return fmt.Errorf("something that is not theLB answers on %s port %d: the control VIP or port is taken", n.cfg.ControlVIP, n.cfg.ControlPort)
 		case actStopNoSecret:
 			return n.noSecret()
@@ -400,7 +405,7 @@ func (n *node) loadSecrets() error {
 // a bootstrap - for longer than a failover takes, so that it finds nothing only
 // when there is nothing. A look that fails - the link is down, say - counts for
 // nothing: the window starts again. Without --bootstrap it waits for a cluster.
-func (n *node) probe(ctx context.Context) (probe, error) {
+func (n *node) probe(ctx context.Context) (probe, string, error) {
 	window := n.d.ProbeWindow
 	if window == 0 {
 		window = probeWindow
@@ -411,7 +416,7 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 	for {
 		p, who, err := n.probeOnce(ctx)
 		if ctx.Err() != nil {
-			return probeNothing, nil
+			return probeNothing, "", nil
 		}
 		switch {
 		case err != nil:
@@ -421,7 +426,7 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 				n.log.Warn("looking at the control VIP failed; trying again", "vip", n.cfg.ControlVIP, "error", err)
 			}
 		case p == probeTheLB:
-			return p, nil
+			return p, "", nil
 		case p == probeOther:
 			nothingSince = time.Time{}
 			if otherSince.IsZero() {
@@ -429,7 +434,7 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 			}
 			if time.Since(otherSince) >= window {
 				n.log.Error("the control VIP is taken", "vip", n.cfg.ControlVIP, "port", n.cfg.ControlPort, "by", who)
-				return probeOther, nil
+				return probeOther, who, nil
 			}
 		default:
 			otherSince = time.Time{}
@@ -437,7 +442,7 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 				nothingSince = time.Now()
 			}
 			if n.cfg.Bootstrap && time.Since(nothingSince) >= window {
-				return probeNothing, nil
+				return probeNothing, "", nil
 			}
 			if !n.cfg.Bootstrap && time.Now().After(nextWarn) {
 				n.log.Warn("no cluster answers on the control VIP yet; waiting", "vip", n.cfg.ControlVIP, "port", n.cfg.ControlPort)
@@ -446,7 +451,7 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 		}
 		select {
 		case <-ctx.Done():
-			return probeNothing, nil
+			return probeNothing, "", nil
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
@@ -455,6 +460,10 @@ func (n *node) probe(ctx context.Context) (probe, error) {
 // probeOnce is one look: a theLB cluster answers a join's TLS handshake; a
 // connection that does anything else, or a host that answers ARP or neighbour
 // discovery for the VIP but not on the port, is something else.
+// tcpServer is probeOnce's who for a control port that accepts connections but
+// does not complete theLB's handshake.
+const tcpServer = "a TCP server"
+
 func (n *node) probeOnce(ctx context.Context) (probe, string, error) {
 	dctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -466,7 +475,7 @@ func (n *node) probeOnce(ctx context.Context) (probe, string, error) {
 		if err == nil {
 			return probeTheLB, "", nil
 		}
-		return probeOther, "a TCP server", nil
+		return probeOther, tcpServer, nil
 	}
 	if ctx.Err() != nil {
 		return probeNothing, "", nil

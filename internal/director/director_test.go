@@ -75,6 +75,7 @@ type loopNet struct {
 	local string // where its connections come from; "" for anywhere
 	vip   string
 	macs  *sync.Map // the neighbour table: address -> MAC address
+	held  string    // the MAC address VIPHolder finds holding the VIP; "" for none
 
 	mu    sync.Mutex
 	ln    net.Listener
@@ -93,7 +94,7 @@ func (l *loopNet) dial(ctx context.Context, addr string) (net.Conn, error) {
 
 func (l *loopNet) DialVIP(ctx context.Context) (net.Conn, error)           { return l.dial(ctx, l.vip) }
 func (l *loopNet) Dial(ctx context.Context, addr string) (net.Conn, error) { return l.dial(ctx, addr) }
-func (l *loopNet) VIPHolder(context.Context) (string, error)               { return "", nil }
+func (l *loopNet) VIPHolder(context.Context) (string, error)               { return l.held, nil }
 func (l *loopNet) Cleanup() error                                          { return nil }
 func (l *loopNet) Repair() (bool, error)                                   { return false, nil }
 
@@ -486,6 +487,19 @@ func TestSomethingElseOnTheControlVIPIsRefused(t *testing.T) {
 	}
 	if _, statErr := os.Stat(w.cfg.SecretFile); statErr == nil {
 		t.Error("a secret file was created for a VIP that is taken")
+	}
+}
+
+// TestAHeldVIPWhosePortDropsConnectionsSaysSo: a machine answers ARP for the
+// VIP, but no connection reaches the port - a firewall on theLB's leader, often
+// - and the error says that, not merely that the VIP is taken.
+func TestAHeldVIPWhosePortDropsConnectionsSaysSo(t *testing.T) {
+	w := single(t)
+	w.net.held = "02:11:32:24:ac:11"
+	err := Run(context.Background(), w.cfg, w.deps())
+	if err == nil || !strings.Contains(err.Error(), "02:11:32:24:ac:11 holds ") ||
+		!strings.Contains(err.Error(), "but nothing accepts a connection on port") || !strings.Contains(err.Error(), "firewall") {
+		t.Errorf("a held VIP whose port drops connections: %v", err)
 	}
 }
 
