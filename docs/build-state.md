@@ -1,31 +1,27 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after the merge.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
-| `main` | up to `54c83a3`: directors, Raft, the control VIP, backends, pools, services, IPVS direct routing, `status` views, the lab | `make check` green; `make e2e` green (110 checks) |
-| `wip/portmap` | port mapping on the backend (nftables), a director's host as a backend, the control VIP by name, the stream-deadline and planner fixes, the no-configuration-file decision, this file | `make check` green here and on JH; merge into `main` once `make e2e` passes |
+| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing, port mapping on the backend, `status` views, the lab | `make check` green here and on JH; `make e2e` green on JH (136 checks) |
 
-## What `wip/portmap` adds
+`wip/portmap` was merged into `main` by fast-forward on 2026-11-09; nothing is in progress on another branch.
 
-- `internal/nft`: theLB's own nftables client over netlink - table `inet thelb`, chain `portmap` (nat, prerouting, priority dstnat), one rule per VIP, protocol and port (`ip daddr V tcp dport 80 dnat ip to :8080`). The table is replaced whole in one transaction, and removed when no mapping is left. Its root test passes on JH (`TestRootTheTableIsReplacedWhole`).
-- Backends apply the mappings their orders need (`backend.Kernel.Map`); `backnet` removes a table a crash left; `api.Assignment` carries `AppPort`.
-- Directors accept an offer whose port differs from the service's; the IPVS destination keeps the service's port (direct routing never changes it); the director's health check goes to the application's port.
-- **Fixed**: the leader's planner kept pointers into a slice it was still growing, so with two or more services the first by name lost its destinations in IPVS (found by the new lab scenario). It keeps indices now; `TestABackendServesAService` adds a second service to catch it.
-- The lab (`test/lab.sh`) has a second service, `mapped`, on `198.18.0.21:80`, from 8080 on b1, 9090 on b2 and 7070 on b3. The end-to-end test has the same scenario, and its `within` waits by a deadline, not a count of tries.
-- Docs: port mapping is nftables, not eBPF, and why; **no configuration file** (decided); `generate commands` proposed; the changelog, README and help updated.
+## What came in last (from `wip/portmap`)
 
-## Fixed in this branch
-
-- **The heartbeat stream's write deadline**: `serveAPI` set a 10-second deadline for the first request, which covers writes too, and the streams renewed only the read side - so 10 s into every backend's heartbeat connection the leader's writes failed and corrupted the TLS stream (`tls: bad record MAC`), and directors' check-in streams were cut every 10 s. Streams now clear it and set one per message. A backend refused by the cluster - its certificate revoked - had then retried in silence for ever: it now logs each distinct failure at most once a minute, and enrols again when its handshakes keep being refused.
+- **Port mapping on the backend**: `internal/nft`, theLB's own nftables client over netlink - table `inet thelb`, chain `portmap` (nat, prerouting, priority dstnat), one rule per VIP, protocol and port (`ip daddr V tcp dport 80 dnat ip to :8080`), replaced whole in one transaction and removed when no mapping is left. The IPVS destination keeps the service's port; the director's check goes to the application's port.
+- **A director's host as a backend**: two daemons - `thelb backend` started after the director, under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); `status --role`; the clone check per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS lists the host as an ordinary direct-routing destination (`Route`), and its share arrives through the local stack. `test/lab.sh serve dN`.
+- **The control VIP by name**: `--vip thelb-vip`, `--join thelb-vip:7443`, resolved at start to the one address it has in the node's networks.
+- **Fixed**: the planner's pointers into a growing slice (two services: the first lost its destinations); an API stream's first deadline covering writes for its whole life (backend heartbeats and director check-ins cut 10 s in, `tls: bad record MAC`); a refused backend retrying in silence; the end-to-end cleanup waiting for ever on web servers it never stopped.
+- **Decided**: nftables for port mapping, not eBPF; no configuration file; systemd for backends on Kubernetes nodes.
 
 ## Next - the agreed order
 
-1. **Finish port mapping**: `make e2e` on JH, then merge `wip/portmap` into `main`.
-1b. **Built in this branch: a director's host as a backend too** (the user: start the director first, register the backend later, keep systemd for backends): two daemons, `thelb backend` started after the director under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); the clone check is per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS delivers the host's share locally while it leads. `test/lab.sh serve dN`, and an end-to-end scenario. **Also built: the control VIP by name** (`--vip thelb-vip`, `--join thelb-vip:7443`), resolved at start.
+1. ~~Finish port mapping~~ - done, merged.
+1b. ~~A director's host as a backend too~~ - done, merged: (the user: start the director first, register the backend later, keep systemd for backends): two daemons, `thelb backend` started after the director under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); the clone check is per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS delivers the host's share locally while it leads. `test/lab.sh serve dN`, and an end-to-end scenario. **Also built: the control VIP by name** (`--vip thelb-vip`, `--join thelb-vip:7443`), resolved at start.
 2. **IP-in-IP tunnelling**, a per-service method (`--method tunnel`); direct routing stays the default for backends on the director's network. Director: IPVS's tunnel forwarding (tunnel type IPIP). Backend: an `ipip` tunnel interface holding the VIP, `rp_filter` relaxed on it, MSS clamping or MTU guidance. The return-path check matters more here: networks drop replies from the VIP's address outside its subnet. GUE later, as an option.
 3. **Apply what changed, and repair drift**: the leader applies only the difference from what it last applied, and compares the whole kernel every 10 s - putting back what someone removed (the watchdog loop); systemd's watchdog is told only while that loop runs.
 4. **IPVS connection synchronisation**: the sync daemon as master on the VIP holder, backup on the other directors, following leadership - so connections in progress survive a failover.
@@ -36,7 +32,7 @@ Then decisions for the user: **NAT** (who routes the backends' replies back: the
 
 ## Open with the user
 
-- **Kubernetes nodes as backends: DaemonSet or systemd?** The user asked whether a DaemonSet is the right path, for the RBAC to watch LoadBalancer Services and patch them alongside kube-proxy or Cilium. The answer given: no, keep systemd. The Service watching and status patching is one writer's job - the leading director, with the only credentials (read Nodes and EndpointSlices, `patch services/status`, create events). Node backends need no API access. Nothing of kube-proxy's or Cilium's is patched: they read the Service's status (`ingress: [{ip, ipMode: VIP}]`). `loadBalancerClass: dmarts.app/thelb` keeps Cilium's LB-IPAM, L2 announcements and BGP away. The backend agent's `arp_ignore` and `arp_announce` do what kube-proxy's `strictARP` would. If credentials must stay in the cluster, the option is a small controller Deployment, not a DaemonSet. Awaiting the user's decision; then write it into the design's Kubernetes section. To verify in kind (phase 3): kube-proxy (every mode) and Cilium's kube-proxy replacement program LB IPs from the status of a Service with a foreign class.
+- **Kubernetes nodes as backends: decided, systemd** (the user: "we keep systemd for backends") - still to write into the design's Kubernetes section. The reasoning: the user asked whether a DaemonSet is the right path, for the RBAC to watch LoadBalancer Services and patch them alongside kube-proxy or Cilium; the answer: no, keep systemd. The Service watching and status patching is one writer's job - the leading director, with the only credentials (read Nodes and EndpointSlices, `patch services/status`, create events). Node backends need no API access. Nothing of kube-proxy's or Cilium's is patched: they read the Service's status (`ingress: [{ip, ipMode: VIP}]`). `loadBalancerClass: dmarts.app/thelb` keeps Cilium's LB-IPAM, L2 announcements and BGP away. The backend agent's `arp_ignore` and `arp_announce` do what kube-proxy's `strictARP` would. If credentials must stay in the cluster, the option is a small controller Deployment, not a DaemonSet.  To verify in kind (phase 3): kube-proxy (every mode) and Cilium's kube-proxy replacement program LB IPs from the status of a Service with a foreign class.
 - **`generate commands`**, NAT, BGP: see above.
 
 ## Still to build (from the design)
