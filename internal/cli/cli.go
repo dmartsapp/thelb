@@ -176,7 +176,7 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 	case strings.Contains(*vip, "/"):
 		return usagef("thelb director: --vip is the control VIP's address or name, without a prefix: %q", *vip)
 	}
-	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface)
+	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface, false)
 	if err != nil {
 		var u usageError
 		if errors.As(err, &u) {
@@ -277,7 +277,7 @@ var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.
 
 // vipAddr is a --vip or --join host: an address as it is, or a name, resolved
 // now - at start - to the one address it has in a network of this node.
-func vipAddr(ctx context.Context, flag, host, iface string) (netip.Addr, string, error) {
+func vipAddr(ctx context.Context, flag, host, iface string, routed bool) (netip.Addr, string, error) {
 	if a, err := netip.ParseAddr(host); err == nil {
 		return a.Unmap(), "", nil
 	}
@@ -296,6 +296,9 @@ func vipAddr(ctx context.Context, flag, host, iface string) (netip.Addr, string,
 		if _, err := localFor(a, iface); err == nil && !slices.Contains(in, a) {
 			in = append(in, a)
 		}
+	}
+	if len(in) == 0 && routed && len(addrs) == 1 {
+		return addrs[0].Unmap(), host, nil // behind a router: a backend of tunnelled services
 	}
 	switch len(in) {
 	case 1:
@@ -355,7 +358,7 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil || perr != nil || port < 1 || port > 65535 {
 		return usagef("thelb backend: --join is the control VIP, by address or name, and its port, as 10.0.0.10:7443, thelb-vip:7443 or [fd00::10]:7443: %q", *joinTo)
 	}
-	addr, joinName, err := vipAddr(ctx, "--join", host, *iface)
+	addr, joinName, err := vipAddr(ctx, "--join", host, *iface, true)
 	if err != nil {
 		var u usageError
 		if errors.As(err, &u) {
@@ -650,6 +653,7 @@ func serviceCmd(args []string, stdout io.Writer) error {
 	proto := fs.String("proto", "", "")
 	port := fs.Int("port", 0, "")
 	sched := fs.String("scheduler", "", "")
+	method := fs.String("method", "", "")
 	if err := parse(fs, args[2:]); err != nil {
 		return err
 	}
@@ -659,7 +663,7 @@ func serviceCmd(args []string, stdout io.Writer) error {
 	if *proto == "" || *port == 0 {
 		return usagef("thelb admin service add: --proto and --port are required")
 	}
-	return change(stdout, api.Change{Op: "service.add", Names: []string{name}, Pool: *pool, VIP: *vip, Proto: *proto, Port: *port, Scheduler: *sched})
+	return change(stdout, api.Change{Op: "service.add", Names: []string{name}, Pool: *pool, VIP: *vip, Proto: *proto, Port: *port, Scheduler: *sched, Method: *method})
 }
 
 // approveCmd approves pending nodes by name, or every one whose name matches

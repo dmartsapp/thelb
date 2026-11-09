@@ -180,7 +180,16 @@ func (p *Plane) Apply(plan director.Plan) error {
 					if err := p.conn.AddDest(ps.Service, d); err != nil {
 						errs = append(errs, err)
 					} else {
-						p.log.OK("IPVS destination added", "service", key, "backend", ap, "weight", d.Weight)
+						p.log.OK("IPVS destination added", "service", key, "backend", ap, "weight", d.Weight, "method", method(d))
+					}
+				case cur.Tunnel != d.Tunnel:
+					// The forwarding method is the destination's: remove and add it again.
+					if err := p.conn.DelDest(ps.Service, cur); err != nil {
+						errs = append(errs, err)
+					} else if err := p.conn.AddDest(ps.Service, d); err != nil {
+						errs = append(errs, err)
+					} else {
+						p.log.OK("IPVS destination's method changed", "service", key, "backend", ap, "tunnel", d.Tunnel)
 					}
 				case cur.Weight != d.Weight:
 					if err := p.conn.UpdateDest(ps.Service, d); err != nil {
@@ -241,6 +250,13 @@ func (p *Plane) Apply(plan director.Plan) error {
 		p.log.OK("backend pinned", "address", a, "mac", x.MAC, "interface", x.Interface)
 	}
 	return errors.Join(errs...)
+}
+
+func method(d ipvs.Dest) string {
+	if d.Tunnel {
+		return "tunnel"
+	}
+	return "direct"
 }
 
 func (p *Plane) announce(ctx context.Context, ifc *net.Interface, a netip.Addr) {

@@ -80,7 +80,8 @@ func (k *fakeKernel) Hold(v []netip.Addr) error {
 	k.vips = append([]netip.Addr(nil), v...)
 	return nil
 }
-func (k *fakeKernel) Map(m []nft.Map) error {
+func (k *fakeKernel) Tunnel(bool) error { return nil }
+func (k *fakeKernel) Map(m []nft.Map, _ []nft.Clamp) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.maps = append([]nft.Map(nil), m...)

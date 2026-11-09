@@ -171,6 +171,10 @@ func (p *plane) step(ctx context.Context) error {
 		}
 	})
 	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
+	tunnel := map[string]bool{}
+	for _, v := range services {
+		tunnel[v.Name] = v.Tunnel()
+	}
 	checkIns := s.checkInsCopy()
 	s.mu.Lock()
 	beats := map[string]backendLive{}
@@ -234,7 +238,7 @@ func (p *plane) step(ctx context.Context) error {
 		}
 		// Direct routing never changes the port: the destination is the backend
 		// at the service's port, which the backend maps to its application's.
-		ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: ps.Port, Weight: uint32(w)})
+		ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: ps.Port, Weight: uint32(w), Tunnel: tunnel[a.Service]})
 		p.mu.Lock()
 		p.weights[key] = w
 		p.mu.Unlock()
@@ -428,7 +432,7 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 					continue
 				}
 				if v := st.Services[a.Service]; v != nil {
-					orders.Assignments = append(orders.Assignments, api.Assignment{Service: v.Name, VIP: v.VIP, Proto: a.Proto, Port: v.Port, AppPort: a.Port})
+					orders.Assignments = append(orders.Assignments, api.Assignment{Service: v.Name, VIP: v.VIP, Proto: a.Proto, Port: v.Port, AppPort: a.Port, Tunnel: v.Tunnel()})
 				}
 			}
 		})

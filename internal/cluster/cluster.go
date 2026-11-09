@@ -220,9 +220,13 @@ type Service struct {
 	Proto     string    `json:"proto"`
 	Port      int       `json:"port"`
 	Scheduler string    `json:"scheduler"`
+	Method    string    `json:"method,omitempty"` // "direct" (the default) or "tunnel"
 	By        string    `json:"by"`
 	At        time.Time `json:"at"`
 }
+
+// Tunnel is whether the service reaches its backends by IP-in-IP.
+func (s *Service) Tunnel() bool { return s.Method == "tunnel" }
 
 // Offer is what a backend serves: a protocol, its application's port, and how
 // to check it - "tcp", "none" or "http:<path>".

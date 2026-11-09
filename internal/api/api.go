@@ -56,6 +56,7 @@ type Change struct {
 	Proto     string         `json:"proto,omitempty"`
 	Port      int            `json:"port,omitempty"`
 	Scheduler string         `json:"scheduler,omitempty"`
+	Method    string         `json:"method,omitempty"`
 	Offers    []string       `json:"offers,omitempty"` // assign: node:proto/port
 	Weights   map[string]int `json:"weights,omitempty"`
 }
@@ -112,6 +113,7 @@ type Assignment struct {
 	Service string `json:"service"`
 	VIP     string `json:"vip"`
 	Proto   string `json:"proto"`
-	Port    int    `json:"port"`     // the service's
-	AppPort int    `json:"app_port"` // the application's: the offer's
+	Port    int    `json:"port"`             // the service's
+	AppPort int    `json:"app_port"`         // the application's: the offer's
+	Tunnel  bool   `json:"tunnel,omitempty"` // sent by IP-in-IP: the backend unwraps it
 }

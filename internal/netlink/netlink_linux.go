@@ -453,3 +453,21 @@ func (g Genl) Do(cmd uint8, dump bool, attrs []byte) ([][]Attr, error) {
 	}
 	return out, nil
 }
+
+const (
+	iflaInfoData         = 2  // IFLA_INFO_DATA
+	iflaIPTunCollectMeta = 19 // IFLA_IPTUN_COLLECT_METADATA
+)
+
+// AddIPIPExternal creates an IPIP tunnel interface in collect-metadata mode,
+// up: it takes IP-in-IP packets from any sender, and unwraps them.
+func AddIPIPExternal(name string) error {
+	b := ifinfomsg(0, syscall.IFF_UP, syscall.IFF_UP)
+	b = appendAttr(b, syscall.IFLA_IFNAME, append([]byte(name), 0))
+	var info []byte
+	info = appendAttr(info, iflaInfoKind, []byte("ipip"))
+	info = appendAttr(info, iflaInfoData|nlaNested, appendAttr(nil, iflaIPTunCollectMeta, nil))
+	b = appendAttr(b, iflaLinkInfo|nlaNested, info)
+	_, err := do(syscall.RTM_NEWLINK, syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_EXCL, b)
+	return err
+}

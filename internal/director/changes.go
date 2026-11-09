@@ -227,6 +227,13 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 	if c.Port < 1 || c.Port > 65535 {
 		return api.Result{}, errors.New("--port is 1 to 65535")
 	}
+	method := c.Method
+	if method == "" {
+		method = "direct"
+	}
+	if method != "direct" && method != "tunnel" {
+		return api.Result{}, fmt.Errorf("--method is direct or tunnel, not %q", c.Method)
+	}
 	sched := c.Scheduler
 	if sched == "" {
 		sched = "wrr"
@@ -302,12 +309,19 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 			return api.Result{}, fmt.Errorf("the pool %s has no free address", pool.Name)
 		}
 	}
-	svc := cluster.Service{Name: name, Pool: pool.Name, VIP: want.String(), Proto: c.Proto, Port: c.Port, Scheduler: sched}
+	if method == "tunnel" && !want.Is4() {
+		return api.Result{}, errors.New("--method tunnel is IPv4 only in this build: an IPv6 service's backends are reached directly")
+	}
+	svc := cluster.Service{Name: name, Pool: pool.Name, VIP: want.String(), Proto: c.Proto, Port: c.Port, Scheduler: sched, Method: method}
 	if err := s.apply(cluster.TypeServiceAdd, by, svc); err != nil {
 		return api.Result{}, err
 	}
-	s.log.OK("service added", "service", name, "vip", want, "proto", c.Proto, "port", c.Port, "scheduler", sched, "pool", pool.Name, "by", by)
-	return api.Result{Message: fmt.Sprintf("service %s: %s %s/%d", name, want, c.Proto, c.Port)}, nil
+	s.log.OK("service added", "service", name, "vip", want, "proto", c.Proto, "port", c.Port, "scheduler", sched, "method", method, "pool", pool.Name, "by", by)
+	msg := fmt.Sprintf("service %s: %s %s/%d", name, want, c.Proto, c.Port)
+	if method == "tunnel" {
+		msg += ", by IP-in-IP"
+	}
+	return api.Result{Message: msg}, nil
 }
 
 // directorAt is whether a director has the address.
@@ -385,8 +399,11 @@ func (s *session) assign(by string, c api.Change) (api.Result, error) {
 		if port != svc.Port && directorAt(nodes, n.Address) {
 			return api.Result{}, fmt.Errorf("%s runs on a director, so its offer must be on the service's port, %d: while that director leads, a port mapping there would take the clients' packets before IPVS", node, svc.Port)
 		}
-		if _, err := s.n.local(addr, ""); err != nil && addr != s.n.addr.Prefix.Addr() {
-			return api.Result{}, fmt.Errorf("the forward path to %s: this director has no interface in %s's network - direct routing needs one", node, addr)
+		if addr.BitLen() != netip.MustParseAddr(svc.VIP).BitLen() {
+			return api.Result{}, fmt.Errorf("%s's address, %s, is not of the service's family", node, addr)
+		}
+		if _, err := s.n.local(addr, ""); err != nil && addr != s.n.addr.Prefix.Addr() && !svc.Tunnel() {
+			return api.Result{}, fmt.Errorf("the forward path to %s: this director has no interface in %s's network - direct routing needs one; a service with --method tunnel reaches backends in other networks", node, addr)
 		}
 		w := 1
 		if v, ok := c.Weights[node]; ok {

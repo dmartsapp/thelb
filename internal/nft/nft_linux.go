@@ -68,7 +68,28 @@ const (
 	immDreg = 1
 	immData = 2
 
-	natType           = 1
+	natType = 1
+
+	bitwiseSreg = 1
+	bitwiseDreg = 2
+	bitwiseLen  = 3
+	bitwiseMask = 4
+	bitwiseXor  = 5
+	cmpNeq      = 1
+	cmpGt       = 4
+
+	exthdrDreg   = 1
+	exthdrType   = 2
+	exthdrOffset = 3
+	exthdrLen    = 4
+	exthdrOp     = 6
+	exthdrSreg   = 7
+	exthdrTCPOpt = 1 // NFT_EXTHDR_OP_TCPOPT
+	tcpOptMaxseg = 2
+
+	hookOutput        = 3
+	prioMangle        = -150
+	clampChain        = "mss"
 	natFamily         = 2
 	natRegProtoMin    = 5
 	natRegProtoMax    = 6
@@ -174,28 +195,100 @@ func rule(m Map) ([]byte, error) {
 	return b, nil
 }
 
+func cmpOpValue(op uint32, value []byte) []byte {
+	var d []byte
+	d = netlink.AppendAttr(d, cmpSreg, be32(reg1))
+	d = netlink.AppendAttr(d, cmpOp, be32(op))
+	d = netlink.AppendNested(d, cmpData, netlink.AppendAttr(nil, dataValue, value))
+	return expr("cmp", d)
+}
+
+func tcpMaxseg(load bool) []byte {
+	var d []byte
+	if load {
+		d = netlink.AppendAttr(d, exthdrDreg, be32(reg1))
+	} else {
+		d = netlink.AppendAttr(d, exthdrSreg, be32(reg1))
+	}
+	d = netlink.AppendAttr(d, exthdrType, []byte{tcpOptMaxseg})
+	d = netlink.AppendAttr(d, exthdrOffset, be32(2))
+	d = netlink.AppendAttr(d, exthdrLen, be32(2))
+	d = netlink.AppendAttr(d, exthdrOp, be32(exthdrTCPOpt))
+	return expr("exthdr", d)
+}
+
+// clampRule is: meta nfproto ipv4 ip saddr <vip> meta l4proto tcp
+// tcp flags & syn != 0 tcp option maxseg size > <mss>
+// tcp option maxseg size set <mss>.
+func clampRule(c Clamp) []byte {
+	vip := c.VIP.Unmap()
+	var e []byte
+	e = append(e, meta(metaNFProto)...)
+	e = append(e, cmp([]byte{nfprotoIPv4})...)
+	e = append(e, payload(baseNetwork, 12, 4)...)
+	e = append(e, cmp(vip.AsSlice())...)
+	e = append(e, meta(metaL4Proto)...)
+	e = append(e, cmp([]byte{6})...)
+	e = append(e, payload(baseTransport, 13, 1)...)
+	var bw []byte
+	bw = netlink.AppendAttr(bw, bitwiseSreg, be32(reg1))
+	bw = netlink.AppendAttr(bw, bitwiseDreg, be32(reg1))
+	bw = netlink.AppendAttr(bw, bitwiseLen, be32(1))
+	bw = netlink.AppendNested(bw, bitwiseMask, netlink.AppendAttr(nil, dataValue, []byte{0x02}))
+	bw = netlink.AppendNested(bw, bitwiseXor, netlink.AppendAttr(nil, dataValue, []byte{0x00}))
+	e = append(e, expr("bitwise", bw)...)
+	e = append(e, cmpOpValue(cmpNeq, []byte{0})...)
+	e = append(e, tcpMaxseg(true)...)
+	e = append(e, cmpOpValue(cmpGt, be16(c.MSS))...)
+	var imm []byte
+	imm = netlink.AppendAttr(imm, immDreg, be32(reg1))
+	imm = netlink.AppendNested(imm, immData, netlink.AppendAttr(nil, dataValue, be16(c.MSS)))
+	e = append(e, expr("immediate", imm)...)
+	e = append(e, tcpMaxseg(false)...)
+	var b []byte
+	b = netlink.AppendAttr(b, ruleTable, str(Table))
+	b = netlink.AppendAttr(b, ruleChain, str(clampChain))
+	b = netlink.AppendNested(b, ruleExprs, e)
+	return b
+}
+
+func chain(name, typ string, hook uint32, prio int32) message {
+	var h []byte
+	h = netlink.AppendAttr(h, hookNum, be32(hook))
+	h = netlink.AppendAttr(h, hookPrio, be32(uint32(prio)))
+	var c []byte
+	c = netlink.AppendAttr(c, chainTable, str(Table))
+	c = netlink.AppendAttr(c, chainName, str(name))
+	c = netlink.AppendNested(c, chainHook, h)
+	c = netlink.AppendAttr(c, chainType, str(typ))
+	return message{typ: msgNewChain, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: c}
+}
+
 func table() []byte { return netlink.AppendAttr(nil, tableName, str(Table)) }
 
-// Apply makes theLB's table hold exactly maps, in one transaction: the table
-// is replaced whole - created, emptied and filled - or, with no maps, removed.
-func Apply(maps []Map) error {
+// Apply makes theLB's table hold exactly maps and clamps, in one transaction:
+// the table is replaced whole - created, emptied and filled - or, with
+// neither, removed.
+func Apply(maps []Map, clamps ...Clamp) error {
 	msgs := []message{
 		// Adding the table first makes deleting it succeed whether or not it was there.
 		{typ: msgNewTable, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: table()},
 		{typ: msgDelTable, fam: nfprotoINET, body: table()},
 	}
-	if len(maps) > 0 {
+	if len(maps) > 0 || len(clamps) > 0 {
 		msgs = append(msgs, message{typ: msgNewTable, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: table()})
-		var hook []byte
-		hook = netlink.AppendAttr(hook, hookNum, be32(hookPrerouting))
-		p := int32(prioDstNAT)
-		hook = netlink.AppendAttr(hook, hookPrio, be32(uint32(p)))
-		var c []byte
-		c = netlink.AppendAttr(c, chainTable, str(Table))
-		c = netlink.AppendAttr(c, chainName, str(Chain))
-		c = netlink.AppendNested(c, chainHook, hook)
-		c = netlink.AppendAttr(c, chainType, str("nat"))
-		msgs = append(msgs, message{typ: msgNewChain, flags: syscall.NLM_F_CREATE, fam: nfprotoINET, body: c})
+	}
+	if len(clamps) > 0 {
+		msgs = append(msgs, chain(clampChain, "filter", hookOutput, prioMangle))
+		for _, c := range clamps {
+			if !c.VIP.Unmap().Is4() {
+				return fmt.Errorf("clamping the MSS is IPv4 only in this build: %s", c.VIP)
+			}
+			msgs = append(msgs, message{typ: msgNewRule, flags: syscall.NLM_F_CREATE | syscall.NLM_F_APPEND, fam: nfprotoINET, body: clampRule(c)})
+		}
+	}
+	if len(maps) > 0 {
+		msgs = append(msgs, chain(Chain, "nat", hookPrerouting, prioDstNAT))
 		for _, m := range maps {
 			r, err := rule(m)
 			if err != nil {

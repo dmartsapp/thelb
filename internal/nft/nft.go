@@ -24,6 +24,14 @@ type Map struct {
 	AppPort uint16
 }
 
+// Clamp lowers the MSS that TCP handshakes from VIP announce to MSS, so that
+// the client's packets, wrapped by IP-in-IP on their way here, still fit the
+// path.
+type Clamp struct {
+	VIP netip.Addr
+	MSS uint16
+}
+
 func (m Map) String() string {
 	return fmt.Sprintf("%s %s/%d -> %d", m.VIP, m.Proto, m.Port, m.AppPort)
 }

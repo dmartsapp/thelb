@@ -79,3 +79,29 @@ func For(ip netip.Addr, name string) (Address, error) {
 		return Address{}, errors.New("no interface has an address in the network of " + ip.String() + ": name one with --interface")
 	}
 }
+
+// Route is the address this node would send from to reach dst - through a
+// router, when dst is in no network of the node - with its interface. Nothing
+// is sent: a UDP socket's connect only looks the route up.
+var Route = func(dst netip.Addr) (Address, error) {
+	c, err := net.Dial("udp", netip.AddrPortFrom(dst.Unmap(), 9).String())
+	if err != nil {
+		return Address{}, fmt.Errorf("no route to %s: %w", dst, err)
+	}
+	la, _ := c.LocalAddr().(*net.UDPAddr)
+	_ = c.Close()
+	if la == nil {
+		return Address{}, fmt.Errorf("no route to %s", dst)
+	}
+	src, _ := netip.AddrFromSlice(la.IP)
+	addrs, err := List()
+	if err != nil {
+		return Address{}, err
+	}
+	for _, a := range addrs {
+		if a.Prefix.Addr() == src.Unmap() {
+			return a, nil
+		}
+	}
+	return Address{}, fmt.Errorf("the route to %s leaves from %s, which no interface that is up has", dst, src)
+}

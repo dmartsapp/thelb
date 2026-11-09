@@ -5,7 +5,7 @@ package nft
 import "errors"
 
 // Apply is Linux only.
-func Apply([]Map) error { return errors.New("nftables is Linux only") }
+func Apply([]Map, ...Clamp) error { return errors.New("nftables is Linux only") }
 
 // Remove is Linux only.
 func Remove() error { return errors.New("nftables is Linux only") }

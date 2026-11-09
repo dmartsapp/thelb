@@ -25,8 +25,11 @@ import (
 	"github.com/dmartsapp/thelb/internal/sysctl"
 )
 
-// Interface is theLB's dummy interface.
-const Interface = "thelb0"
+// Interface is theLB's dummy interface; TunnelInterface its IP-in-IP one.
+const (
+	Interface       = "thelb0"
+	TunnelInterface = "thelbt0"
+)
 
 // Host is a backend's kernel state.
 type Host struct {
@@ -35,6 +38,8 @@ type Host struct {
 	index  int
 	held   map[netip.Addr]bool
 	maps   []nft.Map // what theLB's nftables table holds
+	clamps []nft.Clamp
+	tunnel bool
 	params sysctl.Changes
 }
 
@@ -51,6 +56,12 @@ func (h *Host) Prepare() error {
 			return fmt.Errorf("removing the %s an earlier run left: %w", Interface, err)
 		}
 		h.log.Warn("removed the "+Interface+" an earlier run left, with its VIPs", "interface", Interface)
+	}
+	if ifc, err := net.InterfaceByName(TunnelInterface); err == nil {
+		if err := netlink.DelLink(ifc.Index); err != nil {
+			return fmt.Errorf("removing the %s an earlier run left: %w", TunnelInterface, err)
+		}
+		h.log.Warn("removed the "+TunnelInterface+" an earlier run left", "interface", TunnelInterface)
 	}
 	if ok, err := nft.Exists(); err == nil && ok {
 		if err := nft.Remove(); err != nil {
@@ -124,21 +135,21 @@ func (h *Host) Hold(vips []netip.Addr) error {
 
 // Map makes theLB's nftables table map exactly maps - replacing it whole - and
 // removes it when there are none: with matching ports there is no rule at all.
-func (h *Host) Map(maps []nft.Map) error {
+func (h *Host) Map(maps []nft.Map, clamps []nft.Clamp) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if slices.Equal(maps, h.maps) {
+	if slices.Equal(maps, h.maps) && slices.Equal(clamps, h.clamps) {
 		return nil
 	}
-	if len(maps) == 0 {
+	if len(maps) == 0 && len(clamps) == 0 {
 		if err := nft.Remove(); err != nil {
 			return fmt.Errorf("removing the nftables table inet %s: %w", nft.Table, err)
 		}
-		h.log.OK("ports no longer mapped: nftables table removed", "table", "inet "+nft.Table)
-		h.maps = nil
+		h.log.OK("nothing to map or clamp: nftables table removed", "table", "inet "+nft.Table)
+		h.maps, h.clamps = nil, nil
 		return nil
 	}
-	if err := nft.Apply(maps); err != nil {
+	if err := nft.Apply(maps, clamps...); err != nil {
 		return fmt.Errorf("mapping ports in the nftables table inet %s: %w", nft.Table, err)
 	}
 	for _, m := range maps {
@@ -146,7 +157,51 @@ func (h *Host) Map(maps []nft.Map) error {
 			h.log.OK("port mapped", "vip", m.VIP, "proto", m.Proto, "port", m.Port, "to", m.AppPort, "table", "inet "+nft.Table)
 		}
 	}
-	h.maps = append([]nft.Map(nil), maps...)
+	for _, c := range clamps {
+		if !slices.Contains(h.clamps, c) {
+			h.log.OK("TCP MSS clamped", "vip", c.VIP, "mss", c.MSS, "table", "inet "+nft.Table)
+		}
+	}
+	h.maps, h.clamps = append([]nft.Map(nil), maps...), append([]nft.Clamp(nil), clamps...)
+	return nil
+}
+
+// Tunnel creates or removes thelbt0: an IP-in-IP interface that takes packets
+// from any director, and unwraps them for the VIPs on thelb0. Reverse-path
+// filtering would drop them - their sources are clients, reached through
+// another interface - so it is off on thelbt0, and loose rather than strict
+// for all interfaces if it was strict.
+func (h *Host) Tunnel(on bool) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if on == h.tunnel {
+		return nil
+	}
+	if !on {
+		if ifc, err := net.InterfaceByName(TunnelInterface); err == nil {
+			if err := netlink.DelLink(ifc.Index); err != nil {
+				return fmt.Errorf("removing %s: %w", TunnelInterface, err)
+			}
+		}
+		h.tunnel = false
+		h.log.OK("interface removed", "interface", TunnelInterface)
+		return nil
+	}
+	if err := netlink.AddIPIPExternal(TunnelInterface); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("creating %s: %w (is the ipip module available?)", TunnelInterface, err)
+	}
+	// thelbt0's own parameter goes with it; the one for all interfaces is
+	// recorded, and put back.
+	if err := sysctl.Write("net/ipv4/conf/"+TunnelInterface+"/rp_filter", "0"); err != nil {
+		return err
+	}
+	if old, changed, err := h.params.Ensure("net/ipv4/conf/all/rp_filter", "2", "0", "2"); err != nil {
+		return err
+	} else if changed {
+		h.log.OK("kernel parameter set", "name", "net/ipv4/conf/all/rp_filter", "value", "2", "was", old)
+	}
+	h.tunnel = true
+	h.log.OK("interface created", "interface", TunnelInterface, "kind", "ipip, from any director")
 	return nil
 }
 
@@ -161,18 +216,28 @@ func (h *Host) Holding() []netip.Addr {
 	return out
 }
 
-// Restore removes thelb0 - and with it the VIPs - and theLB's nftables table,
-// and puts back the parameters theLB changed.
+// Restore removes thelb0 - and with it the VIPs - thelbt0, and theLB's
+// nftables table, and puts back the parameters theLB changed.
 func (h *Host) Restore() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.maps) > 0 {
+	if h.tunnel {
+		if ifc, err := net.InterfaceByName(TunnelInterface); err == nil {
+			if err := netlink.DelLink(ifc.Index); err != nil {
+				h.log.Error("removing "+TunnelInterface+" failed", "error", err)
+			} else {
+				h.log.OK("interface removed", "interface", TunnelInterface)
+			}
+		}
+		h.tunnel = false
+	}
+	if len(h.maps) > 0 || len(h.clamps) > 0 {
 		if err := nft.Remove(); err != nil {
 			h.log.Error("removing the nftables table failed", "table", "inet "+nft.Table, "error", err)
 		} else {
 			h.log.OK("nftables table removed", "table", "inet "+nft.Table)
 		}
-		h.maps = nil
+		h.maps, h.clamps = nil, nil
 	}
 	if h.index != 0 {
 		if err := netlink.DelLink(h.index); err != nil {

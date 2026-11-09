@@ -158,7 +158,11 @@ func (s *session) status() status.Status {
 
 		// Services, and the backends serving them.
 		for _, v := range services {
-			row := status.Service{Service: v.Name, VIP: v.VIP, Protocol: v.Proto, Port: v.Port, Scheduler: v.Scheduler, Method: "direct"}
+			m := "direct"
+			if v.Tunnel() {
+				m = "tunnel"
+			}
+			row := status.Service{Service: v.Name, VIP: v.VIP, Protocol: v.Proto, Port: v.Port, Scheduler: v.Scheduler, Method: m}
 			for _, key := range sortedNames(cs.Assignments) {
 				a := cs.Assignments[key]
 				if a.Service != v.Name {

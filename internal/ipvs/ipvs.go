@@ -60,6 +60,7 @@ type Dest struct {
 	Addr   netip.Addr
 	Port   uint16
 	Weight uint32
+	Tunnel bool // IP-in-IP to the backend, not direct routing
 	Stats  Stats
 }
 

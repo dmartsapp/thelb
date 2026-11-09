@@ -44,12 +44,16 @@ const (
 	destLThresh    = 6
 	destAddrFamily = 11
 	destStats64    = 12
+	destTunType    = 13
 
 	statsConns  = 1
 	statsInPkts = 2
 	statsInByte = 4
 
 	fwdDirectRoute = 3 // IP_VS_CONN_F_DROUTE
+	fwdTunnel      = 2 // IP_VS_CONN_F_TUNNEL
+	fwdMask        = 7 // IP_VS_CONN_F_FWD_MASK
+	tunTypeIPIP    = 0 // IP_VS_CONN_F_TUNNEL_TYPE_IPIP
 )
 
 var native = binary.NativeEndian
@@ -117,7 +121,12 @@ func destAttrs(d Dest) []byte {
 	var b []byte
 	b = netlink.AppendAttr(b, destAddr, addr16(d.Addr))
 	b = netlink.AppendAttr(b, destPort, be16(d.Port))
-	b = netlink.AppendAttr(b, destFwdMethod, u32(fwdDirectRoute))
+	if d.Tunnel {
+		b = netlink.AppendAttr(b, destFwdMethod, u32(fwdTunnel))
+		b = netlink.AppendAttr(b, destTunType, []byte{tunTypeIPIP})
+	} else {
+		b = netlink.AppendAttr(b, destFwdMethod, u32(fwdDirectRoute))
+	}
 	b = netlink.AppendAttr(b, destWeight, u32(d.Weight))
 	b = netlink.AppendAttr(b, destUThresh, u32(0))
 	b = netlink.AppendAttr(b, destLThresh, u32(0))
@@ -236,6 +245,8 @@ func (c *Conn) Dests(s Service) ([]Dest, error) {
 					d.Port = binary.BigEndian.Uint16(f.Data)
 				case destWeight:
 					d.Weight = native.Uint32(f.Data)
+				case destFwdMethod:
+					d.Tunnel = native.Uint32(f.Data)&fwdMask == fwdTunnel
 				case destAddrFamily:
 					fam = native.Uint16(f.Data)
 				case destStats64:

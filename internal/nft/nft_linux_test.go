@@ -49,6 +49,18 @@ func TestRootTheTableIsReplacedWhole(t *testing.T) {
 			}
 		}
 	}
+	// Clamping the MSS of handshakes from a tunnelled VIP.
+	if err := Apply(maps[:1], Clamp{VIP: netip.MustParseAddr("198.18.0.22"), MSS: 1440}); err != nil {
+		t.Fatal(err)
+	}
+	if out := list(t); out != "" {
+		for _, want := range []string{"chain mss", "type filter hook output priority mangle", "ip saddr 198.18.0.22", "tcp option maxseg size > 1440", "tcp option maxseg size set 1440", ":8080"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("nft list lacks %q:\n%s", want, out)
+			}
+		}
+		t.Logf("with a clamp:\n%s", out)
+	}
 	// Applied again with fewer: the old rules are gone.
 	if err := Apply(maps[:1]); err != nil {
 		t.Fatal(err)

@@ -94,7 +94,40 @@ for n in d1 d2 d3 d4 b1 b2 b3 c; do
 	mac[$n]=$(ip netns exec $P-$n cat /sys/class/net/eth0/address)
 	install -d -m 0700 "$tmp/$n"
 done
+# A second network behind a router - 198.19.0.0/24, RFC 2544's other half -
+# with a backend, b4, that only a tunnelled service can reach. The router lets
+# replies from the VIP through: a network that checks source addresses would
+# not, which is what the return path is about.
+NET4B=198.19.0
+ip netns add $P-sw2
+ip -n $P-sw2 link add br0 type bridge mcast_snooping 0
+ip -n $P-sw2 link set br0 up
+ip netns add $P-r
+ip link add eth0 netns $P-r type veth peer name r netns $SW
+ip link add eth1 netns $P-r type veth peer name r netns $P-sw2
+ip -n $SW link set r master br0 up
+ip -n $P-sw2 link set r master br0 up
+for i in lo eth0 eth1; do ip -n $P-r link set $i up; done
+ip -n $P-r addr add $NET4.1/24 dev eth0
+ip -n $P-r addr add $NET4B.1/24 dev eth1
+for k in ip_forward conf/all/rp_filter conf/eth0/rp_filter conf/eth1/rp_filter; do
+	v=0
+	[ $k = ip_forward ] && v=1
+	ip netns exec $P-r sh -c "echo $v >/proc/sys/net/ipv4/$k"
+done
+addr4[b4]=$NET4B.41
+ip netns add $P-b4
+ip link add eth0 netns $P-b4 type veth peer name b4 netns $P-sw2
+ip -n $P-sw2 link set b4 master br0 up
+ip -n $P-b4 link set lo up
+ip -n $P-b4 link set eth0 up
+ip -n $P-b4 addr add ${addr4[b4]}/24 dev eth0
+ip -n $P-b4 route add default via $NET4B.1
+mac[b4]=$(ip netns exec $P-b4 cat /sys/class/net/eth0/address)
+install -d -m 0700 "$tmp/b4"
+for n in d1 d2 d3 d4; do ip -n $P-$n route add $NET4B.0/24 via $NET4.1; done
 echo "   $NET4.0/24, control VIP $VIP4 port $PORT; directors d1-d4 at $NET4.11-14, backends b1-b3 at $NET4.31-33, the client at $NET4.100"
+echo "   $NET4B.0/24 behind a router at $NET4.1: the backend b4 at ${addr4[b4]}"
 
 # start <node> <log> [flags]: a director on the node, with a /run of its own.
 start() {
@@ -473,6 +506,37 @@ check "admin unassign web $host-web, and it stops cleanly" "on $new $bin admin u
 app $host down
 start $host "$tmp/$host.back.log" --vip $VIP4
 check "its director starts again, and rejoins" "within 30 logged $tmp/$host.back.log 'OK director ready'"
+
+echo "== IP-in-IP: a service whose backends are reached by tunnel - one in another network"
+cp -p "$tmp/d1/backend.secret" "$tmp/b4/"
+install -d -m 0755 "$tmp/b4/www"
+echo b4 >"$tmp/b4/www/index.html"
+ip netns exec $P-b4 python3 -m http.server 80 --bind 0.0.0.0 --directory "$tmp/b4/www" >/dev/null 2>&1 &
+web[b4]=$!
+startb b4 "$tmp/b4.log"
+check "b4 joins through the router, and says it can serve only tunnelled services" "within 20 logged $tmp/b4.log 'OK the control VIP is behind a router: this backend can serve only tunnelled services'"
+check "and is a member once approved" "within 20 logged $tmp/b4.log 'OK waiting for approval' && on $new $bin admin approve b4 >/dev/null && within 20 logged $tmp/b4.log 'OK backend ready'"
+check "direct routing to b4 is refused: no interface in its network" "on $new $bin admin assign web b4:tcp/80 2>&1 | grep -q 'a service with --method tunnel reaches backends in other networks'"
+out=$(on $new "$bin" admin service add far --pool lab --proto tcp --port 80 --method tunnel)
+FAR=$(echo "$out" | sed -n 's/^service far: \([0-9.]*\) tcp\/80, by IP-in-IP$/\1/p')
+check "admin service add far --method tunnel" "[ -n \"$FAR\" ]"
+check "admin assign far b4 b1: one behind the router, one beside the director" "on $new $bin admin assign far b4:tcp/80 b1:tcp/80 | grep -q 'assigned to far: b4, b1'"
+if command -v ipvsadm >/dev/null; then
+	check "IPVS sends both by tunnel" "within 20 eval 'ipvs_on $new | grep -A3 \"TCP  $FAR:80\" | grep -cE -- \"(${addr4[b4]}|${addr4[b1]}):80 +Tunnel +1 \" | grep -qx 2'"
+	ipvs_on $new | sed -n "/TCP  $FAR:80/,/^TCP/p" | sed 's/^/      /'
+fi
+check "b4 unwraps them on thelbt0, and holds the VIP on thelb0" "within 10 eval 'ip -n $P-b4 -o link show thelbt0 | grep -q ipip && ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/32\"'"
+if command -v nft >/dev/null; then
+	check "and clamps its handshakes' MSS, so wrapped packets fit" "nft_on b4 | grep -q \"ip saddr $FAR tcp flags syn tcp option maxseg size > 1440 tcp option maxseg size set 1440\""
+fi
+check "status: the service's method is tunnel" "on $new $bin status vips | grep -qE '^ far +\| $FAR +\| tcp/80 +\| wrr +\| tunnel '"
+check "the client is served by both - b4's replies coming back through the router" "within 20 eval '[ \"\$(answers 8 $FAR)\" = \"b1=4 b4=4\" ]'"
+check "admin unassign far b1: b1's tunnel goes" "on $new $bin admin unassign far b1 >/dev/null && within 10 eval '! ip -n $P-b1 link show thelbt0 >/dev/null 2>&1'"
+check "admin service remove far: b4's tunnel, clamp and VIP go" "on $new $bin admin service remove far >/dev/null && within 10 eval '! ip -n $P-b4 link show thelbt0 >/dev/null 2>&1 && ! nft_on b4 >/dev/null && ! ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/\"'"
+stop b4
+code=$?
+check "b4 stops cleanly" "[ $code = 0 ] && logged $tmp/b4.log 'OK stopped'"
+app b4 down
 
 echo "== a backend stops, one is removed, the service is taken down"
 stop b3

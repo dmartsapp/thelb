@@ -74,3 +74,23 @@ func TestRootDummyAddressesAndNeighbours(t *testing.T) {
 		t.Error("thelb0 is still there")
 	}
 }
+
+func TestRootAnIPIPTunnelThatTakesAnySender(t *testing.T) {
+	rootns.Enter(t)
+	if err := AddIPIPExternal("thelbt0"); err != nil {
+		t.Skipf("no ipip module here: %v", err)
+	}
+	ifc, err := net.InterfaceByName("thelbt0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ifc.Flags&net.FlagUp == 0 {
+		t.Error("thelbt0 is not up")
+	}
+	if err := AddIPIPExternal("thelbt0"); err == nil {
+		t.Error("a second one with the same name")
+	}
+	if err := DelLink(ifc.Index); err != nil {
+		t.Fatal(err)
+	}
+}

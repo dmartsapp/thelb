@@ -56,9 +56,12 @@ type Kernel interface {
 	Prepare() error
 	// Hold makes thelb0 hold exactly these VIPs.
 	Hold(vips []netip.Addr) error
-	// Map makes theLB's nftables table map exactly these ports - and removes
-	// the table when there are none.
-	Map(maps []nft.Map) error
+	// Map makes theLB's nftables table map exactly these ports and clamp
+	// exactly these MSSs - and removes the table when there are none.
+	Map(maps []nft.Map, clamps []nft.Clamp) error
+	// Tunnel creates or removes theLB's IP-in-IP interface, thelbt0, which
+	// unwraps what a director sends a tunnelled service.
+	Tunnel(on bool) error
 	// Restore removes thelb0 and puts the parameters back.
 	Restore()
 }
@@ -113,6 +116,14 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		local = hostnet.For
 	}
 	addr, err := local(cfg.Join.Addr(), cfg.Interface)
+	routed := false
+	if err != nil && cfg.Interface == "" && d.Local == nil {
+		// The control VIP is in no network of this node: reached through a
+		// router, which only a tunnelled service's backend may be.
+		if r, rerr := hostnet.Route(cfg.Join.Addr()); rerr == nil {
+			addr, err, routed = r, nil, true
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("the control VIP %s: %w", cfg.Join.Addr(), err)
 	}
@@ -150,6 +161,9 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	defer b.kernel.Restore()
 	if cfg.JoinName != "" {
 		log.OK("control VIP resolved", "name", cfg.JoinName, "vip", cfg.Join.Addr())
+	}
+	if routed {
+		log.OK("the control VIP is behind a router: this backend can serve only tunnelled services", "vip", cfg.Join.Addr(), "from", addr.Prefix.Addr(), "interface", addr.Interface)
 	}
 	log.OK("node fingerprint", "node", cfg.Name, "fingerprint", b.claim.Fingerprint, "hostname", in.Hostname, "interface", addr.Interface, "address", addr.Prefix.Addr())
 
@@ -494,6 +508,8 @@ func (b *agent) obey(as []api.Assignment) {
 	}
 	var vips []netip.Addr
 	var maps []nft.Map
+	var clamps []nft.Clamp
+	tunnel := false
 	for _, a := range as {
 		v, err := netip.ParseAddr(a.VIP)
 		if err != nil {
@@ -505,9 +521,20 @@ func (b *agent) obey(as []api.Assignment) {
 		if a.AppPort != 0 && a.AppPort != a.Port {
 			maps = append(maps, nft.Map{VIP: v, Proto: a.Proto, Port: uint16(a.Port), AppPort: uint16(a.AppPort)})
 		}
+		if a.Tunnel {
+			tunnel = true
+			if c := (nft.Clamp{VIP: v, MSS: b.mss()}); a.Proto == "tcp" && !slices.Contains(clamps, c) {
+				clamps = append(clamps, c)
+			}
+		}
 	}
-	// The mappings first, then the VIPs: a packet the VIP accepts is mapped.
-	if err := b.kernel.Map(maps); err != nil {
+	// The tunnel, then the mappings and clamps, then the VIPs: a packet the VIP
+	// accepts is unwrapped and mapped.
+	if err := b.kernel.Tunnel(tunnel); err != nil {
+		b.log.Error("the IP-in-IP interface failed", "error", err)
+		return
+	}
+	if err := b.kernel.Map(maps, clamps); err != nil {
 		b.log.Error("mapping the services' ports failed", "error", err)
 		return
 	}
@@ -565,6 +592,17 @@ func (b *agent) leave(m *membership) {
 	}
 	b.log.OK("the leader drains this backend", "for", drainFor)
 	time.Sleep(drainFor)
+}
+
+// mss is the MSS a tunnelled service's TCP handshakes announce: the
+// interface's MTU less IP-in-IP's outer header (20 bytes) and the inner IP and
+// TCP headers (40), so the client's segments still fit once wrapped.
+func (b *agent) mss() uint16 {
+	mtu := 1500
+	if ifc, err := net.InterfaceByName(b.local.Interface); err == nil && ifc.MTU > 0 {
+		mtu = ifc.MTU
+	}
+	return uint16(mtu - 20 - 40)
 }
 
 // renew asks the leader to sign a new certificate for the backend's key.
