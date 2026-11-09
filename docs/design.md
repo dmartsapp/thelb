@@ -55,7 +55,7 @@ Not in scope, for now: proxying (a later capability - see [Phases](#phases)), NA
 | **Agent** | theLB running on a backend - under systemd, on a Kubernetes node as on any other machine. |
 | **Cluster secrets** | Two random secrets - one for directors, one for backends - created by the director that first bootstraps the cluster, in the files the user names, and copied by the user to every node of that role. A node joins by proving it knows its role's secret. |
 | **Pool** | Service VIPs a director registered: a first address in CIDR notation, and how many addresses follow it. The control VIP is in no pool. |
-| **Offer** | What a backend registers: a protocol and the port its application listens on (`tcp/8080`), and how to check it. No name and no VIP: the same application may listen on 8080 on one node and on 9090 on another. |
+| **Offer** | What a backend registers: one of its applications, under a name the backend chooses (`shop`), the protocol and port it listens on (`tcp/8080`), and how to check it. Made when the backend starts or while it runs, and recorded only once the leader's check of it passes. No service and no VIP: the same application may listen on 8080 on one node and on 9090 on another. |
 | **Assignment** | An offer given to a service by a director: the service's name, VIP and port, and the backend's weight. |
 
 ## Where it works
@@ -378,22 +378,28 @@ When the cluster is recreated - every director stopped - backends find the new c
 
 ### Offers, services and assignments
 
-**A backend offers; a director decides.** A backend registers only what it serves - a protocol and the port its application listens on, and how to check it:
+**A backend offers; a director decides.** A backend registers only what it serves - each application under a name of its own choosing, the protocol and port it listens on, and how to check it - when it starts, or later, once the application is up (decided by the user: a backend joins first, offering nothing if it likes, and registers its applications itself while it is a member):
 
 ```text
 sudo thelb backend --name web-1 --join 10.0.0.10:7443 --secret-file /etc/thelb/backend.secret \
-  --offer tcp/8080,check=http:/healthz
+  --offer shop=tcp/8080,check=http:/healthz
+sudo thelb offer add metrics tcp/9100          # on web-1, while it runs
+sudo thelb offer remove metrics
 ```
 
 It names no service and no VIP, so no backend needs to know a service's name, or which port its peers use: nginx may listen on 8080 on one node and on 9090 on another.
 
-**Every offer appears in `thelb status`** on every director, with the service it is assigned to - or none: an offer without a service is waiting for one (see [`thelb status`](#thelb-status)).
+**The leader checks an offer before it records it**: the offer's own check - a TCP connect by default - from the leader, at the backend's address and port. An application that does not answer is refused, with the reason. A backend offers an `--offer` flag only once its own check of it passes - so it may start before its applications - and one refused again when its check passes again, or 10 s later. A recorded offer is then watched as any is: the backend's own check every 2 seconds, reported with each heartbeat, and - once assigned - the leader's. A failing check takes the offer out of its services' rotation (weight 0) without unassigning it; it comes back by itself.
+
+**Offers outlive their nodes' restarts**: the cluster keeps them, and a backend that starts again takes up what the cluster holds for it. **And the directors' outage**: a backend keeps what it offers in memory - its flags, what it offered since, what it took up - and offers it all again to a cluster created again, once approved there, so a single director's restart costs the backends nothing; the directors' side - services and assignments - comes back from [`thelb generate commands`](#what-thelb-generate-prints). An offer is withdrawn only by `thelb offer remove` (or the backend's removal), never by a restart.
+
+**Every offer appears in `thelb status`** on every director - `thelb status offers` - with its backend's own check and the service it is assigned to, or none: an offer without a service is waiting for one (see [`thelb status`](#thelb-status)).
 
 **A director creates services, and assigns offers to them** - the service's name, chosen there; its VIP, the lowest free address of a pool or one it names; its protocol and port:
 
 ```text
 sudo thelb admin service add nginx --pool external --proto tcp --port 80
-sudo thelb admin assign nginx web-1:tcp/8080 web-2:tcp/9090 --weight web-1=3
+sudo thelb admin assign nginx web-1:shop web-2:shop --weight web-1=3     # or web-1:tcp/8080, by port
 ```
 
 `--match '<regular expression>'` assigns the waiting offers of every matching node, after a confirmation. A VIP carries any number of services, each on its own port.
@@ -405,6 +411,8 @@ sudo thelb admin assign nginx web-1:tcp/8080 web-2:tcp/9090 --weight web-1=3
 3. **the return path**: the backend is told the VIP and sends a probe with the VIP as its source - from a raw socket, so it needs no address for it - to a director's own address in the VIP's network. The director watches for it on its interfaces, ahead of its own IP stack (which drops a packet from one of its own addresses). The probe arriving shows that the backend's replies, sent from the VIP through its own gateway, get through. If it does not arrive, the assignment is refused, and `status` says why.
 
 Then the backend adds the VIP to `thelb0`, maps the service's port to its own - 80 to 8080 on `web-1`, 80 to 9090 on `web-2` - checks its application, and reports ready; when both its own check and the director's pass, the director adds it to the IPVS service, with its weight. `thelb admin unassign nginx web-2` takes an offer back.
+
+**The service's VIP comes up last** (decided by the user: the offer still active, then IPVS, then the VIP): the leader holds a service's VIP only while a backend serves one of the VIP's services, and adds it only after IPVS has that backend - so the first packet the VIP takes in has somewhere to go. When the last backend stops serving, the VIP goes first, then IPVS changes. A service without a backend serving has its address reserved in its pool, and nothing on the network.
 
 **A backend never chooses a service**, so a compromised backend cannot claim one: it can offer, and a director decides.
 
@@ -439,7 +447,7 @@ Only the cluster's desired and decided state - small, and changed when someone o
 | Revoked certificate serials, until they would have expired | `admin remove` |
 | Services: name, VIP, protocol, port, scheduler, persistence, forwarding method, where it came from (configuration, command line, Kubernetes) | the configuration is loaded, `admin service add`/`remove`, a Kubernetes Service changes |
 | Pools: first address and prefix, count, interface, and every address allocated from them, with its service | configuration, `admin pool add`/`remove`, an allocation or a release |
-| Offers: node, protocol, application port, check | a backend offers, or withdraws an offer |
+| Offers: node, name, protocol, application port, check, since when | a backend offers - once the leader's check passes - or withdraws an offer; a backend removed |
 | Assignments: offer, service, weight, the result of the path checks | `admin assign`/`unassign`, a backend removed |
 | Backend health: healthy or not, per assignment | the state **changes**, debounced - not every check |
 | VIP holders and their term | the leader changes; later, VIP assignments |
@@ -553,7 +561,8 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 |---|---|
 | `thelb` | With no command: the help, and nothing else, whether or not theLB is running; exit status `0`. |
 | `thelb director` | Runs this node as a director: `--vip` (an address, or a name) and `--port` for the control VIP, `--secret-file` for the directors' secret and `--backend-secret-file` for the backends' (written the first time a cluster is bootstrapped, if missing), `--bootstrap` where wanted, `--cluster` for the cluster's name at bootstrap (default `thelb`), `--name` for this node's (default: its hostname), `--interface` when the control VIP's interface is not the one in its network. |
-| `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer <protocol>/<port>[,check=...]` for each application it serves, `--name`, `--interface`. |
+| `thelb backend` | Runs this node as a backend: `--join <control VIP:port>`, `--secret-file` for the backends' secret, `--offer [<name>=]<protocol>/<port>[,check=...]` for each application it serves at start (none is fine), `--name`, `--interface`. |
+| `thelb offer` | On a backend: `add <name> <protocol>/<port>[,check=...]` offers an application to the cluster - recorded once the leader's check passes - and `remove <name>` withdraws it. |
 | `thelb status` | The cluster, in tables - see below: alone, a summary; `directors`, `backends` or `vips` for one part of it, `all` for everything, or a table's name (`cluster`, `nodes`, `certificates`, `pending`, `pools`, `offers`, `services`). `--json` for the same as JSON; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
 | `thelb generate` | Prints file content and writes nothing: `secret`, `commands`, and - to come - `systemd`, `sysctl`, `modules`, `k8s` - see below. |
@@ -599,11 +608,11 @@ $ sudo thelb status all
  internal | 10.0.0.0/24  | 10.0.0.50 - 10.0.0.59   | eth1      | 1 of 10
 (2 rows)
 
- node  | address   | offer    | check         | service | since
--------+-----------+----------+---------------+---------+-------
- web-1 | 10.0.0.21 | tcp/8080 | http /healthz | nginx   | 2 h
- web-2 | 10.0.0.22 | tcp/9090 | http /healthz | -       | 40 s
- db-1  | 10.0.0.31 | tcp/5432 | tcp           | db      | 2 h
+ node  | offer | address   | port     | check         | own check | service | since
+-------+-------+-----------+----------+---------------+-----------+---------+-------
+ web-1 | shop  | 10.0.0.21 | tcp/8080 | http /healthz | ok        | nginx   | 2 h
+ web-2 | shop  | 10.0.0.22 | tcp/9090 | http /healthz | ok        | -       | 40 s
+ db-1  | pg    | 10.0.0.31 | tcp/5432 | tcp           | ok        | db      | 2 h
 (3 rows)
 
  vip        | purpose | pool     | interface | held by | since
@@ -638,7 +647,7 @@ $ sudo thelb status all
   "certificates": [ { "certificate": "theLB prod CA", "kind": "ca", "fingerprint": "b39b2bc27e695d13...", "not_after": "2036-11-06T10:02:11Z" } ],
   "pending": [ { "pending": "lb-4", "role": "director", "address": "10.0.0.14", "mac": "52:54:00:3a:19:04", "node_fingerprint": "7c41e0a2f39b55d1", "waiting_seconds": 120 } ],
   "pools": [ { "pool": "external", "network": "10.10.1.0/24", "first": "10.10.1.20", "count": 10, "interface": "eth0", "used": 1 } ],
-  "offers": [ { "node": "web-2", "address": "10.0.0.22", "protocol": "tcp", "port": 9090, "check": "http /healthz", "service": null, "since_seconds": 40 } ],
+  "offers": [ { "node": "web-2", "offer": "shop", "address": "10.0.0.22", "protocol": "tcp", "port": 9090, "check": "http /healthz", "own_check": "ok", "service": null, "since_seconds": 40 } ],
   "vips": [ { "vip": "10.10.1.20", "purpose": "service", "pool": "external", "interface": "eth0", "held_by": "lb-1", "since": "2026-11-09T10:05:40Z" } ],
   "services": [ { "service": "nginx", "vip": "10.10.1.20", "protocol": "tcp", "port": 80, "scheduler": "wrr", "method": "direct", "backends_up": 1, "backends": 1 } ],
   "backends": [ { "service": "nginx", "vip": "10.10.1.20", "port": 80, "backend": "web-1", "address": "10.0.0.21", "app_port": 8080, "own_check": "ok", "director_check": "ok", "weight": 3, "connections": 412, "packets": 918244, "bytes": 1181116006, "last_check_in_seconds": 1.1 } ]
@@ -647,17 +656,17 @@ $ sudo thelb status all
 
 **On a director**, `status` shows the whole cluster, as above - everything except secret material: no secret and no key, ever. **Only an approved director can tell which service runs where**: on which node's address and port, behind which VIP, and how much traffic it has been sent - `checks` is the backend's own check and the director's, `packets` and `bytes` what IPVS forwarded to it (direct return means the replies never pass the director, so there is no outbound count). A director that is not the leader asks the leader for what only the leader knows (backends' last check-ins), and says so if it cannot reach it. A secret is shown only by `thelb admin secret show`, and only on a director.
 
-**On a backend**, `status` shows what that backend is, and nothing about the rest of the cluster: that it is a backend, the cluster's name, each of its offers with the name of the service a director assigned it to (`-` while it waits) - not the service's VIP - and its node fingerprint.
+**On a backend**, `status` shows what that backend is, and nothing about the rest of the cluster: that it is a backend, the cluster's name, each of its offers - its name, port, check, its own check's state, whether the cluster holds it - with the name of the service a director assigned it to (`-` while it waits) - not the service's VIP - and its node fingerprint.
 
 ```text
 $ sudo thelb status
- role    | cluster | offer    | service | node fingerprint
----------+---------+----------+---------+------------------
- backend | prod    | tcp/8080 | nginx   | 0be98d17c46a2f83
+ role    | cluster | state                   | offer | port     | check         | own check | offered | service | node fingerprint
+---------+---------+-------------------------+-------+----------+---------------+-----------+---------+---------+------------------
+ backend | prod    | a member of the cluster | shop  | tcp/8080 | http /healthz | ok        | yes     | nginx   | 0be98d17c46a2f83
 (1 row)
 ```
 
-`--json` gives the same: `{ "role": "backend", "cluster": "prod", "offers": [ { "offer": "tcp/8080", "service": "nginx" } ], "node_fingerprint": "0be98d17c46a2f83" }`. While the backend waits for approval, it has no offers listed yet, and its fingerprint is the one a director's `pending` table shows for it. (The VIP is on the backend's `thelb0` all the same - `ip address` shows it; leaving it out of `status` keeps the backend's view to what the backend needs, it does not hide it.)
+`--json` gives the same: `{ "role": "backend", "cluster": "prod", "offers": [ { "offer": "shop", "port": "tcp/8080", "offered": "yes", "service": "nginx" } ], "node_fingerprint": "0be98d17c46a2f83" }`. While the backend waits for approval, it has no offers listed yet, and its fingerprint is the one a director's `pending` table shows for it. (The VIP is on the backend's `thelb0` all the same - `ip address` shows it; leaving it out of `status` keeps the backend's view to what the backend needs, it does not hide it.)
 
 ### The local socket
 
@@ -791,7 +800,7 @@ Like shint, simpler:
 - **Raft is hashicorp/raft**, theLB's first dependency, as the design always named it; its MPL-2.0 licence allows it in an MIT project's binary - its files are unchanged, and their source is public. theLB's own certificate authority stays its own: a few lines over Go's standard library, with the checks theLB needs (an issuer-chosen identity, SPIFFE IDs, a CA loaded from the replicated state).
 - **One control port, three protocols**, told apart by TLS ALPN: Raft, the API between directors, and joins ([The cluster](#the-cluster-and-what-raft-carries)).
 - **`thelb status` is a summary by default**, with a view for each part of the cluster - `directors`, `backends`, `vips` - and `all` for everything: one page with every table was too full to read ([`thelb status`](#thelb-status)).
-- **A backend's heartbeat goes to the leader on the control VIP**, one connection, every 2 seconds, with its offers, its own checks and the VIPs it holds; the leader answers with what it is to serve. A backend that stops says so first, and keeps its VIPs until the leader has drained it.
+- **A backend's heartbeat goes to the leader on the control VIP**, one connection, every 2 seconds, with its own checks of its offers and the VIPs it holds; the leader answers with what it is to serve, and the offers the cluster holds for it. Offers are made and withdrawn by requests of their own, each answered - recorded only after the leader's check. A backend that stops says so first, and keeps its VIPs until the leader has drained it.
 - **The leader writes a backend's health to Raft only when it changes** - both checks passing, the heartbeat current, the VIP held - so a new leader programs the same weights at once, then confirms them with its own checks.
 - **RHEL 9 is supported**, so the minimum kernel is 5.14; theLB probes the kernel's features rather than trusting its version, and adapts where a newer feature is missing ([Kernels](#kernels)).
 - **Directors bootstrap from the command line**, all with the same command - the control VIP, its port and the secret files - and one or more also with `--bootstrap`. The first bootstrap creates the secrets and writes them to the named files, once, if missing; the user copies them to the other nodes; a node whose secret the cluster does not accept stops as out of date; the CA is created in memory by the bootstrapping director and replicated to every director, so a failover keeps it; after a full stop the cluster is created again and every node rejoins by itself ([Bootstrapping and joining](#bootstrapping-and-joining-directors)).
@@ -808,7 +817,7 @@ Like shint, simpler:
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.
 - **Backends enrol and prove themselves** with the backends' secret, then certificates from the cluster's CA, their address and MAC address, and a heartbeat lease ([Backends](#backends-enrolment-trust-and-services)).
 - **Pools** hold the service VIPs: registered on any director, as a first address in CIDR notation and `--vippool-count`, with overlap checks and network probes; the control VIP is the bootstrap's own ([Address pools](#address-pools)).
-- **Backends offer, directors decide**: a backend registers only a protocol and its application's port; a director names services and assigns offers to them, after checking the forward and the return path; VIPs carry no port ([Offers, services and assignments](#offers-services-and-assignments)).
+- **Backends offer, directors decide**: a backend registers its applications - each under a name it chooses, with a protocol and its application's port - at start or while it runs, checked by the leader first, and keeps them through the directors' outage; a director names services and assigns offers to them, after checking the forward and the return path; VIPs carry no port ([Offers, services and assignments](#offers-services-and-assignments)).
 - **One daemon, every interface**: VIPs on any of a director's interfaces, served together ([Many interfaces, one daemon](#many-interfaces-one-daemon)).
 - **Port mapping on the backend is nftables destination NAT**, in theLB's own table, written over netlink - not eBPF: connection tracking handles the replies, SCTP's checksum, ICMP errors and fragments ([Port mapping](#port-mapping-on-the-backend)).
 - **Weighted round robin** is the default scheduler, with IPVS's connection synchronisation on by default so connections survive a failover.

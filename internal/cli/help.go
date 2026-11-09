@@ -64,10 +64,11 @@ and holds the VIPs of the services its offers are assigned to on its own
 interface, thelb0, without answering ARP for them. It never chooses a service:
 a director assigns its offers (thelb admin assign).
 
-What it offers: its --offer flags, and what is offered while it runs with
-thelb offer add. The cluster keeps its offers: a backend that starts again
-takes them up again, and offers them to a cluster created again. An offer the
-leader refuses - its application not answering - is offered again every 10 s.
+What it offers: its --offer flags - each offered once its own check of it
+passes - and what is offered while it runs with thelb offer add. The cluster
+keeps its offers: a backend that starts again takes them up again, and offers
+them to a cluster created again. An offer the leader refuses is offered again
+when its check passes again, or 10 s later.
 
 Flags:
   --join <address:port>   the control VIP - an address or a name - and port

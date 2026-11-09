@@ -32,7 +32,7 @@ theLB balances TCP, UDP and SCTP traffic sent to a virtual IP address - a **VIP*
 Every machine runs the same binary, `thelb`, in one of two roles:
 
 - **Directors** receive the clients' traffic and forward it. They form a cluster with Raft; one of them, the **leader**, holds the VIPs, programs IPVS and makes every decision. One director works; **three are recommended**, so that one can fail.
-- **Backends** run your applications. Each one tells the cluster what it **offers** - a protocol and a port, `tcp/8080` - and checks its own applications.
+- **Backends** run your applications. Each one **offers** its applications to the cluster - each under a name the backend gives it, at a protocol and a port: `shop` at `tcp/8080` - when it starts, or later, once the application is up. The leader checks that an application answers before it records the offer, and the backend keeps checking its own applications.
 
 On a director you create **pools** of VIP addresses, **services** (a VIP, a protocol and a port, `198.18.0.20 tcp/80`), and **assign** backends' offers to them. A backend never chooses a service: a director decides.
 
@@ -88,10 +88,10 @@ sudo install -o root -m 0600 backend.secret /etc/thelb/backend.secret   # on web
 
 ```text
 sudo thelb backend --join 10.0.0.10:7443 --secret-file /etc/thelb/backend.secret \
-  --offer tcp/80,check=http:/
+  --offer web=tcp/80,check=http:/
 ```
 
-It joins and waits for approval: its log says `waiting for approval`, with its node fingerprint.
+It joins and waits for approval: its log says `waiting for approval`, with its node fingerprint. (Without `--offer`, it joins offering nothing; offer an application later with `thelb offer add` - section 10.)
 
 **4. Approve them**, on the director - after checking that the fingerprints are the ones the backends show:
 
@@ -105,10 +105,11 @@ sudo thelb admin approve --match 'web-[0-9]+'     # shows the matching nodes, as
 ```text
 sudo thelb admin pool add main --vip 10.0.0.20/24 --vippool-count 10
 sudo thelb admin service add web --pool main --proto tcp --port 80
-sudo thelb admin assign web web-1:tcp/80 web-2:tcp/80
+sudo thelb status offers        # each backend's offer "web", unassigned
+sudo thelb admin assign web web-1:web web-2:web
 ```
 
-The service takes the pool's lowest free address, `10.0.0.20`. Within a few seconds both backends pass their checks and get traffic:
+The service takes the pool's lowest free address, `10.0.0.20`. Within a few seconds both backends pass their checks and get traffic, and the leader brings the VIP up - once IPVS has a backend for it:
 
 ```text
 sudo thelb status vips          # the VIPs, the service: "2 of 2" backends up
@@ -167,7 +168,7 @@ Wants=network-online.target
 Type=notify
 NotifyAccess=main
 ExecStart=/usr/local/bin/thelb backend --join 10.0.0.10:7443 \
-  --secret-file /etc/thelb/backend.secret --offer tcp/80,check=http:/
+  --secret-file /etc/thelb/backend.secret --offer web=tcp/80,check=http:/
 Restart=always
 RestartSec=1
 WatchdogSec=30
@@ -182,7 +183,7 @@ sudo systemctl enable --now thelb-director     # or thelb-backend
 journalctl -u thelb-director -f                # its log
 ```
 
-The flags in a unit are the node's whole setup: there is no configuration file. To change what a backend offers, change its unit and restart it.
+The flags in a unit are the node's whole setup: there is no configuration file. A backend offers its `--offer` flags at every start; what it offers while it runs, with `thelb offer add`, the cluster keeps - a backend that starts again takes it up again. To withdraw an offer, use `thelb offer remove <name>`: taking a flag out of the unit does not withdraw what the cluster holds.
 
 ## 7. The secret files
 
@@ -245,11 +246,12 @@ sudo thelb admin service remove dns
 ### Assignments
 
 ```text
-sudo thelb admin assign web web-1:tcp/80 web-2:tcp/80 --weight web-1=3
+sudo thelb status offers                                  # every backend's offers; "-" under service: unassigned
+sudo thelb admin assign web web-1:shop web-2:shop --weight web-1=3
 sudo thelb admin unassign web web-2
 ```
 
-An offer is `node:protocol/port`, as the backend made it. The leader checks that the backend offers it, that its protocol is the service's, and - for a directly routed service - that the director has an interface in the backend's network. Weights are 0 to 65535, 1 by default; 0 sends no new connections.
+An offer is `node:name`, by the name its backend gave it - or `node:protocol/port`, as `web-1:tcp/8080`. The leader checks that the backend offers it, that its protocol is the service's, and - for a directly routed service - that the director has an interface in the backend's network. Weights are 0 to 65535, 1 by default; 0 sends no new connections. A backend withdrawing an offer ends its assignments; one that moves an offer to another port takes its assignments along.
 
 ### Port mapping
 
@@ -266,7 +268,7 @@ sudo thelb generate commands > /root/thelb-restore.sh     # again after every ch
 It holds the `thelb admin` commands that create them again - each service on the VIP it has now - and, as a comment, the `approve` command for the nodes that were members. After a full stop, once the cluster is created again:
 
 1. approve the directors and the backends as they ask - the script's comment has the command; compare fingerprints first;
-2. wait until `sudo thelb status backends` lists the backends' offers;
+2. wait until `sudo thelb status offers` lists the backends' offers - each backend offers again, by itself, what it offered before;
 3. run the script on a director: `sudo sh /root/thelb-restore.sh`.
 
 theLB prints the script and never reads it. Keep it with your other backups; it holds no secret.
@@ -282,19 +284,40 @@ A backend gets traffic - its weight - only while all of these hold, and weight 0
 
 Checks run every 2 seconds, with a 1-second timeout: healthy after 2 successes in a row, unhealthy after 3 failures. Kinds: `check=tcp` (connect; TCP's default), `check=http:/path` (a GET, any 2xx or 3xx), `check=none` (UDP's and SCTP's default).
 
+A backend whose check fails stays assigned: it gets no traffic until its checks pass again, and then gets it back by itself.
+
+**The service's VIP** is held by the leader only while a backend serves one of the VIP's services: IPVS is programmed first, then the VIP comes up. A service with no backend serving has no VIP on the network - its address stays reserved in the pool - and when its last backend stops serving, the VIP goes first, then IPVS changes.
+
 ## 10. Backends
 
 ```text
 sudo thelb backend --join <control VIP:port> --secret-file /etc/thelb/backend.secret \
-  --offer tcp/8080,check=http:/healthz --offer udp/53 [--name web-1] [--interface eth0]
+  [--offer shop=tcp/8080,check=http:/healthz --offer dns=udp/53] [--name web-1] [--interface eth0]
 ```
 
-- **`--join`** is the control VIP - an address or a name - and the control port. **`--name`** defaults to the hostname. **`--offer`** may be given any number of times.
+- **`--join`** is the control VIP - an address or a name - and the control port. **`--name`** defaults to the hostname. **`--offer`** may be given any number of times, or not at all.
+
+### Offers
+
+An offer is one of the backend's applications: a **name** the backend chooses (letters, digits, `.`, `-`, `_`, up to 63), a protocol, a port, and a check. Each name, and each protocol and port, once per backend. A backend offers in two ways:
+
+```text
+--offer shop=tcp/8080,check=http:/healthz        # at start: named tcp-8080 without "shop="
+sudo thelb offer add shop tcp/8080,check=http:/healthz     # while it runs, once the application is up
+sudo thelb offer remove shop                               # withdrawn: its assignments end
+```
+
+- **The leader checks first**: before it records an offer, it runs the offer's check against the application, at the backend's address. `thelb offer add` prints the result, or why the leader refused - `the leader's check of shop (http /healthz) at 10.0.0.21:8080 fails: ...`. An `--offer` is offered once the backend's own check of it passes - so a backend may start before its applications - and, if the leader refuses it, again when its check passes again, or 10 seconds later.
+- **Recorded, it is unassigned** until a director assigns it: `sudo thelb status offers` on a director lists every offer, its backend's own check, and its service - `-` while unassigned.
+- **The backend checks it** every 2 seconds and reports with every heartbeat: assigned, it gets traffic only while its checks pass.
+- **The cluster keeps the offers**: a backend that restarts takes up what the cluster holds for it, flags or not.
+- **The backend keeps them too**: when every director has stopped and the cluster is created again, the backend enrols again by itself and - once approved - offers everything it offered before; nothing has to be done on the backend. The services and assignments are the directors' to create again (section 9, `thelb generate commands`).
+- `thelb offer add` with the name of an offer already made, and another port or check, replaces it: its assignments follow it to the new port.
 - **Your application** must listen on all addresses (`0.0.0.0`, `::`), or on the VIP: the VIP is added to the backend's own interface `thelb0`, not to `eth0`.
 - **What it changes**: it creates `thelb0` (no ARP) and puts the VIPs of its services on it; it sets `net.ipv4.conf.all.arp_ignore=1` and `arp_announce=2` (unless already stricter), so it never answers ARP for a VIP; it maps ports, and for tunnelled services creates `thelbt0` and clamps TCP's MSS (section 11). All of it is removed, and the parameters restored, when it stops.
 - **Stopping it** (`SIGTERM`, `systemctl stop`): it asks the leader to drain it, keeps its VIPs a moment longer so connections already sent to it are not lost, then removes everything.
 - **Removed by a director**, it stops; if it starts again, it waits for approval.
-- **`thelb status` on a backend** shows only that backend: its role, the cluster's name, its state, each offer with its own check and the service it is assigned to - never a VIP - and its node fingerprint.
+- **`thelb status` on a backend** shows only that backend: its role, the cluster's name, its state, each offer - its name, port, check, its own check's state, whether the cluster holds it (`offered`), the service it is assigned to - never a VIP - and its node fingerprint.
 
 ## 11. Forwarding: direct routing or IP-in-IP
 
@@ -323,9 +346,9 @@ For small setups, a director's machine can also run your application. Start the 
 
 ```text
 sudo thelb backend --join 10.0.0.10:7443 --secret-file /etc/thelb/backend.secret \
-  --name lb-1-web --offer tcp/80,check=http:/
+  --name lb-1-web --offer web=tcp/80,check=http:/
 sudo thelb admin approve lb-1-web
-sudo thelb admin assign web lb-1-web:tcp/80
+sudo thelb admin assign web lb-1-web:web
 ```
 
 - The two are separate daemons, with separate sockets: `thelb status` on that machine asks the director (and lists the machine twice: as a director and as a backend); `thelb status --role backend` asks the backend.
@@ -339,6 +362,7 @@ sudo thelb admin assign web lb-1-web:tcp/80
 sudo thelb status                  # the summary: the cluster, and how many of each are up
 sudo thelb status directors        # directors, pending directors, their certificates
 sudo thelb status backends         # backends, pending backends, offers, who serves what
+sudo thelb status offers           # every backend's offers, and which are unassigned
 sudo thelb status vips             # VIPs and their holders, services, pools
 sudo thelb status all              # everything
 sudo thelb status nodes pending    # tables by name: cluster, nodes, certificates, pending, pools, offers, services
@@ -351,7 +375,8 @@ What the columns say:
 - **nodes - state**: `up`; `down` (no check-in for 3 seconds - a director - or no heartbeat for 10 - a backend); `catching up` (a new director, not yet voting); `unknown` (this director cannot reach the leader).
 - **backends - checks**: the backend's own check and the leader's: `ok`, `fail`, or `-` (no result yet). **weight**: what IPVS has now - the assigned weight, or 0. **connections, packets, bytes**: what IPVS sent the backend; there is no outbound count, because the replies never pass the director.
 - **services - backends up**: how many of the assigned backends have a weight above 0. **method**: `direct` or `tunnel`.
-- **vips - held by**: the leader; **since**: when it took it.
+- **offers - offer**: the name its backend gave it; **own check**: the backend's own check, as its last heartbeat said; **service**: what it is assigned to, `-` while unassigned.
+- **vips - held by**: the leader, while a backend serves one of the VIP's services - `-` otherwise; **since**: when it took it.
 
 ## 14. What theLB changes on a machine
 
@@ -390,8 +415,9 @@ One line per event, on standard error - in the journal, under systemd:
 | The leader is stopped (`SIGTERM`) | It hands leadership to another director first: a short, clean failover. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
-| Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). |
-| A backend's application fails | Weight 0 after 3 failed checks (about 6 seconds); back after 2 good ones. |
+| Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). The backends lose nothing: each enrols again by itself and, once approved, offers again what it offered. |
+| A backend restarts | It rejoins without approval, and takes up the offers the cluster holds for it; its assignments stay. |
+| A backend's application fails | Weight 0 after 3 failed checks (about 6 seconds); back after 2 good ones. It stays assigned. When no backend of a VIP's services serves, the leader gives the VIP up until one does. |
 | A backend dies | Weight 0 when its 10-second heartbeat lease lapses, or sooner by the leader's check. |
 | theLB crashes on a machine that stays up | Its kernel state stays - a leader's VIPs and IPVS rules keep answering - until theLB starts again (`Restart=always`) and removes it. |
 
@@ -408,6 +434,10 @@ One line per event, on standard error - in the journal, under systemd:
 | `the name ... is a director's: give this backend a name of its own, with --name` | On a director's machine, name the backend differently. |
 | `the forward path to ...: this director has no interface in ...'s network - direct routing needs one` | That backend is in another network: use a `--method tunnel` service for it. |
 | `... runs on a director, so its offer must be on the service's port` | A backend on a director's machine cannot map ports: offer the service's port. |
+| `the leader's check of <offer> (...) at <address:port> fails: ...` | The leader cannot reach the application at the backend's address and port: start it, make it listen on that address, or open the firewall to the directors. An `--offer` is offered again once its check passes. |
+| `<node> offers tcp/8080 already, as <name>` | One offer per protocol and port on a backend: withdraw the other first (`thelb offer remove <name>`). |
+| `this backend is not a member of a cluster yet` | `thelb offer` works once the backend is approved. |
+| `<node> does not offer <name>: it offers ...` | Assign one of the offers listed, by its name: `sudo thelb status offers`. |
 | `backend not serving: weight 0 ... reason="..."` | The reason says which condition failed: `no heartbeat`, `its own check fails`, `it does not hold the VIP yet`, `the director's check fails`, `it is stopping`. |
 | `IPVS is not available (is the ip_vs module loaded?)` | Load `ip_vs` (`sudo modprobe ip_vs`), or install the kernel's modules. |
 | `creating thelbt0: ... (is the ipip module available?)` | The backend of a tunnelled service needs `ipip`: `sudo modprobe ipip`. |
@@ -424,8 +454,10 @@ Every command but `--help` and `--version` runs only as root. Exit status: `0` d
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
                [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>]
-thelb backend  --join <address|name>:<port> --secret-file <file> --offer <proto>/<port>[,check=tcp|none|http:<path>] ...
+thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name>=]<proto>/<port>[,check=tcp|none|http:<path>] ...]
                [--name <name>] [--interface <name>]
+thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
+thelb offer remove <name>                                               (on a backend)
 thelb status   [--json] [--watch] [--role director|backend] [directors|backends|vips|all|<table> ...]
 thelb generate secret
 thelb generate commands
@@ -437,7 +469,7 @@ thelb admin pool remove <name>
 thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>]
                [--scheduler wrr|rr|wlc|lc|sh|mh] [--method direct|tunnel]
 thelb admin service remove <name>
-thelb admin assign <service> <node>:<proto>/<port> ... [--weight <node>=<n>,...]
+thelb admin assign <service> <node>:<offer> ... [--weight <node>=<n>,...]     (<offer>: its name, or <proto>/<port>)
 thelb admin unassign <service> <node>
 thelb admin secret show --role director|backend
 thelb --version

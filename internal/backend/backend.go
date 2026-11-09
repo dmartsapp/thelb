@@ -293,6 +293,10 @@ func (b *agent) checkOffer(ctx context.Context, c *checker) {
 		b.mu.Lock()
 		changed := st.Observe(err)
 		healthy := st.Healthy
+		if changed && healthy {
+			// Up: offered at once, if the leader refused it while it was down.
+			delete(b.refused, o.Name)
+		}
 		b.mu.Unlock()
 		if changed {
 			if healthy {
@@ -763,6 +767,8 @@ func (b *agent) Status() status.Status {
 			row.Offered = "yes"
 		case !b.refused[name].IsZero():
 			row.Offered = "not yet: refused"
+		case b.checkers[name] == nil || !b.checkers[name].state.Healthy:
+			row.Offered = "not yet: its own check"
 		default:
 			row.Offered = "not yet"
 		}
@@ -833,8 +839,9 @@ type offerStep struct {
 	offer cluster.Offer
 }
 
-// toOffer is what the cluster's offers lack, or hold and should not. b.mu is
-// held.
+// toOffer is what the cluster's offers lack, or hold and should not: an
+// application is offered once its own check passes - the leader then checks it
+// too. b.mu is held.
 func (b *agent) toOffer(now time.Time) []offerStep {
 	var steps []offerStep
 	for _, n := range cluster.Sorted(b.recorded) {
@@ -847,7 +854,7 @@ func (b *agent) toOffer(now time.Time) []offerStep {
 		if r, ok := b.recorded[n]; ok && r.Same(o) {
 			continue
 		}
-		if now.Sub(b.refused[n]) < refuseFor {
+		if c := b.checkers[n]; c == nil || !c.state.Healthy || now.Sub(b.refused[n]) < refuseFor {
 			continue
 		}
 		steps = append(steps, offerStep{"add", o})
