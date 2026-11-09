@@ -128,7 +128,9 @@ sudo thelb director --vip 10.0.0.10 --port 7443 \
 
 It finds the cluster on the control VIP and waits for approval; approve it on a director (`sudo thelb admin approve lb-2`). It then follows the leader, is promoted to a voting member once it has caught up, and takes over if the leader fails.
 
-- **Use three directors** (or five). Two are less available than one: losing either loses the majority, and with it the leader.
+- **A planned stop takes a director out of the vote.** Stopped with `SIGTERM`, `Ctrl+C` or `SIGHUP`, a director - after handing leadership over, if it led - has the leader take its member identity out of Raft, so the directors left keep their majority without it. It stays approved, and rejoins without approval when it starts again. `thelb status directors` shows it as `stopped`, not `down`.
+- **Two directors survive either one's planned stop, not a crash.** A crashed director still counts towards the majority, and with two, the one left can neither lead nor win an election. Put `--bootstrap` on both: the crashed one, started again, finds no leader on the control VIP and creates the cluster again; the other moves over to it by itself and waits for approval - approve it, and run your `thelb generate commands` script (section 9).
+- **Use three directors** (or five) to survive a crash: three keep their majority when any one fails.
 - **`--bootstrap`** on a director lets it create the cluster when it finds none - after looking for 5 seconds. Put it on the first director; you may put it on others too, so that the cluster does not depend on one machine coming back after every director has stopped.
 - **A director that restarts** while the cluster runs rejoins by itself, without approval: the cluster remembers it, by its node fingerprint, address and MAC address.
 - **Connections in progress survive a failover.** The leader runs IPVS's connection-synchronisation daemon as master on the control VIP's interface, sending its connection entries by multicast; every director runs one as backup, taking them in. The director that takes over already knows which backend each connection goes to. The sync ID comes from the cluster's ID, so two clusters on one network do not mix. The roles follow leadership, with no setting to make.
@@ -374,7 +376,7 @@ sudo thelb status --watch          # again every 2 seconds
 
 What the columns say:
 
-- **nodes - state**: `up`; `down` (no check-in for 3 seconds - a director - or no heartbeat for 10 - a backend); `catching up` (a new director, not yet voting); `unknown` (this director cannot reach the leader).
+- **nodes - state**: `up`; `down` (no check-in for 3 seconds - a director - or no heartbeat for 10 - a backend); `catching up` (a new director, not yet voting); `stopped` (a director stopped by plan, out of the vote until it starts again); `unknown` (this director cannot reach the leader).
 - **backends - checks**: the backend's own check and the leader's: `ok`, `fail`, or `-` (no result yet). **weight**: what IPVS has now - the assigned weight, or 0. **connections, packets, bytes**: what IPVS sent the backend; there is no outbound count, because the replies never pass the director.
 - **services - backends up**: how many of the assigned backends have a weight above 0. **method**: `direct` or `tunnel`.
 - **offers - offer**: the name its backend gave it; **own check**: the backend's own check, as its last heartbeat said; **service**: what it is assigned to, `-` while unassigned.
@@ -425,7 +427,8 @@ One line per event, on standard error - in the journal, under systemd:
 | What | What happens |
 |---|---|
 | The leader dies | The other directors elect a leader - within 1.5 to 3 seconds in tests - which takes the control VIP and the service VIPs, announces them and programs IPVS the same way. New connections go on, and so do connections in progress: IPVS's connection synchronisation has told the new leader where each one goes. Where multicast does not pass between the directors, connections in progress are lost; new ones are not. |
-| The leader is stopped (`SIGTERM`, `Ctrl+C`, or `SIGHUP` when its terminal or SSH session closes) | It hands leadership to another director first: a short, clean failover. |
+| The leader is stopped (`SIGTERM`, `Ctrl+C`, or `SIGHUP` when its terminal or SSH session closes) | It hands leadership to another director first: a short, clean failover. Then the new leader takes it out of the vote, so the others keep their majority without it - two directors survive it. |
+| Another director is stopped by plan | The leader takes it out of the vote: it leads on, even when it is the only director left. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
 | Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). The backends lose nothing: each enrols again by itself and, once approved, offers again what it offered. |

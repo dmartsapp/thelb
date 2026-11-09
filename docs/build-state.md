@@ -1,11 +1,12 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after IPVS connection synchronisation was merged.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, with a planned stop leaving the vote on `wip/leave`.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
+| `wip/leave` | a planned stop takes the director out of the vote (API op `leave`), so two directors survive either one's planned stop; `status` state `stopped`; the user agreed (2026-11-09: "agreed with the 2 director strategy; build it to the binary on jh i will test it in 4 hours") | to test: `make remote-check`, `make remote-e2e REMOTE=JH`; then the binary on JH, `~/thelb/bin/thelb`, replaced - the user asked for it |
 | `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, IPVS connection synchronisation, port mapping on the backend, `status` views, `generate commands`, offers by name made while a backend runs, a service's VIP held once a backend serves it, drift repair and the systemd watchdog, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (185 checks) |
 
 `wip/connsync` (IPVS connection synchronisation; leftover IPVS services on a pool's address removed; the error for a control VIP whose port a firewall drops) was merged into `main` by fast-forward on 2026-11-09, after `wip/sighup`, `wip/drift`, `wip/offers`, `wip/gencmds`, `wip/ipip` and `wip/portmap`; nothing is in progress on another branch. The user runs their own director on JH from `~/thelb/bin/thelb` (910d8d3), and a second on their `cp` machine (192.168.1.136): leave that binary alone. **Seen 2026-11-09**: with two directors, the JH one stopped cleanly (it handed leadership to cp), and cp, one of two voters, could not keep or elect a leader - the stopped member's identity is gone for good (Raft is in memory), so it never comes back to vote.

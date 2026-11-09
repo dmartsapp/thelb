@@ -321,7 +321,11 @@ Left out, for their problems: `hostid` (derived from an IP address when `/etc/ho
 
 ### Restarts, and the bootstrap rule
 
-Raft's state is in memory, so a restarted director remembers nothing of the cluster. The secret file is what lets it find its way back:
+Raft's state is in memory, so a restarted director remembers nothing of the cluster. The secret file is what lets it find its way back.
+
+Every start is a new member identity, so the old one never votes again. **A planned stop takes it out of Raft**: the stopping director - after handing leadership over, if it led - asks the leader to remove its identity (API op `leave`), or removes it itself if it still leads, so the others keep their majority without it; two directors survive either one's planned stop. A crash leaves the identity in, counting towards the majority, until the director rejoins and the leader replaces it - so two directors do not survive a crash, and three survive one. With two, the crashed one started again with `--bootstrap` finds no leader and creates the cluster again; the other, leaderless, finds that cluster on the control VIP and moves over to it.
+
+The secret file is what lets a director find its way back:
 
 | Situation | A director with `--bootstrap` | A director without it |
 |---|---|---|
