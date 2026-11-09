@@ -1,16 +1,21 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after IP-in-IP was merged.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after `generate commands` was merged.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
-| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (149 checks) |
+| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (158 checks) |
 
-`wip/ipip` was merged into `main` by fast-forward on 2026-11-09, after `wip/portmap`; nothing is in progress on another branch.
+`wip/gencmds` was merged into `main` by fast-forward on 2026-11-09, after `wip/ipip` and `wip/portmap`; nothing is in progress on another branch.
 
-## What came in last (from `wip/portmap`)
+## What came in last (from `wip/gencmds`)
+
+- **`thelb generate commands`**, on a director: a script of the `thelb admin` commands that create the pools, services and assignments again - each service on the VIP it has, weights other than 1 kept - with the members' `approve --match` line as a comment, never a command. theLB prints it and never reads it. A backend refuses: it runs on a director. `localsock` op `generate`.
+- **The lab's round trip** (end to end): every director stopped; d1 bootstraps the cluster again, empty; the directors and then the backends are approved with the script's own line (the backends enrol again by themselves when another cluster's CA answers); the script run; the client served 4/4/4 on the same VIP.
+
+## Came in before (from `wip/portmap`)
 
 - **Port mapping on the backend**: `internal/nft`, theLB's own nftables client over netlink - table `inet thelb`, chain `portmap` (nat, prerouting, priority dstnat), one rule per VIP, protocol and port (`ip daddr V tcp dport 80 dnat ip to :8080`), replaced whole in one transaction and removed when no mapping is left. The IPVS destination keeps the service's port; the director's check goes to the application's port.
 - **A director's host as a backend**: two daemons - `thelb backend` started after the director, under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); `status --role`; the clone check per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS lists the host as an ordinary direct-routing destination (`Route`), and its share arrives through the local stack. `test/lab.sh serve dN`.
