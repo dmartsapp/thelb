@@ -2,6 +2,7 @@ package director
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"net/netip"
@@ -36,6 +37,68 @@ type Dataplane interface {
 	// kernel has them and this data plane did not add them: what a crash left,
 	// on a director that does not lead.
 	Leftovers(Plan) error
+	// Sync runs IPVS's connection-synchronisation daemons as s says - a backup
+	// on every member, a master on the leader - and stops those it does not say,
+	// a master an earlier run left among them. SyncState{} stops both.
+	Sync(s SyncState) error
+}
+
+// SyncState is the IPVS connection synchronisation a director runs: the leader
+// sends its connections, every member takes in the leader's, so a director that
+// takes the VIPs over carries on with connections already in progress.
+type SyncState struct {
+	Interface string // where the directors meet: the control VIP's interface
+	SyncID    uint32 // the cluster's, so two clusters on one network do not mix
+	Master    bool
+	Backup    bool
+}
+
+// syncID is a cluster's IPVS sync ID, from its ID: 1 to 255 (a backup with ID 0
+// would take in every cluster's connections).
+func syncID(clusterID string) uint32 {
+	h := sha256.Sum256([]byte(clusterID))
+	return 1 + uint32(h[0])%255
+}
+
+// syncDaemons sets this director's IPVS connection synchronisation: a backup
+// while it is a member, and a master too while it leads; stop ends both. Whether
+// it leads is read here, under syncMu, so of two calls racing a change of
+// leadership the last one is right.
+func (s *session) syncDaemons(stop bool) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	master := s.leading() != nil
+	want := SyncState{}
+	if !stop {
+		s.mu.Lock()
+		member := s.member
+		s.mu.Unlock()
+		if !member {
+			return // not admitted yet: waitMember starts the backup once it is
+		}
+		var id string
+		s.fsm.Read(func(st *cluster.State) {
+			if st.Cluster != nil {
+				id = st.Cluster.ID
+			}
+		})
+		if id == "" {
+			return // not a cluster's member yet
+		}
+		want = SyncState{Interface: s.n.addr.Interface, SyncID: syncID(id), Master: master, Backup: true}
+	}
+	err := s.dp().Sync(want)
+	s.mu.Lock()
+	said := s.syncErr
+	if err != nil {
+		s.syncErr = err.Error()
+	} else {
+		s.syncErr = ""
+	}
+	s.mu.Unlock()
+	if err != nil && err.Error() != said {
+		s.log.Warn("IPVS connection synchronisation failed: connections in progress would not survive a failover", "error", err)
+	}
 }
 
 // Plan is what the kernel is to hold.
@@ -132,6 +195,15 @@ func (s *session) serve(ctx context.Context) {
 	defer s.n.alive.Done("data plane")
 	var lastErr, repairErr string
 	repaired := time.Now()
+	s.syncDaemons(false) // the master too, now that it leads
+	defer func() {
+		s.mu.Lock()
+		closing := s.closing
+		s.mu.Unlock()
+		if !closing {
+			s.syncDaemons(false) // a follower again: the backup only
+		}
+	}()
 	for {
 		s.n.alive.Tick("data plane", stallAfter)
 		changed := s.fsm.Changed()
@@ -529,6 +601,7 @@ func (nothing) Stats() map[string]ipvs.Stats                      { return nil }
 func (nothing) Clear()                                            {}
 func (nothing) Probe(context.Context, netip.Addr) (string, error) { return "", nil }
 func (nothing) Leftovers(Plan) error                              { return nil }
+func (nothing) Sync(SyncState) error                              { return nil }
 
 // known is what the cluster's state says a holder of the VIPs programs - its
 // services and pinned backends, whatever their health - for Leftovers.

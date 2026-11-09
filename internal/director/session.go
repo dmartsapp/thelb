@@ -60,6 +60,9 @@ type session struct {
 	conns     map[net.Conn]struct{}
 	authority *ca.Authority
 	closing   bool
+	member    bool       // the replicated state has this director as a member
+	syncErr   string     // the IPVS sync daemons' last error, said once
+	syncMu    sync.Mutex // one change to the sync daemons at a time
 }
 
 // checkIn is a member's last check-in with the leader: a director's, or a
@@ -206,6 +209,7 @@ func (s *session) close(planned bool) {
 	s.cancel()
 	s.wg.Wait() // the loops - and a lead() under way, which must not take the VIP after this
 	s.unlead("stopping")
+	s.syncDaemons(true)
 	if s.r != nil {
 		_ = s.r.Shutdown().Error()
 	}
@@ -508,12 +512,16 @@ func (s *session) waitMember() {
 		switch {
 		case !member && created && n != nil && n.RaftID == s.raftID:
 			member = true
+			s.mu.Lock()
+			s.member = true
+			s.mu.Unlock()
 			s.n.member(s)
 			if s.leading() == nil {
 				if err := s.dp().Leftovers(s.known()); err != nil {
 					s.log.Warn("removing what an earlier run left in the kernel failed", "error", err)
 				}
 			}
+			s.syncDaemons(false) // the backup: the leader's connections, taken in
 		case member && n == nil:
 			s.finish(errRemoved)
 			return

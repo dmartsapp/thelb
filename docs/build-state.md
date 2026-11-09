@@ -1,11 +1,12 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after the SIGHUP fix was merged.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, with IPVS connection synchronisation on `wip/connsync`.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
+| `wip/connsync` | IPVS connection synchronisation: `internal/ipvs` daemons (genetlink NEW/DEL/GET_DAEMON), `dplane.Plane.Sync`, the session running a backup while a member and a master while it leads; e2e: six held connections through an echo service across the leader's crash | `make check` green here; the root test `TestRootSyncDaemons` green on JH; `make remote-e2e REMOTE=JH` to run, then fast-forward `main` |
 | `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, `generate commands`, offers by name made while a backend runs, a service's VIP held once a backend serves it, drift repair and the systemd watchdog, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (178 checks) |
 
 `wip/sighup` (SIGHUP stops theLB cleanly, as SIGTERM does - a closed SSH session had left the control VIP on JH's `ens3`) was merged into `main` by fast-forward on 2026-11-09, after `wip/drift`, `wip/offers`, `wip/gencmds`, `wip/ipip` and `wip/portmap`; nothing is in progress on another branch. The user runs their own director and backend on JH from `~/thelb/bin/thelb` (910d8d3): leave that binary alone.
@@ -42,18 +43,18 @@ The cluster keeps the offers through a backend's restart; the backend keeps them
 2. ~~IP-in-IP tunnelling~~ - done, merged: `--method tunnel`, IPv4; the director needs only a route to the backend; `thelbt0` (IPIP, collect-metadata mode, from any director) unwraps; `rp_filter` 0 on `thelbt0` and 2 for all if it was 1 (restored); an nftables MSS clamp (MTU - 60) for each tunnelled VIP; a backend may join a control VIP behind a router, and then serves tunnelled services only. **Left for later**: IPv6 (ip6ip6), GUE, the return-path check.
 2b. **The user manual** - written: `docs/manual.md`, for operators; keep it in step with every change.
 3. ~~**Apply what changed, and repair drift**~~ - done, merged (the user, 2026-11-09: "you can work on your next stage"): the leader applies only the difference from the plan it last applied (nothing while it is the same), and compares the whole kernel every 10 s - IPVS, the service VIPs, the control VIP, pins, parameters - putting back and logging what drifted; a backend repairs `thelb0` and its VIPs, the nftables table (by rule count), `thelbt0`, its parameters, every 10 s; `internal/alive` tells systemd's watchdog only while the loops go round (director: check-in, data plane; backend: heartbeat, kernel repair; 30 s overdue stops it). Root tests: `internal/dplane`, `internal/backnet`; e2e: a drift section and the nftables table in the port-mapping one. **Not yet**: netlink notifications to react before the 10 s; a rule edited inside the table without changing their number.
-4. **IPVS connection synchronisation**: the sync daemon as master on the VIP holder, backup on the other directors, following leadership - so connections in progress survive a failover.
+4. **IPVS connection synchronisation** - built on `wip/connsync`: a backup on every member (started once the replicated state has it as a member), a master too on the leader (started when its data plane starts, stopped when it ends), on the control VIP's interface; sync ID `1 + sha256(cluster ID)[0] % 255`; multicast `224.0.0.81` UDP `8848`, IPv4 only, unauthenticated - the manual says the directors' network must be trusted. A daemon a crash left is adopted when it matches, removed otherwise (the master of a leader that crashed); one someone stopped is started again by the check-in loop's 10 s pass, on every director. A synchronised entry forwards without a destination bound (direct routing and IP-in-IP use its own backend address). **Not yet**: the sync's own `sync_threshold`/`sync_refresh_period` tuning; a `doctor` check that multicast passes; IPv6 multicast groups (kernel 4.3+ allows them).
 5. **A scale test in the lab**: a few thousand services; time an apply, count netlink calls, watch memory.
 6. **Health checks spread across directors**, not all on the leader.
 
-Then decisions for the user: **NAT** (who routes the backends' replies back: their network, theLB's policy routes, or full NAT); **BGP with ECMP**, beside or instead of ARP.
+Then decisions for the user: **BGP with ECMP**, beside or instead of ARP. **NAT is set aside** (the user, 2026-11-09: "keep DR and ipinip as defaults. lets keep the NAT aside for now as it will add complexity"): every reply would cross the director - its bandwidth and CPU, often ten times today's load - it needs connection synchronisation and a gateway VIP, and it only pays where a network drops replies sourced from the VIP (cloud anti-spoofing, strict uRPF; then `--method nat`, theLB's policy routes on the backends, keeping the client's address) or a backend cannot run theLB (then full NAT, losing it).
 
 **Built after IP-in-IP: `thelb generate commands`** (the user: "proceed with the generate commands"): on a director, a script of the `admin` commands that create the pools, services and assignments again, each service on its VIP, with the members' `approve --match` as a comment; the lab's round trip - every director stopped, the cluster created again, the nodes approved with the script's own line, the script run - serves the same backends on the same VIP.
 
 ## Open with the user
 
 - **Kubernetes nodes as backends: decided - systemd, no DaemonSet** (confirmed 2026-11-09), and written into the design's [Kubernetes](design.md#where-thelb-runs) section with its reasoning: the leader is the one writer of Services' status; nodes need no API access; nothing of kube-proxy's or Cilium's is patched.
-- **NAT** and **BGP**: see above.
+- **BGP**: see above. NAT: set aside, see above.
 
 ## Still to build (from the design)
 

@@ -48,6 +48,7 @@ func (f *fakePlane) Clear() {
 }
 func (f *fakePlane) Probe(context.Context, netip.Addr) (string, error) { return "", nil }
 func (f *fakePlane) Leftovers(Plan) error                              { return nil }
+func (f *fakePlane) Sync(SyncState) error                              { return nil }
 
 // weight is the weight the plan gives a backend in a service, or -1.
 func (f *fakePlane) weight(vip string, port int, backend netip.AddrPort) int {

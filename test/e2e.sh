@@ -514,7 +514,65 @@ check "the client is served by b1 and b3 only" "! answers 9 | grep -q b2="
 app b2 up
 check "b2 serves again" "within 20 weight_is d1 b2 1 && within 10 answers_include b2"
 
-echo "== the leader crashes, with the services"
+echo "== connections in progress: IPVS connection synchronisation"
+check "the leader runs the sync master, the others a backup" "within 20 eval 'logged $tmp/d1.restore.log \"OK IPVS connection sync started role=master interface=eth0\" && logged $tmp/d2.restore.log \"OK IPVS connection sync started role=backup\" && logged $tmp/d3.restore.log \"OK IPVS connection sync started role=backup\"'"
+# An echo server on each backend, offered while the backend runs, behind its own service.
+cat >"$tmp/echo.py" <<'PY'
+import socket, threading
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("0.0.0.0", 9000)); s.listen(64)
+def serve(c):
+    with c:
+        while True:
+            d = c.recv(4096)
+            if not d:
+                return
+            c.sendall(d)
+while True:
+    c, _ = s.accept(); threading.Thread(target=serve, args=(c,), daemon=True).start()
+PY
+for n in b1 b2 b3; do ip netns exec $P-$n python3 "$tmp/echo.py" >/dev/null 2>&1 & done
+check "each backend offers its echo server" "within 15 eval 'on b1 $bin offer add echo tcp/9000 >/dev/null 2>&1 && on b2 $bin offer add echo tcp/9000 >/dev/null 2>&1 && on b3 $bin offer add echo tcp/9000 >/dev/null 2>&1'"
+out=$(on d1 "$bin" admin service add echo --pool lab --proto tcp --port 9000)
+ECHO=$(echo "$out" | sed -n 's/^service echo: \([0-9.]*\) tcp\/9000.*$/\1/p')
+check "admin service add echo, and assign the three" "[ -n \"$ECHO\" ] && on d1 $bin admin assign echo b1:echo b2:echo b3:echo | grep -q 'assigned to echo: b1, b2, b3' && within 20 holds d1 $ECHO"
+# Six connections, held open: a line on each every 200 ms, echoed back, until told to stop.
+cat >"$tmp/conns.py" <<'PY'
+import os, socket, sys, time
+vip, stop, out = sys.argv[1], sys.argv[2], sys.argv[3]
+conns, rounds = [], 0
+try:
+    for i in range(6):
+        c = socket.create_connection((vip, 9000), timeout=5)
+        c.settimeout(60) # TCP retransmits back off: 60 s outlasts a failover with room
+        conns.append(c)
+    while not os.path.exists(stop):
+        for i, c in enumerate(conns):
+            msg = b"conn %d round %d\n" % (i, rounds)
+            c.sendall(msg)
+            got = b""
+            while len(got) < len(msg):
+                d = c.recv(4096)
+                if not d:
+                    raise OSError("connection %d closed by the far end" % i)
+                got += d
+            if got != msg:
+                raise OSError("connection %d: a wrong echo" % i)
+        rounds += 1
+        time.sleep(0.2)
+except OSError as e:
+    open(out, "w").write("broken after %d rounds: %s\n" % (rounds, e))
+    sys.exit(1)
+open(out, "w").write("ok 6 connections, %d rounds\n" % rounds)
+PY
+ip netns exec $P-c python3 "$tmp/conns.py" "$ECHO" "$tmp/conns.stop" "$tmp/conns.out" &
+conns=$!
+if command -v ipvsadm >/dev/null; then
+	check "the backups hold the leader's six connections (ipvsadm -Lnc)" "within 15 eval '[ \$(ip netns exec $P-d2 ipvsadm -Lnc | grep -c \" $ECHO:9000 \") -ge 6 ] && [ \$(ip netns exec $P-d3 ipvsadm -Lnc | grep -c \" $ECHO:9000 \") -ge 6 ]'"
+	ip netns exec $P-d2 ipvsadm -Lnc | grep " $ECHO:9000 " | sed 's/^/      /'
+fi
+sleep 2
+
+echo "== the leader crashes, with the services - and the connections in progress"
 stop d1 KILL
 ip -n $P-d1 link set eth0 down
 check "another director takes the service VIP" "within 20 held_not_by $SVC d1"
@@ -522,11 +580,17 @@ new=$(holder $SVC)
 check "and programs IPVS the same way" "within 20 eval 'weight_is $new b1 1 && weight_is $new b2 1 && weight_is $new b3 1'"
 check "the client's neighbour entry follows, to $new" "within 5 neigh_is $SVC ${mac[$new]}"
 check "the client is served by all three again" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+check "the new leader, $new, runs the sync master now" "within 10 logged $tmp/$new.restore.log 'OK IPVS connection sync started role=master'"
+check "the six connections carried on through the failover, each to its backend" "sleep 3; touch $tmp/conns.stop; wait $conns; grep -q '^ok 6 connections' $tmp/conns.out"
+sed 's/^/      /' "$tmp/conns.out"
+on $new "$bin" admin service remove echo >/dev/null
+for n in b1 b2 b3; do on $n "$bin" offer remove echo >/dev/null; done
 link_up d1
 start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
 check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
 check "and the IPVS service" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
 check "so d1's kernel holds none of it" "! holds d1 $SVC && ! ipvs_on d1 | grep -q Route"
+check "and stops the sync master its crash left; keeps the backup" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS connection sync daemon an earlier run left role=master' && logged $tmp/d1.svc2.log 'role=backup'"
 
 echo "== a director that is also a backend: one host, two daemons, two names"
 host=$new

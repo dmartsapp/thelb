@@ -171,10 +171,21 @@ func (s *session) promote(name string, n cluster.Node) {
 
 // checkInLoop checks in with the leader, every second, while this director
 // does not lead.
+//
+// It also checks the IPVS sync daemons every repairEvery, on the leader too: a
+// daemon someone stopped is started again.
 func (s *session) checkInLoop() {
 	defer s.n.alive.Done("check-in")
+	synced := time.Now()
+	resync := func() {
+		if time.Since(synced) >= repairEvery {
+			synced = time.Now()
+			s.syncDaemons(false)
+		}
+	}
 	for s.ctx.Err() == nil {
 		s.n.alive.Tick("check-in", stallAfter)
+		resync()
 		addr, id := s.r.LeaderWithID()
 		if id == "" || string(id) == s.raftID {
 			s.sleep(checkInEvery)
@@ -193,6 +204,7 @@ func (s *session) checkInLoop() {
 			}
 			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version}
 			s.n.alive.Tick("check-in", stallAfter)
+			resync()
 			if w.Send(req) != nil {
 				break
 			}

@@ -23,9 +23,19 @@ const (
 	cmdSetDest    = 6
 	cmdDelDest    = 7
 	cmdGetDest    = 8
+	cmdNewDaemon  = 9
+	cmdDelDaemon  = 10
+	cmdGetDaemon  = 11
 
 	attrService = 1
 	attrDest    = 2
+	attrDaemon  = 3
+
+	daemonState    = 1 // u32: stateMaster or stateBackup
+	daemonMcastIfn = 2 // the interface's name
+	daemonSyncID   = 3 // u32
+	stateMaster    = 1 // IP_VS_STATE_MASTER
+	stateBackup    = 2 // IP_VS_STATE_BACKUP
 
 	svcAF        = 1
 	svcProtocol  = 2
@@ -270,6 +280,64 @@ func (c *Conn) Dests(s Service) ([]Dest, error) {
 				d.Addr = netip.AddrFrom4([4]byte(raw[:4]))
 			} else if len(raw) >= 16 {
 				d.Addr = netip.AddrFrom16([16]byte(raw[:16]))
+			}
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func daemonAttrs(d Daemon, full bool) []byte {
+	state := uint32(stateBackup)
+	if d.Master {
+		state = stateMaster
+	}
+	b := netlink.AppendAttr(nil, daemonState, u32(state))
+	if full {
+		b = netlink.AppendAttr(b, daemonMcastIfn, append([]byte(d.Interface), 0))
+		b = netlink.AppendAttr(b, daemonSyncID, u32(d.SyncID))
+	}
+	return netlink.AppendNested(nil, attrDaemon, b)
+}
+
+// AddDaemon starts a synchronisation daemon. One master and one backup may run in
+// a namespace, each once: starting one that runs is an error (EEXIST).
+func (c *Conn) AddDaemon(d Daemon) error {
+	_, err := c.g.Do(cmdNewDaemon, false, daemonAttrs(d, true))
+	return wrap(fmt.Sprintf("starting the IPVS sync %s on %s", d.Role(), d.Interface), err)
+}
+
+// DelDaemon stops the master, or the backup; one that is not running is fine.
+func (c *Conn) DelDaemon(master bool) error {
+	_, err := c.g.Do(cmdDelDaemon, false, daemonAttrs(Daemon{Master: master}, false))
+	if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ENOENT) {
+		return nil
+	}
+	return wrap("stopping the IPVS sync "+Daemon{Master: master}.Role(), err)
+}
+
+// Daemons lists the synchronisation daemons running in this namespace.
+func (c *Conn) Daemons() ([]Daemon, error) {
+	msgs, err := c.g.Do(cmdGetDaemon, true, nil)
+	if err != nil {
+		return nil, wrap("listing the IPVS sync daemons", err)
+	}
+	var out []Daemon
+	for _, m := range msgs {
+		for _, a := range m {
+			if a.Type&^(1<<15) != attrDaemon {
+				continue
+			}
+			var d Daemon
+			for _, f := range netlink.ParseAttrs(a.Data) {
+				switch f.Type {
+				case daemonState:
+					d.Master = native.Uint32(f.Data) == stateMaster
+				case daemonMcastIfn:
+					d.Interface = cstring(f.Data)
+				case daemonSyncID:
+					d.SyncID = native.Uint32(f.Data)
+				}
 			}
 			out = append(out, d)
 		}

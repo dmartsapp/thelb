@@ -99,3 +99,51 @@ func TestRootServicesAndDests(t *testing.T) {
 		t.Errorf("after removal: %+v", svcs)
 	}
 }
+
+// TestRootSyncDaemons: a master and a backup, each once, listed with their
+// interface and sync ID, and stopped - a second stop is not an error.
+func TestRootSyncDaemons(t *testing.T) {
+	rootns.Enter(t)
+	c, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := netlink.AddDummy("sync0"); err != nil {
+		t.Fatal(err)
+	}
+	ifc, _ := net.InterfaceByName("sync0")
+	if err := netlink.AddAddr(ifc.Index, netip.MustParsePrefix("198.18.0.11/24"), "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	backup := Daemon{Interface: "sync0", SyncID: 42}
+	master := Daemon{Master: true, Interface: "sync0", SyncID: 42}
+	for _, d := range []Daemon{backup, master} {
+		if err := c.AddDaemon(d); err != nil {
+			t.Fatalf("starting the %s: %v", d.Role(), err)
+		}
+	}
+	t.Cleanup(func() { _ = c.DelDaemon(true); _ = c.DelDaemon(false) })
+	if err := c.AddDaemon(master); err == nil {
+		t.Error("a second master started")
+	}
+	ds, err := c.Daemons()
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := map[string]Daemon{}
+	for _, d := range ds {
+		roles[d.Role()] = d
+	}
+	if roles["master"] != master || roles["backup"] != backup || len(ds) != 2 {
+		t.Errorf("the daemons: %+v", ds)
+	}
+	if err := c.DelDaemon(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DelDaemon(true); err != nil {
+		t.Errorf("stopping a master that is not running: %v", err)
+	}
+	if ds, _ := c.Daemons(); len(ds) != 1 || ds[0] != backup {
+		t.Errorf("after stopping the master: %+v", ds)
+	}
+}

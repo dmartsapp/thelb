@@ -67,10 +67,11 @@ type Plane struct {
 	params   sysctl.Changes
 	tuned    bool
 
-	last     *director.Plan // the plan applied last
-	lastFull time.Time      // when the kernel was last compared whole
-	dirty    bool           // the last apply failed: compare whole next time
-	fulls    int            // whole comparisons made, for tests
+	syncs    map[bool]ipvs.Daemon // the sync daemons this data plane started, by master
+	last     *director.Plan       // the plan applied last
+	lastFull time.Time            // when the kernel was last compared whole
+	dirty    bool                 // the last apply failed: compare whole next time
+	fulls    int                  // whole comparisons made, for tests
 }
 
 // fullEvery is how often Apply compares the whole kernel with the plan.
@@ -78,7 +79,7 @@ var fullEvery = 10 * time.Second
 
 // New is an empty data plane.
 func New(log *logx.Logger) *Plane {
-	return &Plane{log: log, vips: map[netip.Addr]heldVIP{}, services: map[string]ipvs.Service{}, pins: map[netip.Addr]pin{}}
+	return &Plane{log: log, vips: map[netip.Addr]heldVIP{}, services: map[string]ipvs.Service{}, pins: map[netip.Addr]pin{}, syncs: map[bool]ipvs.Daemon{}}
 }
 
 func label(ifname string, a netip.Addr) string {
@@ -467,6 +468,76 @@ func (p *Plane) Clear() {
 		}
 	}
 	p.tuned = false
+}
+
+// Sync makes IPVS's connection-synchronisation daemons what s says: each of the
+// master and the backup started, with s's interface and sync ID, or stopped. A
+// daemon this data plane did not start was left by an earlier run (a crash
+// leaves the kernel threads behind, like the VIPs): it is replaced, or removed,
+// and said so; one it started and finds gone was stopped by someone else, and is
+// started again - drift, repaired.
+func (p *Plane) Sync(s director.SyncState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.conn == nil {
+		if !s.Master && !s.Backup && len(p.syncs) == 0 {
+			return nil // nothing started, nothing to stop: IPVS need not be there
+		}
+		c, err := ipvs.Open()
+		if err != nil {
+			return err
+		}
+		p.conn = c
+	}
+	running, err := p.conn.Daemons()
+	if err != nil {
+		return err
+	}
+	have := map[bool]ipvs.Daemon{}
+	for _, d := range running {
+		have[d.Master] = d
+	}
+	var errs []error
+	for _, master := range []bool{true, false} {
+		want := ipvs.Daemon{Master: master, Interface: s.Interface, SyncID: s.SyncID}
+		wanted := (master && s.Master) || (!master && s.Backup)
+		cur, on := have[master]
+		mine, started := p.syncs[master]
+		ours := started && on && cur == mine
+		switch {
+		case on && (!wanted || cur != want):
+			if err := p.conn.DelDaemon(master); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if ours {
+				p.log.OK("IPVS connection sync stopped", "role", cur.Role())
+			} else {
+				p.log.Warn("removed an IPVS connection sync daemon an earlier run left", "role", cur.Role(), "interface", cur.Interface, "sync_id", cur.SyncID)
+			}
+			delete(p.syncs, master)
+			on = false
+		case !on && started && !wanted:
+			delete(p.syncs, master)
+		}
+		if wanted && on && !started {
+			p.syncs[master] = cur // left by an earlier run, as wanted: kept
+			p.log.OK("IPVS connection sync running, as an earlier run left it", "role", cur.Role(), "interface", cur.Interface, "sync_id", cur.SyncID)
+		}
+		if wanted && !on {
+			if err := p.conn.AddDaemon(want); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if started && mine == want && !ours {
+				p.log.Warn("drift repaired: the IPVS connection sync daemon was stopped; started again", "role", want.Role(), "interface", want.Interface, "sync_id", want.SyncID)
+			} else {
+				p.log.OK("IPVS connection sync started", "role", want.Role(), "interface", want.Interface, "sync_id", want.SyncID)
+			}
+			p.syncs[master] = want
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Leftovers removes the plan's IPVS services and pinned backends that the

@@ -72,3 +72,22 @@ type Stats struct {
 	Packets uint64
 	Bytes   uint64
 }
+
+// Daemon is one of IPVS's connection-synchronisation daemons, kernel threads in a
+// network namespace: a master sends that namespace's connections, by multicast on
+// Interface (224.0.0.81, UDP port 8848, TTL 1), and a backup takes in those of
+// SyncID into its own connection table - so a director that takes the VIPs over
+// already knows where every connection in progress goes.
+type Daemon struct {
+	Master    bool
+	Interface string
+	SyncID    uint32
+}
+
+// Role is "master" or "backup".
+func (d Daemon) Role() string {
+	if d.Master {
+		return "master"
+	}
+	return "backup"
+}

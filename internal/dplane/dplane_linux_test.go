@@ -183,3 +183,111 @@ func TestRootApplyChangesOnlyWhatChangedAndRepairsDrift(t *testing.T) {
 		}
 	}
 }
+
+// TestRootSyncStartsAdoptsRepairsAndStops: the sync daemons follow the state
+// asked for - started, left alone when already right, started again when someone
+// stops one, the master stopped when the director no longer leads; a new data
+// plane, as after a crash, keeps the backup it finds and removes the master; and
+// SyncState{} stops both.
+func TestRootSyncStartsAdoptsRepairsAndStops(t *testing.T) {
+	rootns.Enter(t)
+	if err := netlink.AddDummy("sync1"); err != nil {
+		t.Fatal(err)
+	}
+	ifc, _ := net.InterfaceByName("sync1")
+	if err := netlink.AddAddr(ifc.Index, netip.MustParsePrefix("198.18.0.1/24"), "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	someone, err := ipvs.Open() // another program, or a person with ipvsadm
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = someone.DelDaemon(true); _ = someone.DelDaemon(false) })
+	running := func() map[string]ipvs.Daemon {
+		t.Helper()
+		ds, err := someone.Daemons()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]ipvs.Daemon{}
+		for _, d := range ds {
+			m[d.Role()] = d
+		}
+		return m
+	}
+	var out syncLog
+	p := New(logx.New(&out, "thelb"))
+	both := director.SyncState{Interface: "sync1", SyncID: 7, Master: true, Backup: true}
+	backup := director.SyncState{Interface: "sync1", SyncID: 7, Backup: true}
+
+	if err := p.Sync(both); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 2 || r["master"].SyncID != 7 || r["backup"].Interface != "sync1" {
+		t.Fatalf("leading: %+v", r)
+	}
+	for _, want := range []string{"OK IPVS connection sync started role=master interface=sync1 sync_id=7", "OK IPVS connection sync started role=backup interface=sync1 sync_id=7"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the log lacks %q:\n%s", want, out.String())
+		}
+	}
+	said := out.String()
+	if err := p.Sync(both); err != nil || out.String() != said {
+		t.Errorf("the same state again changed something: %v\n%s", err, strings.TrimPrefix(out.String(), said))
+	}
+
+	if err := someone.DelDaemon(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Sync(both); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 2 || !strings.Contains(out.String(), "WARN drift repaired: the IPVS connection sync daemon was stopped; started again role=backup") {
+		t.Errorf("the backup someone stopped: %+v\n%s", r, out.String())
+	}
+
+	if err := p.Sync(backup); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 1 || r["backup"].SyncID != 7 || !strings.Contains(out.String(), "OK IPVS connection sync stopped role=master") {
+		t.Errorf("no longer leading: %+v\n%s", r, out.String())
+	}
+
+	// A crash while it led: the master and the backup stay in the kernel.
+	if err := someone.AddDaemon(ipvs.Daemon{Master: true, Interface: "sync1", SyncID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	var out2 syncLog
+	q := New(logx.New(&out2, "thelb"))
+	if err := q.Sync(backup); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 1 || r["backup"].SyncID != 7 {
+		t.Errorf("after the crash, following: %+v", r)
+	}
+	for _, want := range []string{"WARN removed an IPVS connection sync daemon an earlier run left role=master interface=sync1 sync_id=7",
+		"OK IPVS connection sync running, as an earlier run left it role=backup"} {
+		if !strings.Contains(out2.String(), want) {
+			t.Errorf("the log lacks %q:\n%s", want, out2.String())
+		}
+	}
+
+	// Another cluster's ID: the backup replaced.
+	if err := q.Sync(director.SyncState{Interface: "sync1", SyncID: 9, Backup: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 1 || r["backup"].SyncID != 9 {
+		t.Errorf("another sync ID: %+v\n%s", r, out2.String())
+	}
+
+	if err := q.Sync(director.SyncState{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := running(); len(r) != 0 {
+		t.Errorf("stopping: %+v", r)
+	}
+	said = out2.String()
+	if err := q.Sync(director.SyncState{}); err != nil || out2.String() != said {
+		t.Errorf("stopping again changed something: %v", err)
+	}
+}

@@ -46,7 +46,8 @@ The cluster has its own address too, the **control VIP**, held by the leader: ba
 - **The network**:
   - Directors share an L2 network with the control VIP - the VIP must be an unused address in a network the directors have an interface in.
   - Backends of **directly routed** services share an L2 network with the directors. Backends of **tunnelled** services only need to be routed to.
-  - Open, in firewalls: the control port (TCP) to the control VIP and between directors; the services' ports to the VIPs; the applications' ports from directors to backends (health checks); IP protocol 4 from directors to backends of tunnelled services.
+  - Open, in firewalls: the control port (TCP) to the control VIP and between directors; the services' ports to the VIPs; the applications' ports from directors to backends (health checks); IP protocol 4 from directors to backends of tunnelled services; **multicast to `224.0.0.81`, UDP port `8848`, between directors** on the control VIP's interface - IPVS's connection synchronisation, which needs an IPv4 address on that interface.
+  - **The directors' network must be trusted**: the kernel's connection-synchronisation messages are not authenticated, so a machine on that network can add entries to the directors' connection tables. Keep the directors on a network of their own, or one only trusted machines share.
 - **IPv4 and IPv6**: control VIPs and directly routed services may be either. Tunnelled services are IPv4 in this build. IPv6 is not yet tested end to end.
 
 ## 3. Installing
@@ -130,6 +131,7 @@ It finds the cluster on the control VIP and waits for approval; approve it on a 
 - **Use three directors** (or five). Two are less available than one: losing either loses the majority, and with it the leader.
 - **`--bootstrap`** on a director lets it create the cluster when it finds none - after looking for 5 seconds. Put it on the first director; you may put it on others too, so that the cluster does not depend on one machine coming back after every director has stopped.
 - **A director that restarts** while the cluster runs rejoins by itself, without approval: the cluster remembers it, by its node fingerprint, address and MAC address.
+- **Connections in progress survive a failover.** The leader runs IPVS's connection-synchronisation daemon as master on the control VIP's interface, sending its connection entries by multicast; every director runs one as backup, taking them in. The director that takes over already knows which backend each connection goes to. The sync ID comes from the cluster's ID, so two clusters on one network do not mix. The roles follow leadership, with no setting to make.
 
 ## 6. Running under systemd
 
@@ -388,6 +390,8 @@ Everything is runtime state, recorded and removed - parameters restored - when t
 | Director, the leader | IPVS services and destinations | while it leads, for each service |
 | Director, the leader | permanent neighbour entries: each directly reachable backend's address to its MAC address | while it leads |
 | Director, the leader | `net.ipv4.vs.sloppy_tcp`, `expire_nodest_conn`, `expire_quiescent_template` set to 1 | while it leads, with services |
+| Director, the leader | IPVS's connection-synchronisation daemon as master, on the control VIP's interface (`ipvsadm -L --daemon`) | while it leads |
+| Director, every member | IPVS's connection-synchronisation daemon as backup, on the control VIP's interface | while it is a member |
 | Backend | `thelb0`, a dummy interface, with its services' VIPs | while it runs |
 | Backend | `net.ipv4.conf.all.arp_ignore` 1, `arp_announce` 2 | while it runs, unless already right |
 | Backend | the nftables table `inet thelb`: port mappings, MSS clamps | while a mapping or a tunnelled service needs it |
@@ -395,7 +399,7 @@ Everything is runtime state, recorded and removed - parameters restored - when t
 | Every node | `/run/thelb/director/` or `/run/thelb/backend/`: a socket and a lock, root only | while it runs |
 | A bootstrapping director | the two secret files, if missing | once |
 
-**theLB keeps it so.** Every 10 seconds the leader compares the kernel with what it should hold - IPVS services, destinations and weights, the service VIPs and the control VIP on their interfaces, the pinned neighbour entries, the IPVS parameters - and a backend its own: `thelb0` and its VIPs, the nftables table, `thelbt0`, the parameters. What someone removed or changed is put back, and logged as `WARN drift repaired: ...`; a destination someone added to one of theLB's IPVS services is removed. In between, the leader changes only what its plan changed - nothing at all while nothing changes. A rule edited inside the nftables table is found only if the number of rules changed.
+**theLB keeps it so.** Every 10 seconds the leader compares the kernel with what it should hold - IPVS services, destinations and weights, the service VIPs and the control VIP on their interfaces, the pinned neighbour entries, the IPVS parameters - and every director its connection-synchronisation daemons; a backend its own: `thelb0` and its VIPs, the nftables table, `thelbt0`, the parameters. What someone removed or changed is put back, and logged as `WARN drift repaired: ...`; a destination someone added to one of theLB's IPVS services is removed. In between, the leader changes only what its plan changed - nothing at all while nothing changes. A rule edited inside the nftables table is found only if the number of rules changed.
 
 ## 15. Logs
 
@@ -412,6 +416,7 @@ One line per event, on standard error - in the journal, under systemd:
 ```text
 2026-11-09T05:02:10.004Z [director] WARN drift repaired: an IPVS service was removed; added again service=tcp/10.0.0.20:80 scheduler=wrr
 2026-11-09T05:02:10.005Z [kernel] WARN drift repaired: the VIP 10.0.0.20 was removed from thelb0: added again
+2026-11-09T05:02:12.310Z [dataplane] OK IPVS connection sync started role=master interface=eth0 sync_id=147
 2026-11-09T05:03:40.120Z [watchdog] ERROR a loop has stopped: systemd's watchdog is told no more, and restarts theLB loop="data plane" late=31s
 ```
 
@@ -419,7 +424,7 @@ One line per event, on standard error - in the journal, under systemd:
 
 | What | What happens |
 |---|---|
-| The leader dies | The other directors elect a leader - within 1.5 to 3 seconds in tests - which takes the control VIP and the service VIPs, announces them and programs IPVS the same way. New connections go on; **connections in progress are lost** (connection synchronisation is not built yet). |
+| The leader dies | The other directors elect a leader - within 1.5 to 3 seconds in tests - which takes the control VIP and the service VIPs, announces them and programs IPVS the same way. New connections go on, and so do connections in progress: IPVS's connection synchronisation has told the new leader where each one goes. Where multicast does not pass between the directors, connections in progress are lost; new ones are not. |
 | The leader is stopped (`SIGTERM`, `Ctrl+C`, or `SIGHUP` when its terminal or SSH session closes) | It hands leadership to another director first: a short, clean failover. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
@@ -429,7 +434,7 @@ One line per event, on standard error - in the journal, under systemd:
 | A backend dies | Weight 0 when its 10-second heartbeat lease lapses, or sooner by the leader's check. |
 | Someone removes or changes what theLB set up - `ipvsadm -C`, `ip address del` of a VIP, `nft delete table inet thelb`, a kernel parameter | Put back within 10 seconds, and logged: `WARN drift repaired: ...`. |
 | theLB hangs | Under systemd, the watchdog hears no more within 30 seconds of the loop stopping, and restarts it; a leader's lease lapses and the others elect a leader. |
-| theLB crashes on a machine that stays up | Its kernel state stays - a leader's VIPs and IPVS rules keep answering - until theLB starts again (`Restart=always`) and removes it. |
+| theLB crashes on a machine that stays up | Its kernel state stays - a leader's VIPs, IPVS rules and sync master keep answering - until theLB starts again (`Restart=always`) and removes it. |
 
 ## 17. Troubleshooting
 
@@ -450,6 +455,8 @@ One line per event, on standard error - in the journal, under systemd:
 | `<node> does not offer <name>: it offers ...` | Assign one of the offers listed, by its name: `sudo thelb status offers`. |
 | `backend not serving: weight 0 ... reason="..."` | The reason says which condition failed: `no heartbeat`, `its own check fails`, `it does not hold the VIP yet`, `the director's check fails`, `it is stopping`. |
 | `IPVS is not available (is the ip_vs module loaded?)` | Load `ip_vs` (`sudo modprobe ip_vs`), or install the kernel's modules. |
+| `IPVS connection synchronisation failed: connections in progress would not survive a failover` | The kernel refused the sync daemon: the error says why - often no IPv4 address on the control VIP's interface. theLB tries again every 10 seconds; services work meanwhile, but a failover loses connections in progress. |
+| `removed an IPVS connection sync daemon an earlier run left role=master` | A director that crashed while it led left its sync master running: removed at the next start, as it no longer leads. |
 | `creating thelbt0: ... (is the ipip module available?)` | The backend of a tunnelled service needs `ipip`: `sudo modprobe ipip`. |
 | `the cluster no longer accepts this backend's certificate` | The backend was removed, or the cluster was created again: it asks to join again, and waits for approval. |
 | `WARN drift repaired: ...` | Something else changed theLB's kernel state - a script, a person, another network tool - and theLB put it back. Find what did it: the two will undo each other every 10 seconds. |
@@ -508,4 +515,4 @@ make lab-down                                # take it all away
 
 ## 20. Not in this build yet
 
-`thelb doctor`; `thelb generate` for systemd units, sysctl and module files, and Kubernetes; the Kubernetes provider; secret rotation (`admin secret rotate|retire`); IPVS connection synchronisation (connections in progress survive a failover); the return-path check before an assignment; tunnelled IPv6 services, and GUE; SCTP health checks; Prometheus metrics; detecting a VIP claimed by another machine; preflight checks of capabilities and modules before starting; limiting which networks backends may enrol from. See the [build state](build-state.md) for what comes next.
+`thelb doctor`; `thelb generate` for systemd units, sysctl and module files, and Kubernetes; the Kubernetes provider; secret rotation (`admin secret rotate|retire`); the return-path check before an assignment; tunnelled IPv6 services, and GUE; SCTP health checks; Prometheus metrics; detecting a VIP claimed by another machine; preflight checks of capabilities and modules before starting; limiting which networks backends may enrol from. See the [build state](build-state.md) for what comes next.
