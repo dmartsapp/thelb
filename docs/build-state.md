@@ -33,7 +33,7 @@ Then decisions for the user: **NAT** (who routes the backends' replies back: the
 
 ## Open with the user
 
-- **Kubernetes nodes as backends: decided, systemd** (the user: "we keep systemd for backends") - still to write into the design's Kubernetes section. The reasoning: the user asked whether a DaemonSet is the right path, for the RBAC to watch LoadBalancer Services and patch them alongside kube-proxy or Cilium; the answer: no, keep systemd. The Service watching and status patching is one writer's job - the leading director, with the only credentials (read Nodes and EndpointSlices, `patch services/status`, create events). Node backends need no API access. Nothing of kube-proxy's or Cilium's is patched: they read the Service's status (`ingress: [{ip, ipMode: VIP}]`). `loadBalancerClass: dmarts.app/thelb` keeps Cilium's LB-IPAM, L2 announcements and BGP away. The backend agent's `arp_ignore` and `arp_announce` do what kube-proxy's `strictARP` would. If credentials must stay in the cluster, the option is a small controller Deployment, not a DaemonSet.  To verify in kind (phase 3): kube-proxy (every mode) and Cilium's kube-proxy replacement program LB IPs from the status of a Service with a foreign class.
+- **Kubernetes nodes as backends: decided - systemd, no DaemonSet** (confirmed 2026-11-09), and written into the design's [Kubernetes](design.md#where-thelb-runs) section with its reasoning: the leader is the one writer of Services' status; nodes need no API access; nothing of kube-proxy's or Cilium's is patched.
 - **`generate commands`**, NAT, BGP: see above.
 
 ## Still to build (from the design)

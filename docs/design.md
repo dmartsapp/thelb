@@ -476,7 +476,8 @@ With direct return, a packet reaches a node with the VIP as its destination. **k
 
 - uses the **nodes as backends**, at the **Service's port** (not its node port): the packet keeps `VIP:port`, which kube-proxy matches, and the Service's `targetPort` already maps it to the pods' port;
 - writes `status.loadBalancer.ingress` with **`ipMode: VIP`**: the load balancer passes packets through unchanged, so kube-proxy may also send in-cluster traffic for the VIP straight to the pods;
-- needs nodes **not to answer ARP for the VIP**. kube-proxy in IPVS mode puts load-balancer IPs on its own interface, so in that mode `strictARP` must be on; the agent checks it on every node.
+- needs nodes **not to answer ARP for the VIP**. kube-proxy in IPVS mode puts load-balancer IPs on its own interface, `kube-ipvs0`, on every node; theLB's backend on the node sets `arp_ignore` and `arp_announce` at runtime - what kube-proxy's `strictARP` would set - so kube-proxy's configuration needs no change.
+- **patches nothing of kube-proxy's or Cilium's**: both read the Service's status, and theLB writes only that. Cilium's own LB-IPAM, L2 announcements and BGP take only Services without a class, or with Cilium's own, so `dmarts.app/thelb` keeps them away. To verify in kind (phase 3): that kube-proxy, in each of its modes, and Cilium's kube-proxy replacement program the load-balancer IP of a Service of another provider's class from its status.
 
 ### Which Services, and which backends
 
@@ -491,16 +492,18 @@ With direct return, a packet reaches a node with the VIP as its destination. **k
 
 ### Where theLB runs
 
-**Always under systemd, never as a pod** - on a Kubernetes node as on any other machine.
+**Always under systemd, never as a pod** - on a Kubernetes node as on any other machine. Decided, and confirmed (the user, 2026-11-09: "we will go with systemd for kubernetes, no daemonset").
+
+**Why not a DaemonSet**, though it would bring a credential mounted and rotated by Kubernetes: watching Services and writing their status is **one writer's job**, and theLB has one - the leader, which already decides everything else, so it never contends with another writer for a Service's status. A DaemonSet would give write access to every Service's status to every node - as many watchers of the API as there are nodes, and any compromised node able to point any Service elsewhere - when the nodes need no API access at all. MetalLB needs a pod on every node because its nodes announce the addresses; theLB's directors announce them. Had the credential to stay inside the cluster, the way would have been a small controller Deployment, one writer still - not taken: nothing of theLB's runs in the cluster.
 
 | Component | Runs as | Talks to the Kubernetes API |
 |---|---|---|
-| Directors | systemd services, on machines of their own or on dedicated nodes | with a **kubeconfig** for the `thelb-director` ServiceAccount - required, and checked at startup |
+| Directors | systemd services, on machines of their own or on dedicated nodes | with a **kubeconfig** for the `thelb-director` ServiceAccount - required, and checked at startup; only the leader watches Services and writes their status, the others hold the same credential to take over |
 | Backends on Kubernetes nodes | systemd services on the nodes' hosts, enrolled and approved like any backend | not at all: the directors read the API and tell them what they need |
 
 A director checks at startup that the API server answers and that it holds every permission it needs (`SelfSubjectAccessReview`, which every authenticated user may call); a missing one stops it with its name.
 
-On a Kubernetes node, a backend adds nothing for a VIP - kube-proxy already accepts the VIP's packets; it checks kube-proxy's mode (and `strictARP`, in IPVS mode), sends the return-path probe, and reports the node's health.
+On a Kubernetes node, a backend adds nothing for a VIP - kube-proxy already accepts the VIP's packets; it sets `arp_ignore` and `arp_announce`, checks kube-proxy's mode, sends the return-path probe, and reports the node's health.
 
 ### The manifests
 
