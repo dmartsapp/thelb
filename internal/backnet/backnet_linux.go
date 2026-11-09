@@ -260,18 +260,20 @@ func (h *Host) Repair() ([]string, error) {
 		}
 	}
 	if h.tunnel {
+		rp := "net/ipv4/conf/" + TunnelInterface + "/rp_filter"
 		if _, err := net.InterfaceByName(TunnelInterface); err != nil {
 			if err := netlink.AddIPIPExternal(TunnelInterface); err != nil && !errors.Is(err, syscall.EEXIST) {
 				errs = append(errs, fmt.Errorf("creating %s again: %w", TunnelInterface, err))
+			} else if err := sysctl.Write(rp, "0"); err != nil {
+				errs = append(errs, err)
 			} else {
 				fixed = append(fixed, TunnelInterface+" was removed: created again")
 			}
-		}
-		if v, err := sysctl.Read("net/ipv4/conf/" + TunnelInterface + "/rp_filter"); err == nil && v != "0" {
-			if err := sysctl.Write("net/ipv4/conf/"+TunnelInterface+"/rp_filter", "0"); err != nil {
+		} else if v, err := sysctl.Read(rp); err == nil && v != "0" {
+			if err := sysctl.Write(rp, "0"); err != nil {
 				errs = append(errs, err)
 			} else {
-				fixed = append(fixed, "net/ipv4/conf/"+TunnelInterface+"/rp_filter was "+v+": set to 0 again")
+				fixed = append(fixed, rp+" was "+v+": set to 0 again")
 			}
 		}
 	}

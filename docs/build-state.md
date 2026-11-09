@@ -1,6 +1,6 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after offers by name were merged.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, with drift repair on `wip/drift`.
 
 ## Branches
 
@@ -41,7 +41,7 @@ The cluster keeps the offers through a backend's restart; the backend keeps them
 1b. ~~A director's host as a backend too~~ - done, merged: (the user: start the director first, register the backend later, keep systemd for backends): two daemons, `thelb backend` started after the director under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); the clone check is per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS delivers the host's share locally while it leads. `test/lab.sh serve dN`, and an end-to-end scenario. **Also built: the control VIP by name** (`--vip thelb-vip`, `--join thelb-vip:7443`), resolved at start.
 2. ~~IP-in-IP tunnelling~~ - done, merged: `--method tunnel`, IPv4; the director needs only a route to the backend; `thelbt0` (IPIP, collect-metadata mode, from any director) unwraps; `rp_filter` 0 on `thelbt0` and 2 for all if it was 1 (restored); an nftables MSS clamp (MTU - 60) for each tunnelled VIP; a backend may join a control VIP behind a router, and then serves tunnelled services only. **Left for later**: IPv6 (ip6ip6), GUE, the return-path check.
 2b. **The user manual** - written: `docs/manual.md`, for operators; keep it in step with every change.
-3. **Apply what changed, and repair drift**: the leader applies only the difference from what it last applied, and compares the whole kernel every 10 s - putting back what someone removed (the watchdog loop); systemd's watchdog is told only while that loop runs.
+3. **Apply what changed, and repair drift** - built on `wip/drift` (the user, 2026-11-09: "you can work on your next stage"): the leader applies only the difference from the plan it last applied (nothing while it is the same), and compares the whole kernel every 10 s - IPVS, the service VIPs, the control VIP, pins, parameters - putting back and logging what drifted; a backend repairs `thelb0` and its VIPs, the nftables table (by rule count), `thelbt0`, its parameters, every 10 s; `internal/alive` tells systemd's watchdog only while the loops go round (director: check-in, data plane; backend: heartbeat, kernel repair; 30 s overdue stops it). Root tests: `internal/dplane`, `internal/backnet`; e2e: a drift section and the nftables table in the port-mapping one. **Not yet**: netlink notifications to react before the 10 s; a rule edited inside the table without changing their number.
 4. **IPVS connection synchronisation**: the sync daemon as master on the VIP holder, backup on the other directors, following leadership - so connections in progress survive a failover.
 5. **A scale test in the lab**: a few thousand services; time an apply, count netlink calls, watch memory.
 6. **Health checks spread across directors**, not all on the leader.

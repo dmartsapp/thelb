@@ -133,7 +133,7 @@ It finds the cluster on the control VIP and waits for approval; approve it on a 
 
 ## 6. Running under systemd
 
-theLB tells systemd when it has started (`Type=notify`) and that it is alive (`WatchdogSec=`). It installs no unit files itself (a `thelb generate systemd` that prints them is planned); write them yourself. A director:
+theLB tells systemd when it has started (`Type=notify`) and that it is alive (`WatchdogSec=`) - only while the loops that keep it working go round: on a director, its check-ins with the leader and, while it leads, the data plane; on a backend, its heartbeat and the repair of its kernel state (section 14). A loop that has not gone round for 30 seconds stops the telling, and systemd restarts theLB - with `Restart=always`, a hung theLB comes back by itself. It installs no unit files itself (a `thelb generate systemd` that prints them is planned); write them yourself. A director:
 
 ```ini
 # /etc/systemd/system/thelb-director.service
@@ -395,6 +395,8 @@ Everything is runtime state, recorded and removed - parameters restored - when t
 | Every node | `/run/thelb/director/` or `/run/thelb/backend/`: a socket and a lock, root only | while it runs |
 | A bootstrapping director | the two secret files, if missing | once |
 
+**theLB keeps it so.** Every 10 seconds the leader compares the kernel with what it should hold - IPVS services, destinations and weights, the service VIPs and the control VIP on their interfaces, the pinned neighbour entries, the IPVS parameters - and a backend its own: `thelb0` and its VIPs, the nftables table, `thelbt0`, the parameters. What someone removed or changed is put back, and logged as `WARN drift repaired: ...`; a destination someone added to one of theLB's IPVS services is removed. In between, the leader changes only what its plan changed - nothing at all while nothing changes. A rule edited inside the nftables table is found only if the number of rules changed.
+
 ## 15. Logs
 
 One line per event, on standard error - in the journal, under systemd:
@@ -405,7 +407,13 @@ One line per event, on standard error - in the journal, under systemd:
 2026-11-09T01:28:55.655Z [director] WARN backend not serving: weight 0 service=web node=web-1 at=10.0.0.21:80 reason="the director's check fails"
 ```
 
-`OK` is an event that went as it should, `WARN` one to look at, `ERROR` a failure. Modules: `director`, `backend`, `network`, `dataplane`, `kernel`, `raft`, `socket`. No secret or key is ever logged.
+`OK` is an event that went as it should, `WARN` one to look at, `ERROR` a failure. Modules: `director`, `backend`, `network`, `dataplane`, `kernel`, `raft`, `socket`, `watchdog`. No secret or key is ever logged.
+
+```text
+2026-11-09T05:02:10.004Z [director] WARN drift repaired: an IPVS service was removed; added again service=tcp/10.0.0.20:80 scheduler=wrr
+2026-11-09T05:02:10.005Z [kernel] WARN drift repaired: the VIP 10.0.0.20 was removed from thelb0: added again
+2026-11-09T05:03:40.120Z [watchdog] ERROR a loop has stopped: systemd's watchdog is told no more, and restarts theLB loop="data plane" late=31s
+```
 
 ## 16. When things fail
 
@@ -419,6 +427,8 @@ One line per event, on standard error - in the journal, under systemd:
 | A backend restarts | It rejoins without approval, and takes up the offers the cluster holds for it; its assignments stay. |
 | A backend's application fails | Weight 0 after 3 failed checks (about 6 seconds); back after 2 good ones. It stays assigned. When no backend of a VIP's services serves, the leader gives the VIP up until one does. |
 | A backend dies | Weight 0 when its 10-second heartbeat lease lapses, or sooner by the leader's check. |
+| Someone removes or changes what theLB set up - `ipvsadm -C`, `ip address del` of a VIP, `nft delete table inet thelb`, a kernel parameter | Put back within 10 seconds, and logged: `WARN drift repaired: ...`. |
+| theLB hangs | Under systemd, the watchdog hears no more within 30 seconds of the loop stopping, and restarts it; a leader's lease lapses and the others elect a leader. |
 | theLB crashes on a machine that stays up | Its kernel state stays - a leader's VIPs and IPVS rules keep answering - until theLB starts again (`Restart=always`) and removes it. |
 
 ## 17. Troubleshooting
@@ -442,6 +452,8 @@ One line per event, on standard error - in the journal, under systemd:
 | `IPVS is not available (is the ip_vs module loaded?)` | Load `ip_vs` (`sudo modprobe ip_vs`), or install the kernel's modules. |
 | `creating thelbt0: ... (is the ipip module available?)` | The backend of a tunnelled service needs `ipip`: `sudo modprobe ipip`. |
 | `the cluster no longer accepts this backend's certificate` | The backend was removed, or the cluster was created again: it asks to join again, and waits for approval. |
+| `WARN drift repaired: ...` | Something else changed theLB's kernel state - a script, a person, another network tool - and theLB put it back. Find what did it: the two will undo each other every 10 seconds. |
+| `ERROR a loop has stopped ...` | A loop of theLB's stopped going round; under systemd theLB is restarted. Report it with the log around it. |
 | `theLB is already running on this node` | One director and one backend may run on a machine, each once. |
 | `thelb ... runs only as root` | Use `sudo`. |
 

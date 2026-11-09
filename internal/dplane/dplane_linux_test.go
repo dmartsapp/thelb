@@ -138,8 +138,8 @@ func TestRootApplyChangesOnlyWhatChangedAndRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	apply(plan(3, false), false)
-	if weights() != nil {
-		t.Errorf("an apply of the same plan read the kernel: %v", weights())
+	if len(weights()) != 0 {
+		t.Errorf("an apply of the same plan read the kernel, and repaired it: %v", weights())
 	}
 	apply(plan(3, false), true)
 	if w := weights(); p.fulls != 2 || w[b1] != 1 || w[b2] != 3 || !vipOn() || !pinned() {
