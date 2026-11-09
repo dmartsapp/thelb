@@ -106,6 +106,10 @@ type Plan struct {
 	VIPs     []PlanVIP
 	Services []PlanService
 	Pins     []PlanPin
+	// Pools are the cluster's pools, for Leftovers only: an IPVS service on a
+	// pool's address is theLB's, though the cluster no longer has it - a service
+	// removed while this director was down.
+	Pools []cluster.Pool
 }
 
 // PlanVIP is a service VIP, on its pool's interface.
@@ -608,6 +612,9 @@ func (nothing) Sync(SyncState) error                              { return nil }
 func (s *session) known() Plan {
 	var plan Plan
 	s.fsm.Read(func(st *cluster.State) {
+		for _, p := range st.Pools {
+			plan.Pools = append(plan.Pools, *p)
+		}
 		for _, v := range st.Services {
 			vip, err := netip.ParseAddr(v.VIP)
 			if err != nil {

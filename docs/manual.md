@@ -382,7 +382,7 @@ What the columns say:
 
 ## 14. What theLB changes on a machine
 
-Everything is runtime state, recorded and removed - parameters restored - when theLB stops cleanly. After a crash, the next start removes what the crash left (marked by theLB's address protocol, `proto 0x74` in `ip address`, or by its interfaces' and table's names).
+Everything is runtime state, recorded and removed - parameters restored - when theLB stops cleanly. After a crash, the next start removes what the crash left (marked by theLB's address protocol, `proto 0x74` in `ip address`, or by its interfaces' and table's names). IPVS services carry no mark: a director removes those the cluster has, and any on a pool's address - one removed while it was down among them - and leaves other programs' alone.
 
 | Where | What | When |
 |---|---|---|

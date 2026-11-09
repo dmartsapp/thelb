@@ -546,21 +546,30 @@ func (p *Plane) Leftovers(plan director.Plan) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var errs []error
-	if len(plan.Services) > 0 {
+	if len(plan.Services) > 0 || len(plan.Pools) > 0 {
 		c, err := ipvs.Open()
 		if err == nil {
-			have := map[string]bool{}
-			if list, err := c.Services(); err == nil {
-				for _, s := range list {
-					have[s.Key()] = true
-				}
-			}
+			// The cluster's services, wherever their VIPs are; and any service
+			// on a pool's address - theLB's, though the cluster no longer has it.
+			known := map[string]bool{}
 			for _, ps := range plan.Services {
-				key := ps.Key()
-				if _, ours := p.services[key]; ours || !have[key] {
+				known[ps.Key()] = true
+			}
+			inPool := func(a netip.Addr) bool {
+				for i := range plan.Pools {
+					if plan.Pools[i].Contains(a) {
+						return true
+					}
+				}
+				return false
+			}
+			list, _ := c.Services()
+			for _, s := range list {
+				key := s.Key()
+				if _, ours := p.services[key]; ours || (!known[key] && !inPool(s.Addr)) {
 					continue
 				}
-				if err := c.DelService(ps.Service); err != nil {
+				if err := c.DelService(s); err != nil {
 					errs = append(errs, err)
 					continue
 				}

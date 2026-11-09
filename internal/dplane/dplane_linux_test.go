@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/ipvs"
 	"github.com/dmartsapp/thelb/internal/logx"
@@ -289,5 +290,49 @@ func TestRootSyncStartsAdoptsRepairsAndStops(t *testing.T) {
 	said = out2.String()
 	if err := q.Sync(director.SyncState{}); err != nil || out2.String() != said {
 		t.Errorf("stopping again changed something: %v", err)
+	}
+}
+
+// TestRootLeftoversRemovesTheClustersServicesAndAnyOnAPoolsAddress: after a
+// crash, a director that does not lead removes the IPVS services the cluster
+// has, and any on a pool's address - one removed from the cluster while the
+// director was down - and leaves another program's alone.
+func TestRootLeftoversRemovesTheClustersServicesAndAnyOnAPoolsAddress(t *testing.T) {
+	rootns.Enter(t)
+	c, err := ipvs.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := func(addr string, port uint16) ipvs.Service {
+		return ipvs.Service{Addr: netip.MustParseAddr(addr), Protocol: ipvs.TCP, Port: port, Scheduler: "wrr"}
+	}
+	known := svc("203.0.113.5", 80)     // the cluster's, outside every pool
+	removed := svc("198.18.0.21", 9000) // on a pool's address; the cluster no longer has it
+	theirs := svc("192.0.2.7", 443)     // another program's
+	for _, s := range []ipvs.Service{known, removed, theirs} {
+		if err := c.AddService(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out syncLog
+	p := New(logx.New(&out, "thelb"))
+	plan := director.Plan{
+		Services: []director.PlanService{{Service: known}},
+		Pools:    []cluster.Pool{{Name: "lab", First: "198.18.0.20", Bits: 24, Count: 10}},
+	}
+	if err := p.Leftovers(plan); err != nil {
+		t.Fatal(err)
+	}
+	list, err := c.Services()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Key() != theirs.Key() {
+		t.Errorf("left in IPVS: %+v; want only %s", list, theirs.Key())
+	}
+	for _, want := range []string{"removed an IPVS service an earlier run left service=" + known.Key(), "removed an IPVS service an earlier run left service=" + removed.Key()} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the log lacks %q:\n%s", want, out.String())
+		}
 	}
 }
