@@ -53,9 +53,15 @@ bin="$tmp/bin/thelb"
 
 declare -A pid addr4 addr6 mac
 cleanup() {
+	set +u
 	for n in "${!pid[@]}"; do kill -9 "${pid[$n]}" 2>/dev/null; done
-	for n in "${!web[@]}"; do kill "${web[$n]}" 2>/dev/null; done
-	wait 2>/dev/null
+	# Every process left in the lab's namespaces - web servers included - then
+	# the namespaces. No bare wait: a process it would wait for may be one the
+	# script never started.
+	for ns in $(ip netns list | awk '{print $1}'); do
+		case $ns in $P-*) for p in $(ip netns pids "$ns"); do kill -9 "$p" 2>/dev/null; done ;; esac
+	done
+	sleep 1
 	for ns in $(ip netns list | awk '{print $1}'); do
 		case $ns in $P-*) ip netns del "$ns" ;; esac
 	done
