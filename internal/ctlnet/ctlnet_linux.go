@@ -161,6 +161,37 @@ func (n *Net) announce(ctx context.Context) {
 	}
 }
 
+// Repair puts the control VIP back on its interface, and announces it again,
+// if someone removed it while this director holds it: true if it did.
+func (n *Net) Repair() (bool, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.ln == nil {
+		return false, nil
+	}
+	addrs, err := netlink.Addrs()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrs {
+		if a.Index == n.ifc.Index && a.Prefix.Addr() == n.vip {
+			return false, nil
+		}
+	}
+	var flags uint32
+	if n.vip.Is6() {
+		flags = netlink.IFANoDAD
+	}
+	if err := netlink.AddAddr(n.ifc.Index, n.prefix(), n.label(), Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return false, fmt.Errorf("adding the control VIP to %s again: %w", n.ifc.Name, err)
+	}
+	n.cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	n.cancel = cancel
+	go n.announce(ctx)
+	return true, nil
+}
+
 // Release removes the control VIP, then closes its listener.
 func (n *Net) Release() {
 	n.mu.Lock()

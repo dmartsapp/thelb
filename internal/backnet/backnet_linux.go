@@ -205,6 +205,98 @@ func (h *Host) Tunnel(on bool) error {
 	return nil
 }
 
+// Repair puts back what someone removed or changed of the backend's kernel
+// state - thelb0 and its VIPs, theLB's nftables table, thelbt0, the kernel
+// parameters - and says what it put back.
+func (h *Host) Repair() ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var fixed []string
+	var errs []error
+	ifc, err := net.InterfaceByName(Interface)
+	if err != nil {
+		if err := netlink.AddDummy(Interface); err != nil {
+			return nil, fmt.Errorf("creating %s again: %w", Interface, err)
+		}
+		if ifc, err = net.InterfaceByName(Interface); err != nil {
+			return nil, err
+		}
+		fixed = append(fixed, Interface+" was removed: created again")
+	}
+	h.index = ifc.Index
+	on := map[netip.Addr]bool{}
+	addrs, err := netlink.Addrs()
+	if err != nil {
+		return fixed, err
+	}
+	for _, a := range addrs {
+		if a.Index == h.index {
+			on[a.Prefix.Addr()] = true
+		}
+	}
+	for a := range h.held {
+		if on[a] {
+			continue
+		}
+		var flags uint32
+		if a.Is6() {
+			flags = netlink.IFANoDAD
+		}
+		if err := netlink.AddAddr(h.index, netip.PrefixFrom(a, a.BitLen()), "", ctlnet.Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
+			errs = append(errs, fmt.Errorf("adding %s to %s again: %w", a, Interface, err))
+			continue
+		}
+		fixed = append(fixed, fmt.Sprintf("the VIP %s was removed from %s: added again", a, Interface))
+	}
+	if want := len(h.maps) + len(h.clamps); want > 0 {
+		if n, err := nft.Rules(); err != nil {
+			errs = append(errs, err)
+		} else if n != want {
+			if err := nft.Apply(h.maps, h.clamps...); err != nil {
+				errs = append(errs, fmt.Errorf("the nftables table inet %s again: %w", nft.Table, err))
+			} else {
+				fixed = append(fixed, fmt.Sprintf("the nftables table inet %s held %d rules, not %d: replaced", nft.Table, n, want))
+			}
+		}
+	}
+	if h.tunnel {
+		if _, err := net.InterfaceByName(TunnelInterface); err != nil {
+			if err := netlink.AddIPIPExternal(TunnelInterface); err != nil && !errors.Is(err, syscall.EEXIST) {
+				errs = append(errs, fmt.Errorf("creating %s again: %w", TunnelInterface, err))
+			} else {
+				fixed = append(fixed, TunnelInterface+" was removed: created again")
+			}
+		}
+		if v, err := sysctl.Read("net/ipv4/conf/" + TunnelInterface + "/rp_filter"); err == nil && v != "0" {
+			if err := sysctl.Write("net/ipv4/conf/"+TunnelInterface+"/rp_filter", "0"); err != nil {
+				errs = append(errs, err)
+			} else {
+				fixed = append(fixed, "net/ipv4/conf/"+TunnelInterface+"/rp_filter was "+v+": set to 0 again")
+			}
+		}
+	}
+	type param struct {
+		name, want string
+		fine       []string
+	}
+	ps := []param{
+		{"net/ipv4/conf/all/arp_ignore", "1", []string{"1", "2"}},
+		{"net/ipv4/conf/all/arp_announce", "2", nil},
+	}
+	if h.tunnel {
+		ps = append(ps, param{"net/ipv4/conf/all/rp_filter", "2", []string{"0", "2"}})
+	}
+	for _, x := range ps {
+		old, changed, err := h.params.Ensure(x.name, x.want, x.fine...)
+		if err != nil {
+			errs = append(errs, err)
+		} else if changed {
+			fixed = append(fixed, x.name+" was "+old+": set to "+x.want+" again")
+		}
+	}
+	return fixed, errors.Join(errs...)
+}
+
 // Holding are the VIPs on thelb0.
 func (h *Host) Holding() []netip.Addr {
 	h.mu.Lock()

@@ -172,7 +172,9 @@ func (s *session) promote(name string, n cluster.Node) {
 // checkInLoop checks in with the leader, every second, while this director
 // does not lead.
 func (s *session) checkInLoop() {
+	defer s.n.alive.Done("check-in")
 	for s.ctx.Err() == nil {
+		s.n.alive.Tick("check-in", stallAfter)
 		addr, id := s.r.LeaderWithID()
 		if id == "" || string(id) == s.raftID {
 			s.sleep(checkInEvery)
@@ -190,6 +192,7 @@ func (s *session) checkInLoop() {
 				break
 			}
 			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version}
+			s.n.alive.Tick("check-in", stallAfter)
 			if w.Send(req) != nil {
 				break
 			}

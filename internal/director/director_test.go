@@ -95,6 +95,7 @@ func (l *loopNet) DialVIP(ctx context.Context) (net.Conn, error)           { ret
 func (l *loopNet) Dial(ctx context.Context, addr string) (net.Conn, error) { return l.dial(ctx, addr) }
 func (l *loopNet) VIPHolder(context.Context) (string, error)               { return "", nil }
 func (l *loopNet) Cleanup() error                                          { return nil }
+func (l *loopNet) Repair() (bool, error)                                   { return false, nil }
 
 func (l *loopNet) MACOf(ip netip.Addr) string {
 	if v, ok := l.macs.Load(ip.String()); ok {

@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/alive"
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/ca"
 	"github.com/dmartsapp/thelb/internal/check"
@@ -68,6 +69,8 @@ type Kernel interface {
 	// Tunnel creates or removes theLB's IP-in-IP interface, thelbt0, which
 	// unwraps what a director sends a tunnelled service.
 	Tunnel(on bool) error
+	// Repair puts back what someone removed or changed of it, and says what.
+	Repair() ([]string, error)
 	// Restore removes thelb0 and puts the parameters back.
 	Restore()
 }
@@ -92,6 +95,12 @@ var (
 	// strayAfter is how long a backend goes without the cluster before it
 	// looks for another on the control VIP: the cluster created again.
 	strayAfter = 15 * time.Second
+	// repairEvery is how often the backend compares its kernel state with
+	// what it should be, and puts back what drifted.
+	repairEvery = 10 * time.Second
+	// stallAfter is how long a loop may go without going round before
+	// systemd's watchdog is told no more.
+	stallAfter = 30 * time.Second
 )
 
 var errRemoved = errors.New("this backend was removed from the cluster")
@@ -106,6 +115,7 @@ type agent struct {
 	secret secret.Secret
 	kernel Kernel
 	ready  sync.Once
+	alive  *alive.Watch
 
 	mu       sync.Mutex
 	phase    string
@@ -157,7 +167,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	if err != nil {
 		return fmt.Errorf("the control VIP %s: %w", cfg.Join.Addr(), err)
 	}
-	b := &agent{cfg: cfg, d: d, log: log, local: addr, phase: "starting", ctx: ctx,
+	b := &agent{cfg: cfg, d: d, log: log, local: addr, phase: "starting", ctx: ctx, alive: alive.New(d.Log.Module("watchdog")),
 		wanted: map[string]cluster.Offer{}, recorded: map[string]cluster.Offer{}, refused: map[string]time.Time{},
 		checkers: map[string]*checker{}, said: map[string]time.Time{}}
 	for _, o := range cfg.Offers {
@@ -212,20 +222,14 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		close(served)
 	}()
 	_ = sdnotify.Notify("READY=1\nSTATUS=enrolling on the control VIP")
-	if every := sdnotify.WatchdogInterval(); every > 0 {
-		go func() {
-			t := time.NewTicker(every)
-			defer t.Stop()
-			for {
-				select {
-				case <-sctx.Done():
-					return
-				case <-t.C:
-					_ = sdnotify.Notify("WATCHDOG=1")
-				}
-			}
-		}()
-	}
+	// systemd's watchdog is told only while the loops go round: the kernel's
+	// repair, and the heartbeat while the backend is a member.
+	go b.alive.Feed(sctx, sdnotify.WatchdogInterval(), sdnotify.Notify)
+	repairing := make(chan struct{})
+	go func() {
+		defer close(repairing)
+		b.repairLoop(sctx)
+	}()
 	b.mu.Lock()
 	b.ctx = sctx
 	b.syncCheckers()
@@ -236,12 +240,40 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	_ = sdnotify.Notify("STOPPING=1")
 	stopServing()
 	<-served
+	<-repairing
 	srv.Close()
 	if err != nil {
 		return err
 	}
 	log.OK("stopped")
 	return nil
+}
+
+// repairLoop compares the backend's kernel state with what it should be, every
+// repairEvery, and puts back what someone removed or changed.
+func (b *agent) repairLoop(ctx context.Context) {
+	defer b.alive.Done("kernel repair")
+	said := map[string]time.Time{}
+	t := time.NewTicker(repairEvery)
+	defer t.Stop()
+	for {
+		b.alive.Tick("kernel repair", repairEvery+stallAfter)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		fixed, err := b.kernel.Repair()
+		for _, f := range fixed {
+			b.log.Warn("drift repaired: " + f)
+		}
+		if err != nil {
+			if msg := err.Error(); time.Since(said[msg]) > time.Minute {
+				said[msg] = time.Now()
+				b.log.Error("repairing the kernel state failed; trying again", "error", err)
+			}
+		}
+	}
 }
 
 func (b *agent) setPhase(p string) {
@@ -520,7 +552,9 @@ func (b *agent) session(ctx context.Context, m *membership, until time.Time) err
 	_ = tc.SetDeadline(time.Time{})
 	w := wire.NewConn(tc)
 	first := true
+	defer b.alive.Done("heartbeat")
 	for ctx.Err() == nil && time.Now().Before(until) {
+		b.alive.Tick("heartbeat", stallAfter)
 		beat := b.beat(m)
 		_ = tc.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := w.Send(api.Request{V: wire.Version, Op: api.OpBackend, Beat: &beat}); err != nil {

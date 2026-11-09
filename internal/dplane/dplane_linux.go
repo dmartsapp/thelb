@@ -5,6 +5,11 @@
 // backends as direct-routing destinations; each backend's address pinned to
 // its MAC address; and the IPVS parameters failover needs. It changes only
 // what is theLB's, and Clear removes all of it.
+//
+// Apply changes only what differs from the plan it applied last - nothing at
+// all when the plan is the same - and compares the whole kernel with the plan
+// every 10 s, putting back what someone removed or changed: drift repaired,
+// and logged.
 package dplane
 
 import (
@@ -13,6 +18,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -58,7 +66,15 @@ type Plane struct {
 	pins     map[netip.Addr]pin
 	params   sysctl.Changes
 	tuned    bool
+
+	last     *director.Plan // the plan applied last
+	lastFull time.Time      // when the kernel was last compared whole
+	dirty    bool           // the last apply failed: compare whole next time
+	fulls    int            // whole comparisons made, for tests
 }
+
+// fullEvery is how often Apply compares the whole kernel with the plan.
+var fullEvery = 10 * time.Second
 
 // New is an empty data plane.
 func New(log *logx.Logger) *Plane {
@@ -72,11 +88,68 @@ func label(ifname string, a netip.Addr) string {
 	return ""
 }
 
-// Apply makes the kernel match the plan.
+// Apply makes the kernel match the plan: only what differs from the last plan,
+// or - every fullEvery, and after a failure - all of it, read from the kernel.
 func (p *Plane) Apply(plan director.Plan) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	full := p.dirty || p.last == nil || time.Since(p.lastFull) >= fullEvery
+	if !full && samePlan(*p.last, plan) {
+		return nil
+	}
+	err := p.apply(plan, full)
+	cp := clonePlan(plan)
+	p.last = &cp
+	if full {
+		p.lastFull = time.Now()
+		p.fulls++
+	}
+	p.dirty = err != nil
+	return err
+}
+
+// samePlan is whether two plans hold the same, in whatever order.
+func samePlan(a, b director.Plan) bool { return reflect.DeepEqual(canonical(a), canonical(b)) }
+
+func canonical(p director.Plan) director.Plan {
+	c := clonePlan(p)
+	slices.SortFunc(c.VIPs, func(x, y director.PlanVIP) int { return x.Addr.Compare(y.Addr) })
+	slices.SortFunc(c.Pins, func(x, y director.PlanPin) int { return x.Addr.Compare(y.Addr) })
+	slices.SortFunc(c.Services, func(x, y director.PlanService) int { return strings.Compare(x.Key(), y.Key()) })
+	for i := range c.Services {
+		slices.SortFunc(c.Services[i].Dests, func(x, y ipvs.Dest) int {
+			return netip.AddrPortFrom(x.Addr, x.Port).Compare(netip.AddrPortFrom(y.Addr, y.Port))
+		})
+	}
+	return c
+}
+
+func clonePlan(p director.Plan) director.Plan {
+	c := director.Plan{VIPs: slices.Clone(p.VIPs), Pins: slices.Clone(p.Pins), Services: make([]director.PlanService, len(p.Services))}
+	for i, s := range p.Services {
+		c.Services[i] = director.PlanService{Service: s.Service, Dests: slices.Clone(s.Dests)}
+	}
+	return c
+}
+
+func (p *Plane) apply(plan director.Plan, full bool) error {
 	var errs []error
+	// What was applied last: in a whole comparison, what the kernel lacks of
+	// it was removed by someone else - drift, repaired and logged as such.
+	lastServices := map[string]director.PlanService{}
+	if p.last != nil {
+		for _, ps := range p.last.Services {
+			lastServices[ps.Key()] = ps
+		}
+	}
+	lastDest := func(key string, ap netip.AddrPort) (ipvs.Dest, bool) {
+		for _, d := range lastServices[key].Dests {
+			if netip.AddrPortFrom(d.Addr, d.Port) == ap {
+				return d, true
+			}
+		}
+		return ipvs.Dest{}, false
+	}
 
 	if len(plan.Services) > 0 {
 		if p.conn == nil {
@@ -86,14 +159,17 @@ func (p *Plane) Apply(plan director.Plan) error {
 			}
 			p.conn = c
 		}
-		if !p.tuned {
+		if !p.tuned || full {
 			for _, x := range params {
 				old, changed, err := p.params.Ensure(x.name, x.want)
 				if err != nil {
 					errs = append(errs, err)
 					continue
 				}
-				if changed {
+				switch {
+				case changed && p.tuned:
+					p.log.Warn("drift repaired: a kernel parameter was changed; set again", "name", x.name, "value", x.want, "was", old)
+				case changed:
 					p.log.OK("kernel parameter set", "name", x.name, "value", x.want, "was", old)
 				}
 			}
@@ -124,8 +200,15 @@ func (p *Plane) Apply(plan director.Plan) error {
 		}
 	}
 	for a, x := range pins {
-		if _, ok := p.pins[a]; ok {
-			continue
+		if held, ok := p.pins[a]; ok {
+			if !full {
+				continue
+			}
+			if e, found, err := netlink.Neighbour(held.index, a); err != nil || (found && e.State&netlink.NUDPermanent != 0 && e.MAC.String() == held.mac) {
+				continue
+			}
+			delete(p.pins, a)
+			p.log.Warn("drift repaired: a backend's pinned neighbour entry was removed or changed; pinning it again", "address", a, "mac", x.MAC)
 		}
 		ifc, err := net.InterfaceByName(x.Interface)
 		mac, merr := net.ParseMAC(x.MAC)
@@ -142,13 +225,21 @@ func (p *Plane) Apply(plan director.Plan) error {
 	}
 	// IPVS.
 	if p.conn != nil {
+		// What the kernel has: read from it in a whole comparison, taken from
+		// the last plan applied otherwise.
 		have := map[string]ipvs.Service{}
-		if list, err := p.conn.Services(); err == nil {
-			for _, s := range list {
-				have[s.Key()] = s
+		if full {
+			if list, err := p.conn.Services(); err == nil {
+				for _, s := range list {
+					have[s.Key()] = s
+				}
+			} else {
+				errs = append(errs, err)
 			}
 		} else {
-			errs = append(errs, err)
+			for k, ps := range lastServices {
+				have[k] = ps.Service
+			}
 		}
 		desired := map[string]bool{}
 		for _, ps := range plan.Services {
@@ -160,17 +251,28 @@ func (p *Plane) Apply(plan director.Plan) error {
 					errs = append(errs, err)
 					continue
 				}
-				p.log.OK("IPVS service added", "service", key, "scheduler", ps.Scheduler, "method", "direct")
+				if _, had := lastServices[key]; had && full {
+					p.log.Warn("drift repaired: an IPVS service was removed; added again", "service", key, "scheduler", ps.Scheduler)
+				} else {
+					p.log.OK("IPVS service added", "service", key, "scheduler", ps.Scheduler, "method", "direct")
+				}
 			} else if cur.Scheduler != ps.Scheduler {
 				if err := p.conn.UpdateService(ps.Service); err != nil {
 					errs = append(errs, err)
 				}
 			}
 			p.services[key] = ps.Service
-			dests, err := p.conn.Dests(ps.Service)
-			if err != nil {
-				errs = append(errs, err)
-				continue
+			var dests []ipvs.Dest
+			switch {
+			case !exists: // just added: none yet
+			case full:
+				var err error
+				if dests, err = p.conn.Dests(ps.Service); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+			default:
+				dests = lastServices[key].Dests
 			}
 			got := map[netip.AddrPort]ipvs.Dest{}
 			for _, d := range dests {
@@ -185,6 +287,8 @@ func (p *Plane) Apply(plan director.Plan) error {
 				case !ok:
 					if err := p.conn.AddDest(ps.Service, d); err != nil {
 						errs = append(errs, err)
+					} else if _, had := lastDest(key, ap); had && full && exists {
+						p.log.Warn("drift repaired: an IPVS destination was removed; added again", "service", key, "backend", ap, "weight", d.Weight)
 					} else {
 						p.log.OK("IPVS destination added", "service", key, "backend", ap, "weight", d.Weight, "method", method(d))
 					}
@@ -200,6 +304,8 @@ func (p *Plane) Apply(plan director.Plan) error {
 				case cur.Weight != d.Weight:
 					if err := p.conn.UpdateDest(ps.Service, d); err != nil {
 						errs = append(errs, err)
+					} else if was, had := lastDest(key, ap); had && full && was.Weight == d.Weight {
+						p.log.Warn("drift repaired: an IPVS weight was changed; set again", "service", key, "backend", ap, "weight", d.Weight, "was", cur.Weight)
 					} else {
 						p.log.OK("IPVS weight changed", "service", key, "backend", ap, "weight", d.Weight, "was", cur.Weight)
 					}
@@ -209,6 +315,8 @@ func (p *Plane) Apply(plan director.Plan) error {
 				if !wanted[ap] {
 					if err := p.conn.DelDest(ps.Service, d); err != nil {
 						errs = append(errs, err)
+					} else if _, had := lastDest(key, ap); !had && full {
+						p.log.Warn("drift repaired: an IPVS destination theLB did not add was in its service; removed", "service", key, "backend", ap)
 					} else {
 						p.log.OK("IPVS destination removed", "service", key, "backend", ap)
 					}
@@ -228,9 +336,33 @@ func (p *Plane) Apply(plan director.Plan) error {
 	}
 
 	// The VIPs that come, last: a packet a VIP takes in finds IPVS ready for it.
+	// In a whole comparison, a VIP held but no longer on its interface was
+	// removed by someone: it is added, and announced, again.
+	// By interface and address: a director's host that is also a backend has
+	// the VIP on thelb0 too.
+	type on struct {
+		index int
+		addr  netip.Addr
+	}
+	var present map[on]bool
+	if full && len(p.vips) > 0 {
+		if addrs, err := netlink.Addrs(); err == nil {
+			present = map[on]bool{}
+			for _, x := range addrs {
+				present[on{x.Index, x.Prefix.Addr()}] = true
+			}
+		} else {
+			errs = append(errs, err)
+		}
+	}
 	for a, ifname := range want {
-		if _, ok := p.vips[a]; ok {
-			continue
+		if h, ok := p.vips[a]; ok {
+			if present == nil || present[on{h.index, a}] {
+				continue
+			}
+			h.cancel()
+			delete(p.vips, a)
+			p.log.Warn("drift repaired: a service VIP was removed from its interface; adding it again", "vip", a, "interface", ifname)
 		}
 		ifc, err := net.InterfaceByName(ifname)
 		if err != nil {
@@ -326,6 +458,7 @@ func (p *Plane) Clear() {
 		_ = netlink.UnpinNeighbour(x.index, a)
 		delete(p.pins, a)
 	}
+	p.last, p.dirty = nil, false
 	for _, r := range p.params.Restore() {
 		if r.Err != nil {
 			p.log.Error("restoring a kernel parameter failed", "name", r.Name, "value", r.Value, "error", r.Err)

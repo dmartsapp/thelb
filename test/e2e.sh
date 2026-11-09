@@ -431,6 +431,21 @@ on d1 "$bin" status >"$tmp/summary"
 check "status, alone, is the summary" "grep -qE '^ directors +\| +3 \| +3 \|' $tmp/summary && grep -qE '^ backends +\| +3 \| +3 \|' $tmp/summary && grep -q 'More: thelb status' $tmp/summary"
 on d1 "$bin" status backends | sed 's/^/      /'
 
+echo "== drift: what someone else removes, theLB puts back within its 10 s comparison"
+if command -v ipvsadm >/dev/null; then
+	ip netns exec $P-d1 ipvsadm -D -t $SVC:80
+	check "ipvsadm -D on the leader: the service and its backends come back" "within 20 eval 'weight_is d1 b1 1 && weight_is d1 b2 1 && weight_is d1 b3 1' && logged $tmp/d1.svc.log 'WARN drift repaired: an IPVS service was removed; added again service=tcp/$SVC:80'"
+fi
+ip -n $P-d1 addr del $SVC/32 dev eth0
+check "the service VIP removed from the leader's eth0: added and announced again" "within 20 holds d1 $SVC && logged $tmp/d1.svc.log 'WARN drift repaired: a service VIP was removed from its interface; adding it again vip=$SVC'"
+ip -n $P-b2 addr del $SVC/32 dev thelb0
+check "the VIP removed from b2's thelb0: added again" "within 20 eval 'ip -n $P-b2 -o addr show dev thelb0 | grep -q \" $SVC/32\"' && logged $tmp/b2.log 'WARN drift repaired: the VIP $SVC was removed from thelb0: added again'"
+ip netns exec $P-b3 sh -c 'echo 0 >/proc/sys/net/ipv4/conf/all/arp_ignore'
+check "arp_ignore put back to 0 on b3: set to 1 again" "within 20 eval '[ \$(ip netns exec $P-b3 cat /proc/sys/net/ipv4/conf/all/arp_ignore) = 1 ]' && logged $tmp/b3.log 'WARN drift repaired: net/ipv4/conf/all/arp_ignore was 0: set to 1 again'"
+ip -n $P-d1 addr del $VIP4/32 dev eth0
+check "the control VIP removed from the leader: added again" "within 20 holds d1 $VIP4 && logged $tmp/d1.svc.log 'WARN drift repaired: the control VIP was removed from its interface'"
+check "and the client is served by all three again" "within 40 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+
 echo "== offers made while a backend runs: checked by the leader first, kept by the backend"
 check "thelb offer add on b1: refused while nothing answers" "! on b1 $bin offer add extra tcp/6060 2>$tmp/offer.err && grep -q 'the leader.s check of extra (tcp) at ${addr4[b1]}:6060 fails' $tmp/offer.err"
 ip netns exec $P-b1 python3 -m http.server 6060 --bind 0.0.0.0 --directory "$tmp/b1/www" >/dev/null 2>&1 &
@@ -475,6 +490,8 @@ if command -v nft >/dev/null; then
 	check "b2 maps $MAPPED tcp/80 to 9090, in theLB's nftables table" "within 10 eval 'nft_on b2 | grep -q \"ip daddr $MAPPED tcp dport 80 dnat ip to :9090\"'"
 	check "and only that: web's port is its application's, so no rule" "[ \$(nft_on b2 | grep -c dnat) = 1 ]"
 	nft_on b2 | sed 's/^/      /'
+	ip netns exec $P-b2 nft delete table inet thelb
+	check "the table deleted by someone: replaced within 10 s" "within 20 eval 'nft_on b2 | grep -q \"ip daddr $MAPPED tcp dport 80 dnat ip to :9090\"' && logged $tmp/b2.log 'WARN drift repaired: the nftables table inet thelb held 0 rules, not 1: replaced'"
 fi
 if command -v ipvsadm >/dev/null; then
 	check "IPVS sends the mapped service's packets to the backends unchanged, at port 80" "within 20 eval 'ipvs_on d1 | grep -A3 \"TCP  $MAPPED:80\" | grep -cE \"Route +1 \" | grep -qx 3'"

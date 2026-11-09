@@ -69,7 +69,13 @@ type PlanPin struct {
 func DestKey(s ipvs.Service, d netip.AddrPort) string { return s.Key() + " " + d.String() }
 
 // Timing of the data plane.
-var applyEvery = time.Second // the data plane, when nothing changed
+var (
+	applyEvery  = time.Second      // the data plane, when nothing changed
+	repairEvery = 10 * time.Second // the control VIP checked, and put back
+	// stallAfter is how long a loop may go without going round before
+	// systemd's watchdog is told no more.
+	stallAfter = 30 * time.Second
+)
 
 // backendLive is a backend's last heartbeat, as the leader holds it.
 type backendLive struct {
@@ -123,9 +129,26 @@ func (s *session) serve(ctx context.Context) {
 		s.plane = nil
 		s.mu.Unlock()
 	}()
-	var lastErr string
+	defer s.n.alive.Done("data plane")
+	var lastErr, repairErr string
+	repaired := time.Now()
 	for {
+		s.n.alive.Tick("data plane", stallAfter)
 		changed := s.fsm.Changed()
+		if time.Since(repaired) >= repairEvery {
+			repaired = time.Now()
+			if fixed, err := s.n.net.Repair(); err != nil {
+				if err.Error() != repairErr {
+					s.log.Error("checking the control VIP failed", "vip", s.n.cfg.ControlVIP, "error", err)
+				}
+				repairErr = err.Error()
+			} else {
+				repairErr = ""
+				if fixed {
+					s.log.Warn("drift repaired: the control VIP was removed from its interface; added and announced again", "vip", s.n.cfg.ControlVIP, "interface", s.n.addr.Interface)
+				}
+			}
+		}
 		if err := p.step(ctx); err != nil {
 			if err.Error() != lastErr {
 				s.log.Error("programming the data plane failed", "error", err)

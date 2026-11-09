@@ -345,6 +345,52 @@ func Exists() (bool, error) {
 	}
 }
 
+// Rules is how many rules theLB's table holds, in all its chains: 0 when the
+// table is not there.
+func Rules() (int, error) {
+	fd, err := open()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	s := seq.Add(1)
+	// The rule's table attribute is the table's name attribute's number: a
+	// dump of the rules of theLB's table only.
+	b := header(subsysNFTables<<8|7 /* NFT_MSG_GETRULE */, syscall.NLM_F_REQUEST|syscall.NLM_F_DUMP, s, nfgen(nfprotoINET, 0), table())
+	if err := syscall.Sendto(fd, b, 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		return 0, err
+	}
+	n := 0
+	for {
+		buf := make([]byte, 1<<16)
+		got, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return 0, err
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:got])
+		if err != nil {
+			return 0, err
+		}
+		for _, m := range msgs {
+			if m.Header.Seq != s {
+				continue
+			}
+			switch m.Header.Type {
+			case syscall.NLMSG_DONE:
+				return n, nil
+			case syscall.NLMSG_ERROR:
+				e := int32(binary.NativeEndian.Uint32(m.Data[0:4]))
+				if e == 0 || syscall.Errno(-e) == syscall.ENOENT {
+					return n, nil
+				}
+				return 0, syscall.Errno(-e)
+			case subsysNFTables<<8 | msgNewRule:
+				n++
+			}
+		}
+	}
+}
+
 func open() (int, error) {
 	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, netlinkNetfilter)
 	if err != nil {

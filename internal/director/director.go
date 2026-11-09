@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/alive"
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
@@ -60,6 +61,9 @@ type Network interface {
 	Take() (net.Listener, error)
 	// Release removes the control VIP and closes its listener.
 	Release()
+	// Repair puts the control VIP back, while this director holds it, if
+	// someone removed it: true if it did.
+	Repair() (bool, error)
 	// Cleanup removes a control VIP an earlier run left on this node, and fails
 	// if one is here that theLB did not add.
 	Cleanup() error
@@ -177,6 +181,10 @@ type node struct {
 
 	ready sync.Once
 
+	// alive tells systemd's watchdog this director is alive while its loops
+	// go round.
+	alive *alive.Watch
+
 	mu      sync.Mutex
 	phase   string // what the director is doing, while it is not a member
 	joining *wire.Cluster
@@ -197,7 +205,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 
 	// One theLB per node: the socket first, before anything else is touched.
-	n := &node{cfg: cfg, d: d, log: log, addr: addr, phase: "starting"}
+	n := &node{cfg: cfg, d: d, log: log, addr: addr, phase: "starting", alive: alive.New(d.Log.Module("watchdog"))}
 	srv, err := localsock.Listen(d.RunDir, n, d.Log.Module("socket"))
 	if err != nil {
 		return err
@@ -241,20 +249,9 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	// Started, for systemd: joining may wait for an approval for as long as it
 	// takes, so readiness cannot wait for membership.
 	_ = sdnotify.Notify("READY=1\nSTATUS=looking for the cluster on the control VIP")
-	if every := sdnotify.WatchdogInterval(); every > 0 {
-		go func() {
-			t := time.NewTicker(every)
-			defer t.Stop()
-			for {
-				select {
-				case <-sctx.Done():
-					return
-				case <-t.C:
-					_ = sdnotify.Notify("WATCHDOG=1")
-				}
-			}
-		}()
-	}
+	// systemd's watchdog is told only while the loops go round: the data plane
+	// while this director leads, its check-ins with the leader otherwise.
+	go n.alive.Feed(sctx, sdnotify.WatchdogInterval(), sdnotify.Notify)
 
 	err = n.loop(ctx)
 	log.OK("stopping")
