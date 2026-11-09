@@ -79,14 +79,17 @@ type Pool struct {
 	Used      int    `json:"used"`
 }
 
-// Offer is what a backend offers to serve.
+// Offer is what a backend offers to serve: an application, by the name the
+// backend gave it, assigned to a service or not yet.
 type Offer struct {
 	Node         string  `json:"node"`
+	Offer        string  `json:"offer"`
 	Address      string  `json:"address"`
 	Protocol     string  `json:"protocol"`
 	Port         int     `json:"port"`
 	Check        string  `json:"check"`
-	Service      *string `json:"service"`
+	OwnCheck     string  `json:"own_check"` // the backend's own, as its last heartbeat said: ok, fail or "-"
+	Service      *string `json:"service"`   // nil: unassigned
 	SinceSeconds float64 `json:"since_seconds"`
 }
 
@@ -142,9 +145,11 @@ type Mine struct {
 
 // MineOffer is one of a backend's offers.
 type MineOffer struct {
-	Offer   string `json:"offer"`
+	Offer   string `json:"offer"` // its name
+	Port    string `json:"port"`  // proto/port
 	Check   string `json:"check"`
 	Own     string `json:"own_check"`
+	Offered string `json:"offered"` // yes: the cluster holds it; or why not yet
 	Service string `json:"service"`
 }
 
@@ -365,13 +370,13 @@ func (s Status) summary() []SummaryRow {
 }
 
 func (m *Mine) text() string {
-	headers := []string{"role", "cluster", "state", "offer", "check", "own check", "service", "node fingerprint"}
+	headers := []string{"role", "cluster", "state", "offer", "port", "check", "own check", "offered", "service", "node fingerprint"}
 	var rows [][]string
 	for _, o := range m.Offers {
-		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, o.Offer, o.Check, o.Own, o.Service, m.NodeFingerprint})
+		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, o.Offer, o.Port, o.Check, o.Own, dash(o.Offered), o.Service, m.NodeFingerprint})
 	}
 	if len(rows) == 0 {
-		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, "-", "-", "-", "-", m.NodeFingerprint})
+		rows = append(rows, []string{m.Role, dash(m.Cluster), m.State, "-", "-", "-", "-", "-", "-", m.NodeFingerprint})
 	}
 	return table.Render(headers, rows)
 }
@@ -434,9 +439,9 @@ func (s Status) render(name string, now time.Time) string {
 			if o.Service != nil {
 				svc = *o.Service
 			}
-			rows = append(rows, []string{o.Node, o.Address, o.Protocol + "/" + strconv.Itoa(o.Port), o.Check, svc, seconds(o.SinceSeconds)})
+			rows = append(rows, []string{o.Node, dash(o.Offer), o.Address, o.Protocol + "/" + strconv.Itoa(o.Port), o.Check, dash(o.OwnCheck), svc, seconds(o.SinceSeconds)})
 		}
-		return table.Render([]string{"node", "address", "offer", "check", "service", "since"}, rows)
+		return table.Render([]string{"node", "offer", "address", "port", "check", "own check", "service", "since"}, rows)
 	case "vips":
 		rows := make([][]string, 0, len(s.VIPs))
 		for _, v := range s.VIPs {

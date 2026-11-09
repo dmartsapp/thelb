@@ -185,6 +185,10 @@ func (p *plane) step(ctx context.Context) error {
 
 	var plan Plan
 	seenVIP := map[netip.Addr]bool{}
+	// The VIPs, in order, and their interfaces: each held only once a backend
+	// serves one of its services - after IPVS has it.
+	var vips []PlanVIP
+	serving := map[netip.Addr]bool{}
 	// Each service's place in plan.Services - an index, not a pointer: the
 	// slice moves as it grows.
 	byKey := map[string]int{}
@@ -202,7 +206,7 @@ func (p *plane) step(ctx context.Context) error {
 				s.log.Warn("this director cannot hold a pool's VIPs", "pool", pool.Name, "error", err)
 				continue
 			}
-			plan.VIPs = append(plan.VIPs, PlanVIP{Addr: vip, Interface: ifc.Interface})
+			vips = append(vips, PlanVIP{Addr: vip, Interface: ifc.Interface})
 		}
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		plan.Services = append(plan.Services, PlanService{Service: ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port), Scheduler: v.Scheduler}})
@@ -236,6 +240,9 @@ func (p *plane) step(ctx context.Context) error {
 		if ready {
 			w = a.Weight
 		}
+		if w > 0 {
+			serving[ps.Addr] = true
+		}
 		// Direct routing never changes the port: the destination is the backend
 		// at the service's port, which the backend maps to its application's.
 		ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: ps.Port, Weight: uint32(w), Tunnel: tunnel[a.Service]})
@@ -258,6 +265,11 @@ func (p *plane) step(ctx context.Context) error {
 			if ifc, err := s.n.local(addr, ""); err == nil && n.MAC != "" {
 				plan.Pins = append(plan.Pins, PlanPin{Addr: addr, MAC: n.MAC, Interface: ifc.Interface})
 			}
+		}
+	}
+	for _, v := range vips {
+		if serving[v.Addr] {
+			plan.VIPs = append(plan.VIPs, v)
 		}
 	}
 	p.mu.Lock()
@@ -339,7 +351,7 @@ func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkI
 }
 
 // liveNow is what only the leader knows, for status.
-func (s *session) liveNow() ([]api.CheckIn, []api.Live) {
+func (s *session) liveNow() ([]api.CheckIn, []api.Live, []api.Own) {
 	var cis []api.CheckIn
 	for _, ci := range s.checkInsCopy() {
 		cis = append(cis, api.CheckIn(ci))
@@ -352,7 +364,21 @@ func (s *session) liveNow() ([]api.CheckIn, []api.Live) {
 	}
 	s.mu.Unlock()
 	if p == nil {
-		return cis, nil
+		return cis, nil, nil
+	}
+	var own []api.Own
+	for _, node := range sortedNames(beats) {
+		b := beats[node]
+		if !b.at.After(p.since) {
+			continue
+		}
+		for _, key := range sortedNames(b.checks) {
+			w := "fail"
+			if b.checks[key] {
+				w = "ok"
+			}
+			own = append(own, api.Own{Node: node, Offer: key, Check: w})
+		}
 	}
 	stats := s.dp().Stats()
 	var live []api.Live
@@ -399,13 +425,13 @@ func (s *session) liveNow() ([]api.CheckIn, []api.Live) {
 		l.Conns, l.Packets, l.Bytes = st.Conns, st.Packets, st.Bytes
 		live = append(live, l)
 	}
-	return cis, live
+	return cis, live, own
 }
 
 // serveBackend takes a backend's heartbeats, while this director leads, and
-// answers each with what the backend is to serve.
+// answers each with what the backend is to serve, and the offers the cluster
+// holds for it.
 func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.Request) {
-	recorded := false
 	for {
 		if s.leading() == nil {
 			_ = w.Send(api.Response{V: wire.Version, Error: errNotLeader.Error()})
@@ -417,15 +443,14 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 			return
 		}
 		var n *cluster.Node
-		var known []cluster.Offer
-		var orders api.Orders
+		orders := api.Orders{Offers: []cluster.Offer{}}
 		s.fsm.Read(func(st *cluster.State) {
 			if p := st.Nodes[name]; p != nil {
 				cp := *p
 				n = &cp
 			}
 			if o := st.Offers[name]; o != nil {
-				known = o.Offers
+				orders.Offers = append(orders.Offers, o.Offers...)
 			}
 			for _, a := range st.Assignments {
 				if a.Node != name {
@@ -454,16 +479,6 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 			_ = w.Send(api.Response{V: wire.Version, OK: true, Orders: &api.Orders{}})
 			return
 		}
-		if !recorded || !sameOffers(known, b.Offers) {
-			if !sameOffers(known, b.Offers) {
-				if err := s.apply(cluster.TypeOffers, name, cluster.SetOffers{Node: name, Offers: b.Offers}); err != nil {
-					s.log.Warn("recording a backend's offers failed", "node", name, "error", err)
-				} else {
-					s.log.OK("backend offers", "node", name, "offers", offerList(b.Offers))
-				}
-			}
-			recorded = true
-		}
 		sort.Slice(orders.Assignments, func(i, j int) bool { return orders.Assignments[i].Service < orders.Assignments[j].Service })
 		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if w.Send(api.Response{V: wire.Version, OK: true, Orders: &orders}) != nil {
@@ -475,29 +490,6 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 			return
 		}
 	}
-}
-
-func sameOffers(a, b []cluster.Offer) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	key := func(o cluster.Offer) string { return o.Key() + " " + o.Check }
-	x, y := make([]string, len(a)), make([]string, len(b))
-	for i := range a {
-		x[i], y[i] = key(a[i]), key(b[i])
-	}
-	sort.Strings(x)
-	sort.Strings(y)
-	return slices.Equal(x, y)
-}
-
-func offerList(os []cluster.Offer) string {
-	var parts []string
-	for _, o := range os {
-		parts = append(parts, o.Key()+"("+check.Describe(o.Check)+")")
-	}
-	sort.Strings(parts)
-	return fmt.Sprint(parts)
 }
 
 // nothing is a data plane that holds nothing, for a director that cannot

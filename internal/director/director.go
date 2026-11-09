@@ -540,6 +540,12 @@ func (n *node) SecretText(role string) (string, error) {
 	return s.Encode(), nil
 }
 
+// Offer refuses: a backend offers its applications, and a director's host
+// offers through a backend of its own.
+func (n *node) Offer(api.Offer) (api.Result, error) {
+	return api.Result{}, errors.New("thelb offer runs where thelb backend runs: on this host, start one beside the director, under its own --name")
+}
+
 // Admin changes the cluster, for `thelb admin`: on the leader directly, from
 // another director through the leader.
 func (n *node) Admin(c api.Change) (api.Result, error) {

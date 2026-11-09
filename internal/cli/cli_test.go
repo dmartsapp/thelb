@@ -176,6 +176,13 @@ func (fakeNode) Admin(c api.Change) (api.Result, error) {
 	return api.Result{Names: c.Names}, nil
 }
 
+func (fakeNode) Offer(o api.Offer) (api.Result, error) {
+	offerCalls = append(offerCalls, o.Op+" "+o.Offer.Name+" "+o.Offer.Key()+" "+o.Offer.Check)
+	return api.Result{Message: "offer " + o.Offer.Name}, nil
+}
+
+var offerCalls []string
+
 func (fakeNode) Generate(what string) (string, error) {
 	if what == "commands" {
 		return "#!/bin/sh\nthelb admin pool add lab --vip 10.0.0.20/24 --vippool-count 10\n", nil
@@ -190,7 +197,10 @@ func (fakeNode) SecretText(role string) (string, error) {
 	return "", errors.New("no")
 }
 
-func withRunningTheLB(t *testing.T) {
+func withRunningTheLB(t *testing.T) { t.Helper(); withRunning(t, "director") }
+
+// withRunning runs the fake theLB as the role named.
+func withRunning(t *testing.T, role string) {
 	t.Helper()
 	base, err := os.MkdirTemp("/tmp", "thelb-cli-")
 	if err != nil {
@@ -200,7 +210,7 @@ func withRunningTheLB(t *testing.T) {
 	saved := runDir
 	runDir = filepath.Join(base, "run")
 	t.Cleanup(func() { runDir = saved })
-	srv, err := localsock.Listen(filepath.Join(runDir, "director"), fakeNode{}, logx.New(&bytes.Buffer{}, "socket"))
+	srv, err := localsock.Listen(filepath.Join(runDir, role), fakeNode{}, logx.New(&bytes.Buffer{}, "socket"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,12 +325,13 @@ func TestBackendFlagsReachTheBackend(t *testing.T) {
 	goos = "linux"
 	t.Cleanup(func() { goos = savedOS })
 	code, _, errOut := as(t, 0, "backend", "--join", "10.0.0.10:7443", "--secret-file", "/etc/thelb/backend.secret", "--name", "web-1",
-		"--offer", "tcp/8080,check=http:/healthz", "--offer", "udp/53")
+		"--offer", "shop=tcp/8080,check=http:/healthz", "--offer", "udp/53")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
 	if got.Join.String() != "10.0.0.10:7443" || got.Name != "web-1" || got.SecretFile != "/etc/thelb/backend.secret" || len(got.Offers) != 2 ||
-		got.Offers[0].Check != "http:/healthz" || got.Offers[1].Check != "none" || got.Offers[1].Proto != "udp" {
+		got.Offers[0].Check != "http:/healthz" || got.Offers[0].Name != "shop" || got.Offers[1].Check != "none" || got.Offers[1].Proto != "udp" ||
+		got.Offers[1].Name != "udp-53" {
 		t.Errorf("config %+v", got)
 	}
 }
@@ -453,5 +464,39 @@ func TestTheGeneratedCommandsAreCommands(t *testing.T) {
 	}
 	if strings.Join(ops, " ") != "pool.add pool.add service.add service.add assign assign" {
 		t.Errorf("the changes, in order: %v", ops)
+	}
+}
+
+func TestOfferAsksTheBackend(t *testing.T) {
+	withRunning(t, "backend")
+	offerCalls = nil
+	code, out, errOut := as(t, 0, "offer", "add", "shop", "tcp/8080,check=http:/healthz")
+	if code != 0 || out != "offer shop\n" || strings.Join(offerCalls, ";") != "add shop tcp/8080 http:/healthz" {
+		t.Errorf("add: exit %d, %q %q, %v", code, out, errOut, offerCalls)
+	}
+	offerCalls = nil
+	code, _, errOut = as(t, 0, "offer", "add", "dns", "udp/53")
+	if code != 0 || strings.Join(offerCalls, ";") != "add dns udp/53 none" {
+		t.Errorf("add udp: exit %d, %q, %v", code, errOut, offerCalls)
+	}
+	offerCalls = nil
+	code, _, errOut = as(t, 0, "offer", "remove", "shop")
+	if code != 0 || strings.Join(offerCalls, ";") != "remove shop /0 " {
+		t.Errorf("remove: exit %d, %q, %v", code, errOut, offerCalls)
+	}
+	for _, args := range [][]string{
+		{"offer"},
+		{"offer", "add", "shop"},
+		{"offer", "add", "tcp/8080", "shop"},
+		{"offer", "add", "shop", "web=tcp/8080"},
+		{"offer", "add", "bad/name", "tcp/8080"},
+		{"offer", "add", "shop", "tcp/8080,check=http:/", "extra"},
+		{"offer", "remove"},
+		{"offer", "list"},
+	} {
+		offerCalls = nil
+		if code, _, _ := as(t, 0, args...); code != 2 || len(offerCalls) != 0 {
+			t.Errorf("%v: exit %d, calls %v", args, code, offerCalls)
+		}
 	}
 }

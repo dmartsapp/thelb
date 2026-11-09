@@ -59,7 +59,7 @@ func (s *session) serveAPI(c *tls.Conn) {
 		switch req.Op {
 		case api.OpBackend:
 			s.serveBackend(c, w, peer.Name, req)
-		case api.OpRenew:
+		case api.OpRenew, api.OpOffer:
 			s.answer(w, peer.Name, req)
 		default:
 			fail(fmt.Errorf("a backend may not %s", req.Op))
@@ -80,7 +80,11 @@ func (s *session) answer(w *wire.Conn, by string, req api.Request) {
 	case s.leading() == nil:
 		err = errNotLeader
 	case req.Op == api.OpLive:
-		resp.CheckIns, resp.Live = s.liveNow()
+		resp.CheckIns, resp.Live, resp.Own = s.liveNow()
+	case req.Op == api.OpOffer && req.Offer != nil:
+		var r api.Result
+		r, err = s.offer(by, *req.Offer)
+		resp.Result = &r
 	case req.Op == api.OpChange && req.Change != nil:
 		var r api.Result
 		r, err = s.change(by, *req.Change)
@@ -254,30 +258,42 @@ func (s *session) admin(c api.Change) (api.Result, error) {
 	return *resp.Result, nil
 }
 
-// leaderLive is what only the leader knows: check-ins and heartbeats, and each
-// assignment's checks, weight and counters - this director's own when it leads,
-// asked of the leader otherwise; ok is false when the leader cannot be asked.
-func (s *session) leaderLive() (map[string]checkIn, map[string]api.Live, bool) {
+// leaderView is what only the leader knows: check-ins and heartbeats, each
+// assignment's checks, weight and counters, and the backends' own checks of
+// their offers.
+type leaderView struct {
+	checkIns map[string]checkIn
+	live     map[string]api.Live // by assignment key
+	own      map[string]string   // by node and offer key ("web-1 tcp/80"): ok or fail
+	known    bool                // false: the leader could not be asked
+}
+
+// leaderLive is the leader's view: this director's own when it leads, asked of
+// the leader otherwise.
+func (s *session) leaderLive() leaderView {
 	var cis []api.CheckIn
 	var live []api.Live
+	var own []api.Own
 	if s.leading() != nil {
-		cis, live = s.liveNow()
+		cis, live, own = s.liveNow()
 	} else {
 		resp, err := s.callLeader(api.Request{Op: api.OpLive})
 		if err != nil {
-			return nil, nil, false
+			return leaderView{}
 		}
-		cis, live = resp.CheckIns, resp.Live
+		cis, live, own = resp.CheckIns, resp.Live, resp.Own
 	}
-	m := map[string]checkIn{}
+	v := leaderView{checkIns: map[string]checkIn{}, live: map[string]api.Live{}, own: map[string]string{}, known: true}
 	for _, ci := range cis {
-		m[ci.Name] = checkIn(ci)
+		v.checkIns[ci.Name] = checkIn(ci)
 	}
-	l := map[string]api.Live{}
 	for _, x := range live {
-		l[cluster.AssignmentKey(x.Service, x.Node)] = x
+		v.live[cluster.AssignmentKey(x.Service, x.Node)] = x
 	}
-	return m, l, true
+	for _, x := range own {
+		v.own[x.Node+" "+x.Offer] = x.Check
+	}
+	return v
 }
 
 func sortedNames[V any](m map[string]V) []string {

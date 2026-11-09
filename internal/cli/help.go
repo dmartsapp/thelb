@@ -10,6 +10,7 @@ Commands:
   backend    run this node as a backend
   status     show the cluster, from the theLB running on this node
   doctor     check this node, and what theLB would change     (not in this build yet)
+  offer      on a backend: offer an application to the cluster, or withdraw it
   generate   print a file's content, and write nothing: secret, commands
   admin      change the cluster, on a director: approve, refuse, remove,
              pool, service, assign, unassign, secret show
@@ -53,20 +54,27 @@ Flags:
   --interface <name>             the control VIP's interface (default: the one in its network)
 `,
 	"backend": `Usage:
-  thelb backend --join <control VIP:port> --secret-file <file> --offer <offer> ... [flags]
+  thelb backend --join <control VIP:port> --secret-file <file> [--offer <offer> ...] [flags]
 
 Runs this node as a backend. It enrols on the control VIP with the backends'
 secret - the file a bootstrap created, copied from a director - and waits for a
-director's approval. Then it sends its heartbeat every 2 seconds, checks its
-applications, and holds the VIPs of the services its offers are assigned to on
-its own interface, thelb0, without answering ARP for them. It never chooses a
-service: a director assigns its offers (thelb admin assign).
+director's approval. Then it offers its applications - each checked by the
+leader first - sends its heartbeat every 2 seconds, checks its applications,
+and holds the VIPs of the services its offers are assigned to on its own
+interface, thelb0, without answering ARP for them. It never chooses a service:
+a director assigns its offers (thelb admin assign).
+
+What it offers: its --offer flags, and what is offered while it runs with
+thelb offer add. The cluster keeps its offers: a backend that starts again
+takes them up again, and offers them to a cluster created again. An offer the
+leader refuses - its application not answering - is offered again every 10 s.
 
 Flags:
   --join <address:port>   the control VIP - an address or a name - and port
   --secret-file <file>    the backends' secret (absolute path)
-  --offer <offer>         what this node serves, as often as needed: tcp/8080,
-                          udp/53 or sctp/2905, with ,check=tcp (TCP's default),
+  --offer <offer>         an application this node serves, as often as needed:
+                          [name=]tcp/8080, udp/53 or sctp/2905 - named tcp-8080
+                          without a name - with ,check=tcp (TCP's default),
                           ,check=http:/healthz, or ,check=none (UDP's and
                           SCTP's default)
   --name <name>           this node's name (default: its hostname)
@@ -78,6 +86,23 @@ inet thelb.
 
 On a director's own host, a backend runs beside the director: start it after
 the director, with its own --name, and offer the service's port itself.
+`,
+	"offer": `Usage:
+  thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]
+  thelb offer remove <name>
+
+On a backend that is a member of a cluster: offers one of its applications to
+the cluster, under a name of the backend's choosing, or withdraws it.
+
+  add      the leader checks the application - the offer's check, tcp by
+           default for TCP - and records the offer, unassigned, once it
+           answers; a director then assigns it to a service:
+           thelb admin assign <service> <node>:<name>. The same name again
+           with another port or check replaces the offer.
+  remove   withdraws it; the services it is assigned to lose it
+
+The backend checks what it offers every 2 seconds: while its check fails, the
+offer serves no service, and it serves again when the check passes.
 `,
 	"status": `Usage:
   thelb status [--json] [--watch] [--role director|backend] [view or table ...]
@@ -126,7 +151,7 @@ systemd, sysctl, modules and k8s come later.
   thelb admin pool remove <name>
   thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr] [--method direct|tunnel]
   thelb admin service remove <name>
-  thelb admin assign <service> <node>:<proto>/<port> ... [--weight <node>=<n>,...]
+  thelb admin assign <service> <node>:<offer> ... [--weight <node>=<n>,...]
   thelb admin unassign <service> <node>
   thelb admin secret show --role director|backend
 
@@ -149,10 +174,14 @@ leader, under this director's identity.
                   --scheduler wrr (the default), rr, wlc, lc, sh or mh;
                   --method direct (the default: backends on the director's
                   network) or tunnel (IP-in-IP: backends anywhere routed, IPv4)
-  assign          assigns backends' offers to a service, weight 1 unless
-                  --weight says otherwise; the offer's protocol must be the
-                  service's, and the director must reach the backend directly;
-                  where its port differs, the backend maps the service's to it
+  assign          assigns backends' offers to a service - each by the name its
+                  backend gave it (web-1:nginx), or its protocol and port
+                  (web-1:tcp/8080); thelb status offers lists them - weight 1
+                  unless --weight says otherwise; the offer's protocol must be
+                  the service's, and the director must reach the backend
+                  directly; where its port differs, the backend maps the
+                  service's to it. The service's VIP comes up once a backend
+                  serves it, after IPVS has it, and goes when none does
   unassign        takes an offer back
   secret show     prints a role's secret, for a node whose secret file is out of
                   date - the one way to see a secret

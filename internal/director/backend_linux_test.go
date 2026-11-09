@@ -155,7 +155,7 @@ func TestABackendServesAService(t *testing.T) {
 		Join:       netip.AddrPortFrom(d1.cfg.ControlVIP, d1.cfg.ControlPort),
 		SecretFile: filepath.Join(base, "backend.secret"),
 		Name:       "web-1",
-		Offers:     []cluster.Offer{{Proto: "tcp", Port: port, Check: "http:/healthz"}},
+		Offers:     []cluster.Offer{{Name: "shop", Proto: "tcp", Port: port, Check: "http:/healthz"}},
 	}
 	run := filepath.Join(base, "run")
 	bctx, bstop := context.WithCancel(context.Background())
@@ -196,7 +196,59 @@ func TestABackendServesAService(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatalf("the backend did not become a member\n%s\n%s", logs, d1.logs)
 	}
-	eventually(t, "the offer recorded", func() bool { return len(d1.status(t).Offers) == 1 })
+	eventually(t, "the --offer offered, once the leader's check passed", func() bool {
+		o := d1.status(t).Offers
+		return len(o) == 1 && o[0].Offer == "shop" && o[0].Service == nil
+	})
+
+	// Offered while it runs: refused while nothing answers, recorded once it
+	// does, and withdrawn.
+	offer := func(op, name string, port int) (api.Result, error) {
+		resp, err := localsock.Call(run, localsock.Request{Op: localsock.OpOffer, Offer: &api.Offer{Op: op, Offer: cluster.Offer{Name: name, Proto: "tcp", Port: port, Check: "tcp"}}})
+		if err != nil {
+			return api.Result{}, err
+		}
+		return *resp.Result, nil
+	}
+	mln, err := net.Listen("tcp", app+":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mport := mln.Addr().(*net.TCPAddr).Port
+	_ = mln.Close()
+	if _, err := offer("add", "metrics", mport); err == nil || !strings.Contains(err.Error(), "the leader's check of metrics (tcp)") {
+		t.Errorf("an offer nothing answers: %v", err)
+	}
+	if _, err := offer("add", "other", port); err == nil || !strings.Contains(err.Error(), "already, as shop") {
+		t.Errorf("a second offer at shop's port: %v", err)
+	}
+	mln, err = net.Listen("tcp", fmt.Sprintf("%s:%d", app, mport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mln.Close() })
+	go func() {
+		for {
+			c, err := mln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	if r, err := offer("add", "metrics", mport); err != nil || !strings.Contains(r.Message, "offer metrics: tcp/") || !strings.Contains(r.Message, "unassigned") {
+		t.Errorf("an offer that answers: %v %+v", err, r)
+	}
+	eventually(t, "two offers, metrics checked ok by its backend", func() bool {
+		o := d1.status(t).Offers
+		return len(o) == 2 && o[0].Offer == "metrics" && o[0].OwnCheck == "ok"
+	})
+	if r, err := offer("remove", "metrics", 0); err != nil || r.Message != fmt.Sprintf("withdrawn: metrics (tcp/%d)", mport) {
+		t.Errorf("withdrawn: %v %+v", err, r)
+	}
+	if o := d1.status(t).Offers; len(o) != 1 || o[0].Offer != "shop" {
+		t.Errorf("after the withdrawal: %+v", o)
+	}
 
 	// A pool, a service, and the offer assigned to it.
 	if _, err := change(t, d1, api.Change{Op: "pool.add", Pool: "lab", VIP: "127.0.0.50/8", Count: 5}); err != nil {
@@ -209,8 +261,16 @@ func TestABackendServesAService(t *testing.T) {
 	if err != nil || !strings.Contains(r.Message, "127.0.0.50 tcp/") {
 		t.Fatalf("service add: %v %+v", err, r)
 	}
+	eventually(t, "the service in IPVS, its VIP not held: no backend serves it", func() bool {
+		plane.mu.Lock()
+		defer plane.mu.Unlock()
+		return len(plane.plan.Services) == 1 && len(plane.plan.VIPs) == 0
+	})
 	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"web"}, Offers: []string{fmt.Sprintf("web-1:tcp/%d", port+1)}}); err == nil {
 		t.Error("an offer the backend does not make was assigned")
+	}
+	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"web"}, Offers: []string{"web-1:metrics"}}); err == nil || !strings.Contains(err.Error(), "it offers shop (tcp/") {
+		t.Errorf("an offer withdrawn was assigned: %v", err)
 	}
 	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"web"}, Offers: []string{fmt.Sprintf("web-1:tcp/%d", port)}, Weights: map[string]int{"web-1": 3}}); err != nil {
 		t.Fatal(err)
@@ -224,7 +284,7 @@ func TestABackendServesAService(t *testing.T) {
 	if _, err := change(t, d1, api.Change{Op: "service.add", Names: []string{"api"}, Pool: "lab", Proto: "tcp", Port: port}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"api"}, Offers: []string{fmt.Sprintf("web-1:tcp/%d", port)}}); err != nil {
+	if _, err := change(t, d1, api.Change{Op: "assign", Names: []string{"api"}, Offers: []string{"web-1:shop"}}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "both services with their backend", func() bool {
@@ -256,13 +316,23 @@ func TestABackendServesAService(t *testing.T) {
 	// The application fails: both checks see it, and the weight goes to 0.
 	<-healthy
 	healthy <- false
-	eventually(t, "weight 0 for a failing backend", func() bool { return plane.weight("127.0.0.50", port, dest) == 0 })
+	eventually(t, "weight 0 for a failing backend, and its VIP released", func() bool {
+		plane.mu.Lock()
+		vips := len(plane.plan.VIPs)
+		plane.mu.Unlock()
+		return plane.weight("127.0.0.50", port, dest) == 0 && vips == 0
+	})
 	if !strings.Contains(d1.logs.String(), "WARN backend not serving: weight 0 service=web node=web-1") {
 		t.Errorf("the leader's log:\n%s", d1.logs)
 	}
 	<-healthy
 	healthy <- true
-	eventually(t, "the weight back", func() bool { return plane.weight("127.0.0.50", port, dest) == 3 })
+	eventually(t, "the weight back, and the VIP", func() bool {
+		plane.mu.Lock()
+		vips := len(plane.plan.VIPs)
+		plane.mu.Unlock()
+		return plane.weight("127.0.0.50", port, dest) == 3 && vips == 1
+	})
 
 	// Removed, the backend stops - and gives its VIPs up.
 	if _, err := change(t, d1, api.Change{Op: "remove", Names: []string{"web-1"}}); err != nil {

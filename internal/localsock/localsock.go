@@ -47,6 +47,7 @@ const (
 	OpSecretShow = "secret.show"
 	OpChange     = "change"   // thelb admin: approve, refuse, remove, pool, service, assign, unassign
 	OpGenerate   = "generate" // thelb generate, for what only the running theLB knows: commands
+	OpOffer      = "offer"    // thelb offer, on a backend: add or remove
 )
 
 // Request is what a command asks.
@@ -56,6 +57,7 @@ type Request struct {
 	Role   string      `json:"role,omitempty"`
 	Change *api.Change `json:"change,omitempty"`
 	What   string      `json:"what,omitempty"` // generate: what to generate
+	Offer  *api.Offer  `json:"offer,omitempty"`
 }
 
 // Response is the answer.
@@ -77,6 +79,9 @@ type Handler interface {
 	Admin(c api.Change) (api.Result, error)
 	// Generate prints what only the running theLB knows.
 	Generate(what string) (string, error)
+	// Offer offers one of a backend's applications to the cluster, or
+	// withdraws it.
+	Offer(o api.Offer) (api.Result, error)
 }
 
 // Server is the listening end.
@@ -226,6 +231,17 @@ func (s *Server) handle(c *net.UnixConn) {
 		}
 		s.log.OK("secret shown", "role", req.Role)
 		answer(Response{OK: true, Secret: text})
+	case OpOffer:
+		if req.Offer == nil {
+			answer(Response{Error: "an offer without an offer"})
+			return
+		}
+		r, err := s.h.Offer(*req.Offer)
+		if err != nil {
+			answer(Response{Error: err.Error()})
+			return
+		}
+		answer(Response{OK: true, Result: &r})
 	case OpGenerate:
 		text, err := s.h.Generate(req.What)
 		if err != nil {

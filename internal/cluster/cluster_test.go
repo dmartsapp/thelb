@@ -277,3 +277,74 @@ func TestPoolsServicesOffersAssignments(t *testing.T) {
 		}
 	})
 }
+
+// TestOffersAddedOneByOne: a backend's offers, each by name - the cluster's
+// record of them, which assignments follow.
+func TestOffersAddedOneByOne(t *testing.T) {
+	a := created(t)
+	web := Claim{Name: "web-1", Role: "backend", Address: "10.0.0.21", MAC: "52:54:00:00:00:21", Fingerprint: "fp-web-1"}
+	_ = a.apply(TypePending, "lb-1", t0, Pending{Claim: web, Since: t0})
+	_ = a.apply(TypeApprove, "lb-1", t0, Names{Names: []string{"web-1"}})
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t1 := t0.Add(time.Minute)
+	must(a.apply(TypeOfferAdd, "web-1", t0, OfferAdd{Node: "web-1", Offer: Offer{Name: "shop", Proto: "tcp", Port: 8080, Check: "tcp"}}))
+	must(a.apply(TypeOfferAdd, "web-1", t0, OfferAdd{Node: "web-1", Offer: Offer{Name: "dns", Proto: "udp", Port: 53, Check: "none"}}))
+	if err := a.apply(TypeOfferAdd, "web-1", t0, OfferAdd{Node: "web-1", Offer: Offer{Name: "other", Proto: "tcp", Port: 8080, Check: "tcp"}}); err == nil {
+		t.Error("two offers at one port")
+	}
+	if err := a.apply(TypeOfferAdd, "lb-1", t0, OfferAdd{Node: "lb-1", Offer: Offer{Name: "x", Proto: "tcp", Port: 1, Check: "tcp"}}); err == nil {
+		t.Error("a director made an offer")
+	}
+	if err := a.apply(TypeOfferAdd, "web-1", t0, OfferAdd{Node: "web-1", Offer: Offer{Name: "tcp/80", Proto: "tcp", Port: 80, Check: "tcp"}}); err == nil {
+		t.Error("an offer named like a port")
+	}
+	// The same offer again changes nothing - not even when it was made.
+	must(a.apply(TypeOfferAdd, "web-1", t1, OfferAdd{Node: "web-1", Offer: Offer{Name: "shop", Proto: "tcp", Port: 8080, Check: "tcp"}}))
+	a.f.Read(func(s *State) {
+		o, ok := s.OfferNamed("web-1", "shop")
+		if !ok || !o.Since.Equal(t0) || len(s.Offers["web-1"].Offers) != 2 || s.Offers["web-1"].Offers[0].Name != "dns" {
+			t.Errorf("the offers: %+v", s.Offers["web-1"])
+		}
+	})
+	must(a.apply(TypePoolAdd, "lb-1", t0, Pool{Name: "p", First: "10.10.1.20", Bits: 24, Count: 10}))
+	must(a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "web", Pool: "p", VIP: "10.10.1.20", Proto: "tcp", Port: 80}))
+	must(a.apply(TypeServiceAdd, "lb-1", t0, Service{Name: "resolver", Pool: "p", VIP: "10.10.1.20", Proto: "udp", Port: 53}))
+	must(a.apply(TypeAssign, "lb-1", t0, Assign{Assignments: []Assignment{
+		{Service: "web", Node: "web-1", Proto: "tcp", Port: 8080, Weight: 1},
+		{Service: "resolver", Node: "web-1", Proto: "udp", Port: 53, Weight: 1},
+	}}))
+	must(a.apply(TypeHealth, "lb-1", t0, Health{Service: "web", Node: "web-1", Healthy: true}))
+	// The application moves: its assignment follows it, and waits for its
+	// checks again.
+	must(a.apply(TypeOfferAdd, "web-1", t1, OfferAdd{Node: "web-1", Offer: Offer{Name: "shop", Proto: "tcp", Port: 8081, Check: "http:/"}}))
+	a.f.Read(func(s *State) {
+		x := s.Assignments[AssignmentKey("web", "web-1")]
+		if x == nil || x.Port != 8081 || x.Healthy {
+			t.Errorf("after the move: %+v", x)
+		}
+	})
+	// Withdrawn, its assignment ends; the other stays.
+	if err := a.apply(TypeOfferRemove, "web-1", t1, OfferRemove{Node: "web-1", Name: "nothing"}); err == nil {
+		t.Error("withdrew an offer never made")
+	}
+	must(a.apply(TypeOfferRemove, "web-1", t1, OfferRemove{Node: "web-1", Name: "shop"}))
+	a.f.Read(func(s *State) {
+		if s.Assignments[AssignmentKey("web", "web-1")] != nil || s.Assignments[AssignmentKey("resolver", "web-1")] == nil {
+			t.Errorf("after withdrawing shop: %v", s.Assignments)
+		}
+		if _, ok := s.OfferNamed("web-1", "shop"); ok {
+			t.Error("shop is still offered")
+		}
+	})
+	must(a.apply(TypeOfferRemove, "web-1", t1, OfferRemove{Node: "web-1", Name: "dns"}))
+	a.f.Read(func(s *State) {
+		if len(s.Offers) != 0 || len(s.Assignments) != 0 {
+			t.Errorf("after withdrawing both: %v %v", s.Offers, s.Assignments)
+		}
+	})
+}

@@ -352,7 +352,7 @@ func (s *session) probe(addr netip.Addr) string {
 // its own. An offer's port may differ from the service's: the backend maps it.
 func (s *session) assign(by string, c api.Change) (api.Result, error) {
 	if len(c.Names) != 1 || len(c.Offers) == 0 {
-		return api.Result{}, errors.New("assign a service one or more offers: assign <service> <node>:<proto>/<port>")
+		return api.Result{}, errors.New("assign a service one or more offers: assign <service> <node>:<offer>, the offer by its name or as <proto>/<port>")
 	}
 	service := c.Names[0]
 	var svc *cluster.Service
@@ -376,19 +376,35 @@ func (s *session) assign(by string, c api.Change) (api.Result, error) {
 	var as []cluster.Assignment
 	var names []string
 	for _, spec := range c.Offers {
-		node, offer, ok := strings.Cut(spec, ":")
-		proto, portText, ok2 := strings.Cut(offer, "/")
-		port, err := strconv.Atoi(portText)
-		if !ok || !ok2 || err != nil || !join.NameOK(node) {
-			return api.Result{}, fmt.Errorf("an offer is <node>:<proto>/<port>, as web-1:tcp/8080, not %q", spec)
+		node, which, ok := strings.Cut(spec, ":")
+		if !ok || which == "" || !join.NameOK(node) {
+			return api.Result{}, fmt.Errorf("an offer is <node>:<offer>, by its name or its protocol and port, as web-1:nginx or web-1:tcp/8080, not %q", spec)
 		}
 		n, found := nodes[node]
 		if !found || n.Role != "backend" {
 			return api.Result{}, fmt.Errorf("%s is not a backend of this cluster", node)
 		}
-		if !slices.ContainsFunc(offers[node], func(o cluster.Offer) bool { return o.Proto == proto && o.Port == port }) {
-			return api.Result{}, fmt.Errorf("%s does not offer %s/%d", node, proto, port)
+		// The offer, by its name - or by its protocol and port, as web-1:tcp/8080.
+		match := func(o cluster.Offer) bool { return o.Name == which }
+		if p, portText, byPort := strings.Cut(which, "/"); byPort {
+			port, err := strconv.Atoi(portText)
+			if err != nil {
+				return api.Result{}, fmt.Errorf("an offer is <node>:<offer>, by its name or its protocol and port, as web-1:nginx or web-1:tcp/8080, not %q", spec)
+			}
+			match = func(o cluster.Offer) bool { return o.Proto == p && o.Port == port }
 		}
+		i := slices.IndexFunc(offers[node], match)
+		if i < 0 {
+			var have []string
+			for _, x := range offers[node] {
+				have = append(have, x.Name+" ("+x.Key()+")")
+			}
+			if len(have) == 0 {
+				return api.Result{}, fmt.Errorf("%s offers nothing yet: a backend offers its applications with thelb offer add", node)
+			}
+			return api.Result{}, fmt.Errorf("%s does not offer %s: it offers %s", node, which, strings.Join(have, ", "))
+		}
+		proto, port := offers[node][i].Proto, offers[node][i].Port
 		if proto != svc.Proto {
 			return api.Result{}, fmt.Errorf("%s offers %s, and the service %s is %s", node, proto, service, svc.Proto)
 		}

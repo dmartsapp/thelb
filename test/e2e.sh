@@ -151,7 +151,7 @@ startb() {
 	shift 2
 	ip netns exec $P-$n unshare --mount --propagation private \
 		sh -c 'mount -t tmpfs -o mode=0755 tmpfs /run && exec "$@"' sh \
-		"$bin" backend --join $VIP4:$PORT --name $n --secret-file "$tmp/$n/backend.secret" --offer tcp/80,check=http:/ "$@" >>"$log" 2>&1 &
+		"$bin" backend --join $VIP4:$PORT --name $n --secret-file "$tmp/$n/backend.secret" --offer web=tcp/80,check=http:/ "$@" >>"$log" 2>&1 &
 	pid[$n]=$!
 }
 declare -A web
@@ -404,17 +404,19 @@ check "d2 and d3 join, once approved" "within 20 both_logged $tmp/d2.svc.log $tm
 for n in b1 b2 b3; do
 	cp -p "$tmp/d1/backend.secret" "$tmp/$n/"
 	app $n up
-	startb $n "$tmp/$n.log" --offer "tcp/$(altport $n),check=http:/"
+	startb $n "$tmp/$n.log" --offer "alt=tcp/$(altport $n),check=http:/"
 done
 check "the backends enrol, and wait for approval" "within 20 eval 'logged $tmp/b1.log \"OK waiting for approval\" && logged $tmp/b2.log \"OK waiting for approval\" && logged $tmp/b3.log \"OK waiting for approval\"'"
 check "approve --match 'b[1-3]' --yes" "on d1 $bin admin approve --match 'b[1-3]' --yes | grep -q 'approved: b1, b2, b3'"
 check "the backends are members" "within 20 eval 'logged $tmp/b1.log \"OK backend ready\" && logged $tmp/b2.log \"OK backend ready\" && logged $tmp/b3.log \"OK backend ready\"'"
-check "a backend's own status shows only itself, waiting for an assignment" "on b1 $bin status | grep -qE '^ backend \| e2e +\| a member of the cluster \| tcp/80 +\| http / \| (ok|fail|-) +\| - '"
+check "a backend's own status shows only itself: its offers, in the cluster, waiting for an assignment" "within 10 eval 'on b1 $bin status | grep -qE \"^ backend \\| e2e +\\| a member of the cluster \\| web +\\| tcp/80 +\\| http / +\\| (ok|fail|-) +\\| yes +\\| - \"'"
+check "status offers on a director: each backend's two, by name, unassigned" "within 10 eval '[ \$(on d1 $bin status offers | grep -cE \"^ b[1-3] +\\| (web|alt) +\\| .*\\| - +\\|\") = 6 ]'"
 check "admin pool add: a pool that would hold a backend's address is refused" "! on d2 $bin admin pool add bad --vip $NET4.30/24 --vippool-count 5 2>/dev/null"
 check "admin pool add lab, from a follower" "on d2 $bin admin pool add lab --vip $SVC/24 --vippool-count 10 | grep -q 'pool lab: $SVC - $NET4.29, on eth0'"
 check "admin service add web: the pool's first address" "on d1 $bin admin service add web --pool lab --proto tcp --port 80 | grep -q 'service web: $SVC tcp/80'"
+check "its VIP waits for a backend: no director holds it yet" "sleep 2; [ -z \"\$(holder $SVC)\" ]"
 check "admin assign web b1 b2 b3" "on d1 $bin admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 | grep -q 'assigned to web: b1, b2, b3'"
-check "the leader holds the service VIP" "within 10 holds d1 $SVC"
+check "the leader holds the service VIP, once a backend serves it" "within 20 holds d1 $SVC"
 check "each backend holds it on thelb0, with theLB's address protocol" "within 10 eval 'ip -n $P-b1 -o addr show dev thelb0 | grep -q \" $SVC/32 .*proto 0x74\" && ip -n $P-b3 -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
 check "and answers no ARP for it: arp_ignore 1, arp_announce 2" "[ \"\$(ip netns exec $P-b1 cat /proc/sys/net/ipv4/conf/all/arp_ignore /proc/sys/net/ipv4/conf/all/arp_announce | xargs)\" = '1 2' ]"
 check "the leader pins each backend's address to its MAC address" "within 10 eval '[ \$(ip -n $P-d1 neigh show nud permanent | grep -c lladdr) = 3 ]'"
@@ -428,6 +430,16 @@ check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep 
 on d1 "$bin" status >"$tmp/summary"
 check "status, alone, is the summary" "grep -qE '^ directors +\| +3 \| +3 \|' $tmp/summary && grep -qE '^ backends +\| +3 \| +3 \|' $tmp/summary && grep -q 'More: thelb status' $tmp/summary"
 on d1 "$bin" status backends | sed 's/^/      /'
+
+echo "== offers made while a backend runs: checked by the leader first, kept by the backend"
+check "thelb offer add on b1: refused while nothing answers" "! on b1 $bin offer add extra tcp/6060 2>$tmp/offer.err && grep -q 'the leader.s check of extra (tcp) at ${addr4[b1]}:6060 fails' $tmp/offer.err"
+ip netns exec $P-b1 python3 -m http.server 6060 --bind 0.0.0.0 --directory "$tmp/b1/www" >/dev/null 2>&1 &
+extra=$!
+check "accepted once it answers, unassigned" "within 10 eval 'on b1 $bin offer add extra tcp/6060 >$tmp/offer.out 2>&1' && grep -qx 'offer extra: tcp/6060 at ${addr4[b1]}:6060, unassigned; it answers the leader.s check (tcp)' $tmp/offer.out"
+check "another name for the same port is refused" "on b1 $bin offer add other tcp/6060 2>&1 | grep -q 'offers tcp/6060 already, as extra'"
+check "status offers on a director: extra, unassigned, its own check ok" "within 10 eval 'on d1 $bin status offers | grep -qE \"^ b1 +\\| extra +\\| ${addr4[b1]} +\\| tcp/6060 +\\| tcp +\\| ok +\\| - \"'"
+check "a director's host has no thelb offer: it runs on a backend" "on d1 $bin offer add x tcp/1 2>&1 | grep -q 'no backend runs on this node'"
+on d1 "$bin" status offers | sed 's/^/      /'
 
 echo "== generate commands: every director stops, and the services come back from the script"
 on d1 "$bin" generate commands >"$tmp/restore.sh"
@@ -446,13 +458,19 @@ check "the backends find the new cluster, and enrol again" "within 60 eval 'logg
 # directors were approved are members already.
 approve_again() { on d1 env "PATH=$tmp/bin:$PATH" sh -c "$approve_line --yes" >/dev/null 2>&1; is d1 'len({o["node"] for o in s["offers"]})' "$1"; }
 check "the script's approve line approves them too: the three backends' offers are listed" "within 60 approve_again 3"
+check "b1 offers extra again, by itself: a backend keeps its offers through the directors' outage" "within 30 eval 'on d1 $bin status offers | grep -qE \"^ b1 +\\| extra +\\|\"'"
 check "the script creates the pool, the service and the assignment again" "on d1 env PATH=$tmp/bin:\$PATH sh $tmp/restore.sh >$tmp/restore.out 2>&1 && grep -q 'assigned to web: b1, b2, b3' $tmp/restore.out"
 check "on the VIP it had: the client is served as before" "within 30 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+check "thelb offer remove extra: withdrawn" "on b1 $bin offer remove extra | grep -qx 'withdrawn: extra (tcp/6060)' && ! on d1 $bin status offers | grep -q ' extra '"
+kill $extra 2>/dev/null
+wait $extra 2>/dev/null
 
 echo "== port mapping: a service on port 80, served from 8080 on b1, 9090 on b2, 7070 on b3"
 MAPPED=$NET4.21
 check "admin service add mapped: the pool's next address" "on d1 $bin admin service add mapped --pool lab --proto tcp --port 80 | grep -q 'service mapped: $MAPPED tcp/80'"
-check "admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070" "on d1 $bin admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070 | grep -q 'assigned to mapped: b1, b2, b3'"
+check "its VIP waits for a backend" "sleep 2; ! holds d1 $MAPPED"
+check "admin assign mapped b1:alt b2:alt b3:alt - each backend's alt offer, by name: 8080, 9090, 7070" "on d1 $bin admin assign mapped b1:alt b2:alt b3:alt | grep -q 'assigned to mapped: b1, b2, b3'"
+check "the leader holds the VIP once a backend serves it" "within 20 holds d1 $MAPPED"
 if command -v nft >/dev/null; then
 	check "b2 maps $MAPPED tcp/80 to 9090, in theLB's nftables table" "within 10 eval 'nft_on b2 | grep -q \"ip daddr $MAPPED tcp dport 80 dnat ip to :9090\"'"
 	check "and only that: web's port is its application's, so no rule" "[ \$(nft_on b2 | grep -c dnat) = 1 ]"
@@ -463,7 +481,7 @@ if command -v ipvsadm >/dev/null; then
 fi
 check "the client's requests are answered from the three ports" "within 20 eval '[ \"\$(answers 9 $MAPPED)\" = \"b1-8080=3 b2-9090=3 b3-7070=3\" ]'"
 check "status backends: each at its own port" "on d1 $bin status backends | grep -qE '^ mapped +\| $MAPPED:80 +\| b2 +\| ${addr4[b2]}:9090 +\| ok / ok'"
-check "a backend's own status names the service and its port" "on b2 $bin status | grep -q 'tcp/9090 | http / | ok        | mapped (port 80)'"
+check "a backend's own status names the service and its port" "on b2 $bin status | grep -qE '\| alt +\| tcp/9090 +\| http / +\| ok +\| yes +\| mapped \(port 80\)'"
 check "admin unassign mapped b2: b2's rule goes, and with it the table" "on d1 $bin admin unassign mapped b2 >/dev/null && within 10 eval '! nft_on b2 >/dev/null'"
 check "the client is answered by b1 and b3" "within 10 eval '[ \"\$(answers 6 $MAPPED)\" = \"b1-8080=3 b3-7070=3\" ]'"
 check "admin service remove mapped: every backend's table goes" "on d1 $bin admin service remove mapped >/dev/null && within 10 eval '! nft_on b1 >/dev/null && ! nft_on b3 >/dev/null'"
@@ -501,16 +519,16 @@ install -d -m 0755 "$tmp/$host-www"
 echo "$host-web" >"$tmp/$host-www/index.html"
 ip netns exec $P-$host python3 -m http.server 80 --bind 0.0.0.0 --directory "$tmp/$host-www" >/dev/null 2>&1 &
 web[$host]=$!
-nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host --secret-file "$tmp/$host/backend.secret" --offer tcp/80,check=http:/ >"$tmp/$host-web.name.log" 2>&1 &
+nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host --secret-file "$tmp/$host/backend.secret" --offer web=tcp/80,check=http:/ >"$tmp/$host-web.name.log" 2>&1 &
 cohost_try=$!
 check "a backend with its director's name is refused, and told to name itself" "{ wait $cohost_try; [ \$? = 1 ]; } && grep -q 'is a director.s: give this backend a name of its own, with --name' $tmp/$host-web.name.log"
-nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host-web --secret-file "$tmp/$host/backend.secret" --offer tcp/80,check=http:/ >"$tmp/$host-web.log" 2>&1 &
+nsenter -t "${pid[$host]}" -m -n "$bin" backend --join $VIP4:$PORT --name $host-web --secret-file "$tmp/$host/backend.secret" --offer web=tcp/80,check=http:/ >"$tmp/$host-web.log" 2>&1 &
 pid[$host-web]=$!
 check "the director's host runs a backend beside it: its own socket" "within 20 logged $tmp/$host-web.log 'OK waiting for approval' && on $host stat /run/thelb/backend/thelb.sock >/dev/null"
 check "approved, it is a member" "on $host $bin admin approve $host-web >/dev/null && within 20 logged $tmp/$host-web.log 'OK backend ready'"
 check "status there is the director's view, which lists the host twice" "on $host $bin status backends | grep -qE '^ $host-web +\| backend' && on $host $bin status directors | grep -qE '^ $host +\| leader'"
 check "and --role backend is the backend's own view" "on $host $bin status --role backend | grep -qE '^ backend \| e2e +\| a member of the cluster'"
-check "admin assign web $host-web:tcp/80" "on $host $bin admin assign web $host-web:tcp/80 | grep -q 'assigned to web: $host-web'"
+check "admin assign web $host-web:web" "within 20 eval 'on $host $bin admin assign web $host-web:web 2>/dev/null | grep -q \"assigned to web: $host-web\"'"
 if command -v ipvsadm >/dev/null; then
 	# Direct routing to one of its own addresses ends in its own stack: ipvsadm
 	# shows it as Route, or Local.

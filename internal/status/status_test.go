@@ -22,7 +22,10 @@ func sample() Status {
 		},
 		Certificates: []Certificate{{Certificate: "theLB prod CA", Kind: "ca", Fingerprint: strings.Repeat("ab", 32), NotAfter: created.AddDate(10, 0, 0)}},
 		Pools:        []Pool{{Pool: "external", Network: "10.10.1.0/24", First: "10.10.1.20", Count: 10, Interface: "eth0", Used: 1}},
-		Offers:       []Offer{{Node: "web-1", Address: "10.0.0.21", Protocol: "tcp", Port: 8080, Check: "http /healthz", Service: &svc, SinceSeconds: 7200}},
+		Offers: []Offer{
+			{Node: "web-1", Offer: "shop", Address: "10.0.0.21", Protocol: "tcp", Port: 8080, Check: "http /healthz", OwnCheck: "ok", Service: &svc, SinceSeconds: 7200},
+			{Node: "web-1", Offer: "metrics", Address: "10.0.0.21", Protocol: "tcp", Port: 9100, Check: "tcp", OwnCheck: "fail", SinceSeconds: 60},
+		},
 	}
 }
 
@@ -43,7 +46,8 @@ func TestAllShowsEveryTableInOrder(t *testing.T) {
 		" prod    | 7f3c91a2 | 2026-11-09 10:02:11 | lb-1   |    - | 2026-11-09 10:02:11",
 		"| 1.1 s ago",
 		" external | 10.10.1.0/24 | 10.10.1.20 - 10.10.1.29 | eth0      | 1 of 10",
-		"| tcp/8080 | http /healthz | nginx   | 2 h",
+		" web-1 | shop    | 10.0.0.21 | tcp/8080 | http /healthz | ok        | nginx   | 2 h",
+		" web-1 | metrics | 10.0.0.21 | tcp/9100 | tcp           | fail      | -       | 1 min",
 		" theLB prod CA | ca   | abababababababab |",
 		"(0 rows)",
 	} {
@@ -149,12 +153,12 @@ func TestViewsShowOnePartEach(t *testing.T) {
 
 func TestABackendShowsOnlyItself(t *testing.T) {
 	st := Status{View: "backend", Mine: &Mine{Role: "backend", Cluster: "prod", State: "a member of the cluster", NodeFingerprint: "0be98d17c46a2f83",
-		Offers: []MineOffer{{Offer: "tcp/8080", Check: "http /healthz", Own: "ok", Service: "nginx"}}}}
+		Offers: []MineOffer{{Offer: "shop", Port: "tcp/8080", Check: "http /healthz", Own: "ok", Offered: "yes", Service: "nginx"}}}}
 	text, err := st.Text(now, "all")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, " backend | prod    | a member of the cluster | tcp/8080 | http /healthz | ok        | nginx   | 0be98d17c46a2f83") {
+	if !strings.Contains(text, " backend | prod    | a member of the cluster | shop  | tcp/8080 | http /healthz | ok        | yes     | nginx   | 0be98d17c46a2f83") {
 		t.Errorf("a backend's status:\n%s", text)
 	}
 }

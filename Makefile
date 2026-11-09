@@ -63,8 +63,9 @@ e2e:
 	@echo "==> the kernel tests, as root, each in a network namespace of its own"
 	@sudo -n env "PATH=$$PATH:/usr/sbin:/sbin" "HOME=$$HOME" "GOCACHE=$$($(GO) env GOCACHE)" "GOMODCACHE=$$($(GO) env GOMODCACHE)" $(GO) test -count=1 -run '^TestRoot' ./...
 	@echo "==> end to end, as root"
-	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb
-	@sudo -n test/e2e.sh bin/thelb
+	@# Its own binary: never the bin/thelb someone may be running.
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
+	@sudo -n test/e2e.sh bin/e2e/thelb
 
 lab:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb

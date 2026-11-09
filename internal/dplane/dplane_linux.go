@@ -101,7 +101,7 @@ func (p *Plane) Apply(plan director.Plan) error {
 		}
 	}
 
-	// The VIPs.
+	// The VIPs that go, first: nothing more arrives for what goes next.
 	want := map[netip.Addr]string{}
 	for _, v := range plan.VIPs {
 		want[v.Addr] = v.Interface
@@ -111,29 +111,35 @@ func (p *Plane) Apply(plan director.Plan) error {
 			p.dropVIP(a, h)
 		}
 	}
-	for a, ifname := range want {
-		if _, ok := p.vips[a]; ok {
-			continue
-		}
-		ifc, err := net.InterfaceByName(ifname)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("the VIP %s's interface %s: %w", a, ifname, err))
-			continue
-		}
-		var flags uint32
-		if a.Is6() {
-			flags = netlink.IFANoDAD
-		}
-		if err := netlink.AddAddr(ifc.Index, netip.PrefixFrom(a, a.BitLen()), label(ifname, a), ctlnet.Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
-			errs = append(errs, fmt.Errorf("adding the VIP %s to %s: %w", a, ifname, err))
-			continue
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		p.vips[a] = heldVIP{index: ifc.Index, name: ifname, cancel: cancel}
-		go p.announce(ctx, ifc, a)
-		p.log.OK("service VIP taken", "vip", a, "interface", ifname)
-	}
 
+	// The pinned backends.
+	pins := map[netip.Addr]director.PlanPin{}
+	for _, x := range plan.Pins {
+		pins[x.Addr] = x
+	}
+	for a, old := range p.pins {
+		if x, ok := pins[a]; !ok || x.MAC != old.mac {
+			_ = netlink.UnpinNeighbour(old.index, a)
+			delete(p.pins, a)
+		}
+	}
+	for a, x := range pins {
+		if _, ok := p.pins[a]; ok {
+			continue
+		}
+		ifc, err := net.InterfaceByName(x.Interface)
+		mac, merr := net.ParseMAC(x.MAC)
+		if err != nil || merr != nil {
+			errs = append(errs, fmt.Errorf("pinning %s: %v %v", a, err, merr))
+			continue
+		}
+		if err := netlink.PinNeighbour(ifc.Index, a, mac); err != nil {
+			errs = append(errs, fmt.Errorf("pinning %s to %s: %w", a, x.MAC, err))
+			continue
+		}
+		p.pins[a] = pin{index: ifc.Index, mac: x.MAC}
+		p.log.OK("backend pinned", "address", a, "mac", x.MAC, "interface", x.Interface)
+	}
 	// IPVS.
 	if p.conn != nil {
 		have := map[string]ipvs.Service{}
@@ -221,34 +227,30 @@ func (p *Plane) Apply(plan director.Plan) error {
 		}
 	}
 
-	// The pinned backends.
-	pins := map[netip.Addr]director.PlanPin{}
-	for _, x := range plan.Pins {
-		pins[x.Addr] = x
-	}
-	for a, old := range p.pins {
-		if x, ok := pins[a]; !ok || x.MAC != old.mac {
-			_ = netlink.UnpinNeighbour(old.index, a)
-			delete(p.pins, a)
-		}
-	}
-	for a, x := range pins {
-		if _, ok := p.pins[a]; ok {
+	// The VIPs that come, last: a packet a VIP takes in finds IPVS ready for it.
+	for a, ifname := range want {
+		if _, ok := p.vips[a]; ok {
 			continue
 		}
-		ifc, err := net.InterfaceByName(x.Interface)
-		mac, merr := net.ParseMAC(x.MAC)
-		if err != nil || merr != nil {
-			errs = append(errs, fmt.Errorf("pinning %s: %v %v", a, err, merr))
+		ifc, err := net.InterfaceByName(ifname)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("the VIP %s's interface %s: %w", a, ifname, err))
 			continue
 		}
-		if err := netlink.PinNeighbour(ifc.Index, a, mac); err != nil {
-			errs = append(errs, fmt.Errorf("pinning %s to %s: %w", a, x.MAC, err))
+		var flags uint32
+		if a.Is6() {
+			flags = netlink.IFANoDAD
+		}
+		if err := netlink.AddAddr(ifc.Index, netip.PrefixFrom(a, a.BitLen()), label(ifname, a), ctlnet.Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
+			errs = append(errs, fmt.Errorf("adding the VIP %s to %s: %w", a, ifname, err))
 			continue
 		}
-		p.pins[a] = pin{index: ifc.Index, mac: x.MAC}
-		p.log.OK("backend pinned", "address", a, "mac", x.MAC, "interface", x.Interface)
+		ctx, cancel := context.WithCancel(context.Background())
+		p.vips[a] = heldVIP{index: ifc.Index, name: ifname, cancel: cancel}
+		go p.announce(ctx, ifc, a)
+		p.log.OK("service VIP taken", "vip", a, "interface", ifname)
 	}
+
 	return errors.Join(errs...)
 }
 

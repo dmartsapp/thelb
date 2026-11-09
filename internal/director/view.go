@@ -28,7 +28,8 @@ func (s *session) status() status.Status {
 			suffrage[string(srv.ID)] = srv.Suffrage
 		}
 	}
-	checkIns, live, known := s.leaderLive()
+	lv := s.leaderLive()
+	checkIns, live, known := lv.checkIns, lv.live, lv.known
 	now := time.Now()
 
 	s.fsm.Read(func(cs *cluster.State) {
@@ -117,6 +118,14 @@ func (s *session) status() status.Status {
 			}
 			return services[i].Name < services[j].Name
 		})
+		// The leader holds a service VIP while a backend serves one of its
+		// services, and only then.
+		serving := map[string]bool{}
+		for _, a := range cs.Assignments {
+			if v := cs.Services[a.Service]; v != nil && a.Healthy && a.Weight > 0 {
+				serving[v.VIP] = true
+			}
+		}
 		for _, v := range services {
 			if seen[v.VIP] {
 				continue
@@ -126,8 +135,8 @@ func (s *session) status() status.Status {
 			if leaderSince.After(v.At) {
 				row.Since = leaderSince
 			}
-			if c.Leader == "" {
-				row.HeldBy = "-"
+			if c.Leader == "" || !serving[v.VIP] {
+				row.HeldBy, row.Since = "-", time.Time{}
 			}
 			st.VIPs = append(st.VIPs, row)
 		}
@@ -140,7 +149,15 @@ func (s *session) status() status.Status {
 				continue
 			}
 			for _, off := range o.Offers {
-				row := status.Offer{Node: name, Address: n.Address, Protocol: off.Proto, Port: off.Port, Check: check.Describe(off.Check), SinceSeconds: now.Sub(o.Since).Seconds()}
+				since := off.Since
+				if since.IsZero() {
+					since = o.Since
+				}
+				own := "-"
+				if w, ok := lv.own[name+" "+off.Key()]; ok {
+					own = w
+				}
+				row := status.Offer{Node: name, Offer: off.Name, Address: n.Address, Protocol: off.Proto, Port: off.Port, Check: check.Describe(off.Check), OwnCheck: own, SinceSeconds: now.Sub(since).Seconds()}
 				var to []string
 				for _, a := range cs.Assignments {
 					if a.Node == name && a.Proto == off.Proto && a.Port == off.Port {

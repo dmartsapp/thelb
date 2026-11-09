@@ -26,6 +26,10 @@ func (fake) Admin(c api.Change) (api.Result, error) { return api.Result{Names: c
 
 func (fake) Generate(string) (string, error) { return "", nil }
 
+func (fake) Offer(o api.Offer) (api.Result, error) {
+	return api.Result{Names: []string{o.Offer.Name}}, nil
+}
+
 func (fake) SecretText(role string) (string, error) {
 	if role == "director" {
 		return "thelb1:director", nil

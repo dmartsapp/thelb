@@ -122,6 +122,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return notYet("thelb doctor")
 	case "generate":
 		return generateCmd(rest, stdout)
+	case "offer":
+		return offerCmd(rest, stdout)
 	default: // admin
 		return adminCmd(rest, stdout)
 	}
@@ -316,13 +318,21 @@ type offerFlags []string
 func (o *offerFlags) String() string     { return strings.Join(*o, " ") }
 func (o *offerFlags) Set(v string) error { *o = append(*o, v); return nil }
 
-// parseOffer reads an offer: tcp/8080, or tcp/8080,check=http:/healthz.
+// parseOffer reads an offer: [name=]tcp/8080[,check=http:/healthz]. Without a
+// name, it is named for its protocol and port: tcp-8080.
 func parseOffer(spec string) (cluster.Offer, error) {
 	main, opts, _ := strings.Cut(spec, ",")
+	name := ""
+	if n, rest, named := strings.Cut(main, "="); named {
+		name, main = n, rest
+		if !cluster.OfferNameOK(name) {
+			return cluster.Offer{}, fmt.Errorf("an offer's name is letters, digits, dots, hyphens and underscores, up to 63, beginning and ending with a letter or a digit, not %q", name)
+		}
+	}
 	proto, portText, ok := strings.Cut(main, "/")
 	port, err := strconv.Atoi(portText)
 	if !ok || err != nil || port < 1 || port > 65535 || (proto != "tcp" && proto != "udp" && proto != "sctp") {
-		return cluster.Offer{}, fmt.Errorf("an offer is <tcp|udp|sctp>/<port>[,check=tcp|none|http:<path>], not %q", spec)
+		return cluster.Offer{}, fmt.Errorf("an offer is [<name>=]<tcp|udp|sctp>/<port>[,check=tcp|none|http:<path>], not %q", spec)
 	}
 	chk := ""
 	if opts != "" {
@@ -335,7 +345,55 @@ func parseOffer(spec string) (cluster.Offer, error) {
 	if chk, err = check.Parse(chk, proto); err != nil {
 		return cluster.Offer{}, fmt.Errorf("--offer %s: %w", spec, err)
 	}
-	return cluster.Offer{Proto: proto, Port: port, Check: chk}, nil
+	if name == "" {
+		name = cluster.DefaultOfferName(proto, port)
+	}
+	return cluster.Offer{Name: name, Proto: proto, Port: port, Check: chk}, nil
+}
+
+// offerCmd is `thelb offer`, on a backend: an application offered to the
+// cluster, or withdrawn.
+func offerCmd(args []string, stdout io.Writer) error {
+	usage := "thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>] | thelb offer remove <name>"
+	if len(args) == 0 {
+		return usagef("%s", usage)
+	}
+	var req api.Offer
+	switch args[0] {
+	case "add":
+		if len(args) != 3 {
+			return usagef("%s", usage)
+		}
+		if main, _, _ := strings.Cut(args[2], ","); strings.Contains(main, "=") {
+			return usagef("thelb offer add: the name comes first, then the offer: thelb offer add <name> <proto>/<port>")
+		}
+		o, err := parseOffer(args[1] + "=" + args[2])
+		if err != nil {
+			return usagef("thelb offer add: %v", err)
+		}
+		req = api.Offer{Op: "add", Offer: o}
+	case "remove":
+		if len(args) != 2 {
+			return usagef("%s", usage)
+		}
+		if !cluster.OfferNameOK(args[1]) {
+			return usagef("thelb offer remove: %q is not an offer's name", args[1])
+		}
+		req = api.Offer{Op: "remove", Offer: cluster.Offer{Name: args[1]}}
+	default:
+		return usagef("%s", usage)
+	}
+	resp, err := localsock.Call(roleDir("backend"), localsock.Request{Op: localsock.OpOffer, Offer: &req})
+	if errors.Is(err, localsock.ErrNotRunning) {
+		return errors.New("no backend runs on this node: thelb offer runs where thelb backend runs")
+	}
+	if err != nil {
+		return err
+	}
+	if r := resp.Result; r != nil && r.Message != "" {
+		_, _ = fmt.Fprintln(stdout, r.Message)
+	}
+	return nil
 }
 
 func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
@@ -380,7 +438,10 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		if seen[o.Key()] {
 			return usagef("thelb backend: %s is offered twice", o.Key())
 		}
-		seen[o.Key()] = true
+		if seen["name "+o.Name] {
+			return usagef("thelb backend: two offers are named %s", o.Name)
+		}
+		seen[o.Key()], seen["name "+o.Name] = true, true
 		cfg.Offers = append(cfg.Offers, o)
 	}
 	cfg.Name = *name
@@ -556,7 +617,7 @@ func adminCmd(args []string, stdout io.Writer) error {
 		}
 		pos = append(pos, fs.Args()...)
 		if len(pos) < 2 {
-			return usagef("thelb admin assign <service> <node>:<proto>/<port> ... [--weight node=N,...]")
+			return usagef("thelb admin assign <service> <node>:<offer> ... [--weight node=N,...] - the offer by its name, or as <proto>/<port>")
 		}
 		w := map[string]int{}
 		if *weights != "" {

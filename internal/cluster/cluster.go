@@ -15,6 +15,7 @@ import (
 	"io"
 	"maps"
 	"net/netip"
+	"regexp"
 	"slices"
 	"sync"
 	"time"
@@ -45,7 +46,9 @@ const (
 	TypePoolRemove    = "pool.remove"    // a director removed one
 	TypeServiceAdd    = "service.add"    // a director created a service
 	TypeServiceRemove = "service.remove" // a director removed one
-	TypeOffers        = "offers"         // a backend offers what it serves
+	TypeOffers        = "offers"         // a backend's whole list of offers - written by older leaders only
+	TypeOfferAdd      = "offer.add"      // a backend offers an application, the leader having checked it answers
+	TypeOfferRemove   = "offer.remove"   // a backend withdrew one
 	TypeAssign        = "assign"         // a director assigned offers to a service
 	TypeUnassign      = "unassign"       // a director took one back
 	TypeHealth        = "health"         // an assignment became ready to serve, or stopped being
@@ -161,6 +164,16 @@ type (
 		Node   string  `json:"node"`
 		Offers []Offer `json:"offers"`
 	}
+	// OfferAdd is TypeOfferAdd's.
+	OfferAdd struct {
+		Node  string `json:"node"`
+		Offer Offer  `json:"offer"`
+	}
+	// OfferRemove is TypeOfferRemove's.
+	OfferRemove struct {
+		Node string `json:"node"`
+		Name string `json:"name"`
+	}
 	// Assign is TypeAssign's.
 	Assign struct {
 		Assignments []Assignment `json:"assignments"`
@@ -228,16 +241,34 @@ type Service struct {
 // Tunnel is whether the service reaches its backends by IP-in-IP.
 func (s *Service) Tunnel() bool { return s.Method == "tunnel" }
 
-// Offer is what a backend serves: a protocol, its application's port, and how
-// to check it - "tcp", "none" or "http:<path>".
+// Offer is what a backend serves: an application, under a name the backend
+// gives it, at a protocol and port, with how to check it - "tcp", "none" or
+// "http:<path>". A backend's offers differ in name and in protocol and port.
 type Offer struct {
-	Proto string `json:"proto"`
-	Port  int    `json:"port"`
-	Check string `json:"check"`
+	Name  string    `json:"name"`
+	Proto string    `json:"proto"`
+	Port  int       `json:"port"`
+	Check string    `json:"check"`
+	Since time.Time `json:"since"` // when the cluster recorded it
 }
 
-// Key is an offer's name: tcp/8080.
+// Key is an offer's protocol and port: tcp/8080.
 func (o Offer) Key() string { return fmt.Sprintf("%s/%d", o.Proto, o.Port) }
+
+// Same is whether two offers are the same, but for when they were recorded.
+func (o Offer) Same(x Offer) bool {
+	return o.Name == x.Name && o.Proto == x.Proto && o.Port == x.Port && o.Check == x.Check
+}
+
+// DefaultOfferName is the name of an offer given none: tcp-8080.
+func DefaultOfferName(proto string, port int) string { return fmt.Sprintf("%s-%d", proto, port) }
+
+var offerNameRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$`)
+
+// OfferNameOK is whether name may name an offer: letters, digits, dots,
+// hyphens and underscores, up to 63, beginning and ending with a letter or a
+// digit - never a "/" or a ":", which say a port.
+func OfferNameOK(name string) bool { return offerNameRE.MatchString(name) }
 
 // Offers are a backend's offers, and since when it has made them.
 type Offers struct {
@@ -259,6 +290,39 @@ type Assignment struct {
 
 // AssignmentKey is an assignment's key in the state.
 func AssignmentKey(service, node string) string { return service + "/" + node }
+
+// OfferNamed is the backend's offer of that name.
+func (s *State) OfferNamed(node, name string) (Offer, bool) {
+	if o := s.Offers[node]; o != nil {
+		for _, x := range o.Offers {
+			if x.Name == name {
+				return x, true
+			}
+		}
+	}
+	return Offer{}, false
+}
+
+// OfferAt is the backend's offer at that protocol and port.
+func (s *State) OfferAt(node, proto string, port int) (Offer, bool) {
+	if o := s.Offers[node]; o != nil {
+		for _, x := range o.Offers {
+			if x.Proto == proto && x.Port == port {
+				return x, true
+			}
+		}
+	}
+	return Offer{}, false
+}
+
+// endAssignments ends the node's assignments of the offer at proto and port.
+func (s *State) endAssignments(node, proto string, port int) {
+	for k, a := range s.Assignments {
+		if a.Node == node && a.Proto == proto && a.Port == port {
+			delete(s.Assignments, k)
+		}
+	}
+}
 
 // State is the cluster's state.
 type State struct {
@@ -586,6 +650,14 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 		if n := s.Nodes[d.Node]; n == nil || n.Role != "backend" {
 			return fmt.Errorf("%s is not a backend of this cluster", d.Node)
 		}
+		for i := range d.Offers {
+			if d.Offers[i].Name == "" {
+				d.Offers[i].Name = DefaultOfferName(d.Offers[i].Proto, d.Offers[i].Port)
+			}
+			if d.Offers[i].Since.IsZero() {
+				d.Offers[i].Since = e.At
+			}
+		}
 		s.Offers[d.Node] = &Offers{Offers: d.Offers, Since: e.At}
 		// An assignment whose offer was withdrawn ends.
 		for k, a := range s.Assignments {
@@ -600,6 +672,84 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 				delete(s.Assignments, k)
 			}
 		}
+		return nil
+	case TypeOfferAdd:
+		var d OfferAdd
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if n := s.Nodes[d.Node]; n == nil || n.Role != "backend" {
+			return fmt.Errorf("%s is not a backend of this cluster", d.Node)
+		}
+		o := d.Offer
+		if !OfferNameOK(o.Name) {
+			return fmt.Errorf("%q cannot name an offer", o.Name)
+		}
+		if x, ok := s.OfferAt(d.Node, o.Proto, o.Port); ok && x.Name != o.Name {
+			return fmt.Errorf("%s offers %s already, as %s", d.Node, o.Key(), x.Name)
+		}
+		list := s.Offers[d.Node]
+		if list == nil {
+			list = &Offers{}
+			s.Offers[d.Node] = list
+		}
+		o.Since = e.At
+		for i, x := range list.Offers {
+			if x.Name != o.Name {
+				continue
+			}
+			if x.Same(o) {
+				return nil
+			}
+			list.Since = e.At
+			// The same application, moved or checked otherwise: its assignments
+			// follow it to its new port - or end, for another protocol - and wait
+			// for its checks again.
+			for k, a := range s.Assignments {
+				if a.Node != d.Node || a.Proto != x.Proto || a.Port != x.Port {
+					continue
+				}
+				if o.Proto != x.Proto {
+					delete(s.Assignments, k)
+					continue
+				}
+				a.Port = o.Port
+				if o.Port != x.Port {
+					a.Healthy = false
+				}
+			}
+			list.Offers[i] = o
+			return nil
+		}
+		list.Since = e.At
+		list.Offers = append(list.Offers, o)
+		slices.SortFunc(list.Offers, func(a, b Offer) int {
+			switch {
+			case a.Name < b.Name:
+				return -1
+			case a.Name > b.Name:
+				return 1
+			}
+			return 0
+		})
+		return nil
+	case TypeOfferRemove:
+		var d OfferRemove
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		x, ok := s.OfferNamed(d.Node, d.Name)
+		if !ok {
+			return fmt.Errorf("%s offers nothing named %s", d.Node, d.Name)
+		}
+		list := s.Offers[d.Node]
+		list.Offers = slices.DeleteFunc(list.Offers, func(o Offer) bool { return o.Name == d.Name })
+		list.Since = e.At
+		if len(list.Offers) == 0 {
+			delete(s.Offers, d.Node)
+		}
+		// An assignment whose offer was withdrawn ends.
+		s.endAssignments(d.Node, x.Proto, x.Port)
 		return nil
 	case TypeAssign:
 		var d Assign
