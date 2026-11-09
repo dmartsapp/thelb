@@ -1,14 +1,14 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after the merge.
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-09, after IP-in-IP was merged.
 
 ## Branches
 
 | Branch | Holds | State |
 |---|---|---|
-| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing, port mapping on the backend, `status` views, the lab | `make check` green here and on JH; `make e2e` green on JH (136 checks) |
+| `main` | directors, Raft, the control VIP (by address or name), backends, a director's host as a backend, pools, services, IPVS direct routing and IP-in-IP tunnelling, port mapping on the backend, `status` views, the lab, the user manual | `make check` green here and on JH; `make e2e` green on JH (149 checks) |
 
-`wip/portmap` was merged into `main` by fast-forward on 2026-11-09; nothing is in progress on another branch.
+`wip/ipip` was merged into `main` by fast-forward on 2026-11-09, after `wip/portmap`; nothing is in progress on another branch.
 
 ## What came in last (from `wip/portmap`)
 
@@ -22,7 +22,8 @@ Where the code is, what is broken, and what comes next - kept up to date at ever
 
 1. ~~Finish port mapping~~ - done, merged.
 1b. ~~A director's host as a backend too~~ - done, merged: (the user: start the director first, register the backend later, keep systemd for backends): two daemons, `thelb backend` started after the director under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); the clone check is per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS delivers the host's share locally while it leads. `test/lab.sh serve dN`, and an end-to-end scenario. **Also built: the control VIP by name** (`--vip thelb-vip`, `--join thelb-vip:7443`), resolved at start.
-2. **IP-in-IP tunnelling**, a per-service method (`--method tunnel`); direct routing stays the default for backends on the director's network. Director: IPVS's tunnel forwarding (tunnel type IPIP). Backend: an `ipip` tunnel interface holding the VIP, `rp_filter` relaxed on it, MSS clamping or MTU guidance. The return-path check matters more here: networks drop replies from the VIP's address outside its subnet. GUE later, as an option.
+2. ~~IP-in-IP tunnelling~~ - done, merged: `--method tunnel`, IPv4; the director needs only a route to the backend; `thelbt0` (IPIP, collect-metadata mode, from any director) unwraps; `rp_filter` 0 on `thelbt0` and 2 for all if it was 1 (restored); an nftables MSS clamp (MTU - 60) for each tunnelled VIP; a backend may join a control VIP behind a router, and then serves tunnelled services only. **Left for later**: IPv6 (ip6ip6), GUE, the return-path check.
+2b. **The user manual** - written: `docs/manual.md`, for operators; keep it in step with every change.
 3. **Apply what changed, and repair drift**: the leader applies only the difference from what it last applied, and compares the whole kernel every 10 s - putting back what someone removed (the watchdog loop); systemd's watchdog is told only while that loop runs.
 4. **IPVS connection synchronisation**: the sync daemon as master on the VIP holder, backup on the other directors, following leadership - so connections in progress survive a failover.
 5. **A scale test in the lab**: a few thousand services; time an apply, count netlink calls, watch memory.
