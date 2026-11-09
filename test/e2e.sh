@@ -455,7 +455,7 @@ check "admin assign web $host-web:tcp/80" "on $host $bin admin assign web $host-
 if command -v ipvsadm >/dev/null; then
 	# Direct routing to one of its own addresses ends in its own stack: ipvsadm
 	# shows it as Route, or Local.
-	check "while it leads, IPVS gives it its share too" "within 20 eval 'ipvs_on $host | grep -qE \"-> ${addr4[$host]}:80 +(Local|Route) +1 \"'"
+	check "while it leads, IPVS gives it its share too" "within 20 eval 'ipvs_on $host | grep -qE -- \"-> ${addr4[$host]}:80 +(Local|Route) +1 \"'"
 	ipvs_on $host | sed 's/^/      /'
 fi
 check "the client is served by the director's host too" "within 20 answers_include $host-web"
@@ -465,7 +465,7 @@ check "its director stops - the backend goes on" "[ $code = 0 ] && kill -0 ${pid
 new=$(holder $SVC)
 check "now the backend holds the VIP on thelb0 instead" "within 10 eval 'ip -n $P-$host -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
 if command -v ipvsadm >/dev/null; then
-	check "and the new leader, $new, sends it its share by direct routing" "within 20 eval 'ipvs_on $new | grep -qE \"-> ${addr4[$host]}:80 +Route +1 \"'"
+	check "and the new leader, $new, sends it its share by direct routing" "within 20 eval 'ipvs_on $new | grep -qE -- \"-> ${addr4[$host]}:80 +Route +1 \"'"
 	ipvs_on $new | sed 's/^/      /'
 fi
 check "the client is still served by it" "within 20 answers_include $host-web"
