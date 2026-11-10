@@ -97,6 +97,9 @@ type Deps struct {
 	// ProbeWindow is how long a bootstrapping director must find nothing on the
 	// control VIP before it creates a cluster; 0: the default.
 	ProbeWindow time.Duration
+	// Preflight checks, before anything is changed, that the node has all theLB
+	// needs, and says what it found; nil: none (tests).
+	Preflight func() (string, error)
 }
 
 // Timing. Variables, so that tests can shorten them.
@@ -205,6 +208,13 @@ type node struct {
 // Run runs the director until ctx is done.
 func Run(ctx context.Context, cfg Config, d Deps) error {
 	log := d.Log.Module("director")
+	if d.Preflight != nil {
+		found, err := d.Preflight()
+		if err != nil {
+			return err
+		}
+		log.OK("preflight: this node has all theLB needs", "found", found)
+	}
 	local := d.Local
 	if local == nil {
 		local = hostnet.For

@@ -102,6 +102,7 @@ type VIP struct {
 	Interface string    `json:"interface"`
 	HeldBy    string    `json:"held_by"`
 	Since     time.Time `json:"since"`
+	Port      int       `json:"port,omitempty"` // the control VIP's: the control port
 }
 
 // Service is a service.

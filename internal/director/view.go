@@ -45,7 +45,7 @@ func (s *session) status() status.Status {
 		var leaderSince time.Time
 		if l := cs.Leader; l != nil && l.RaftID == string(leaderID) {
 			c.LeaderSince, leaderSince = l.Since, l.Since
-			st.VIPs = append(st.VIPs, status.VIP{VIP: s.n.cfg.ControlVIP.String(), Purpose: "control", Interface: l.Interface, HeldBy: l.Name, Since: l.Since})
+			st.VIPs = append(st.VIPs, status.VIP{VIP: s.n.cfg.ControlVIP.String(), Purpose: "control", Interface: l.Interface, HeldBy: l.Name, Since: l.Since, Port: int(s.n.cfg.ControlPort)})
 		}
 		st.Cluster = c
 

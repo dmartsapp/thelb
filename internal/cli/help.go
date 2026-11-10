@@ -9,7 +9,7 @@ Commands:
   director   run this node as a director
   backend    run this node as a backend
   status     show the cluster, from the theLB running on this node
-  doctor     check this node, and what theLB would change     (not in this build yet)
+  doctor     check this node for theLB, and say what to do
   offer      on a backend: offer an application to the cluster, or withdraw it
   generate   print a file's content, and write nothing: secret, commands
   admin      change the cluster, on a director: approve, refuse, remove,
@@ -124,13 +124,30 @@ again every 2 seconds. On a backend, status shows that backend alone; on a
 host that runs both, status asks the director, and --role backend the backend.
 `,
 	"doctor": `Usage:
-  thelb doctor [--json]
+  thelb doctor [--role director|backend] [--port <control port>] [--json]
 
-Checks this node, and says what theLB would change on it. Not in this build yet.
+Checks this node for theLB, and says what to do; it changes nothing. For the
+roles running here, the one --role names, or both:
+
+  the kernel, its modules and IPv6; theLB's capabilities; the kernel parameters
+  theLB sets while it runs, and what the system sets from boot; how theLB runs
+  here - under systemd or by hand; the firewall (ufw, firewalld, nftables), with
+  the commands that open what theLB needs; SELinux; software in the way
+  (keepalived, kube-proxy, Cilium, kube-router, other IPVS services); on a
+  director, what listens on every address - it answers on every VIP; the
+  platform - clouds where a VIP cannot move, hypervisors that need a setting;
+  the clock; and the cluster this node's director sees.
+
+--port is the control port, for the firewall's commands, when no director runs
+here to say it. Exit status 1 when theLB could not run, or not do part of its
+work.
 `,
 	"generate": `Usage:
   thelb generate secret
   thelb generate commands
+  thelb generate systemd director|backend <the flags it runs with>
+  thelb generate sysctl director|backend
+  thelb generate modules director|backend
 
 Prints a file's content, and writes nothing.
 
@@ -140,8 +157,17 @@ Prints a file's content, and writes nothing.
               pools, services and assignments again, as they are - a script to
               keep, and run after every director has stopped; theLB never
               reads it: thelb generate commands > /root/thelb-restore.sh
+  systemd     a unit that runs thelb director or backend with the flags given -
+              checked as the role checks them - and this binary: Type=notify,
+              the watchdog, Restart=always, its capabilities bounded and the
+              system read-only but for what it writes:
+              thelb generate systemd director --vip 10.0.0.10 --port 7443 ... |
+                sudo tee /etc/systemd/system/thelb-director.service
+  sysctl      a sysctl.d file with the kernel parameters theLB sets while it
+              runs, for them from boot
+  modules     a modules-load.d file with the modules it uses
 
-systemd, sysctl, modules and k8s come later.
+k8s comes later.
 `,
 	"admin": `Usage:
   thelb admin approve <name> ...

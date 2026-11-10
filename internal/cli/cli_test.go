@@ -106,7 +106,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestNotYetExitsOne(t *testing.T) {
-	for _, args := range [][]string{{"doctor"}, {"generate", "systemd"}, {"admin", "secret", "rotate"}} {
+	for _, args := range [][]string{{"generate", "k8s"}, {"admin", "secret", "rotate"}} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 1 || !strings.Contains(errOut, "not in this build") {
 			t.Errorf("%v: exit %d, %q", args, code, errOut)

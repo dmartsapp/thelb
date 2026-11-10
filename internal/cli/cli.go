@@ -32,6 +32,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/version"
@@ -46,11 +47,16 @@ var (
 	localFor    = hostnet.For
 	now         = time.Now
 	hostInputs  = fingerprint.ReadHost
+	executable  = os.Executable // generate systemd's ExecStart=
 	runDirector = director.Run
 	runBackend  = backend.Run
-	logOutput   io.Writer // nil: standard error
-	stdin       io.Reader = os.Stdin
-	isTerminal            = func() bool {
+	// preflightDirector and preflightBackend check, before anything changes,
+	// that this node has all theLB needs.
+	preflightDirector = preflight.Director
+	preflightBackend  = preflight.Backend
+	logOutput         io.Writer // nil: standard error
+	stdin             io.Reader = os.Stdin
+	isTerminal                  = func() bool {
 		fi, err := os.Stdin.Stat()
 		return err == nil && fi.Mode()&os.ModeCharDevice != 0
 	}
@@ -119,9 +125,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "status":
 		return statusCmd(ctx, rest, stdout)
 	case "doctor":
-		return notYet("thelb doctor")
+		return doctorCmd(rest, stdout)
 	case "generate":
-		return generateCmd(rest, stdout)
+		return generateCmd(ctx, rest, stdout)
 	case "offer":
 		return offerCmd(rest, stdout)
 	default: // admin
@@ -155,72 +161,10 @@ func parse(fs *flag.FlagSet, args []string) error {
 var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error {
-	fs := newFlags("director")
-	vip := fs.String("vip", "", "")
-	port := fs.Int("port", 0, "")
-	secretFile := fs.String("secret-file", "", "")
-	backendSecretFile := fs.String("backend-secret-file", "", "")
-	bootstrap := fs.Bool("bootstrap", false, "")
-	cluster := fs.String("cluster", "thelb", "")
-	name := fs.String("name", "", "")
-	iface := fs.String("interface", "", "")
-	if err := parse(fs, args); err != nil {
+	cfg, err := directorConfig(ctx, "director", args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return usagef("thelb director: unexpected %q", fs.Arg(0))
-	}
-
-	var cfg director.Config
-	switch {
-	case *vip == "":
-		return usagef("thelb director: --vip, the control VIP, is required")
-	case strings.Contains(*vip, "/"):
-		return usagef("thelb director: --vip is the control VIP's address or name, without a prefix: %q", *vip)
-	}
-	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface, false)
-	if err != nil {
-		var u usageError
-		if errors.As(err, &u) {
-			return usagef("thelb director: %v", err)
-		}
-		return fmt.Errorf("thelb director: %w", err)
-	}
-	cfg.ControlVIP, cfg.ControlVIPName = addr, vipName
-	if *port < 1 || *port > 65535 {
-		return usagef("thelb director: --port, the control port, must be 1 to 65535")
-	}
-	cfg.ControlPort = uint16(*port)
-	for _, f := range []struct{ flag, path string }{{"--secret-file", *secretFile}, {"--backend-secret-file", *backendSecretFile}} {
-		if f.path == "" {
-			return usagef("thelb director: %s is required", f.flag)
-		}
-		if !filepath.IsAbs(f.path) {
-			return usagef("thelb director: %s must be an absolute path: %q", f.flag, f.path)
-		}
-	}
-	if filepath.Clean(*secretFile) == filepath.Clean(*backendSecretFile) {
-		return usagef("thelb director: the directors' and the backends' secrets need two files")
-	}
-	cfg.SecretFile, cfg.BackendSecretFile = filepath.Clean(*secretFile), filepath.Clean(*backendSecretFile)
-	if !nameRE.MatchString(*cluster) {
-		return usagef("thelb director: --cluster %q: a cluster's name is lowercase letters, digits and hyphens, up to 63", *cluster)
-	}
-	cfg.Cluster = *cluster
-	cfg.Name = *name
-	if cfg.Name == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return fmt.Errorf("thelb director: this node's hostname: %w; name it with --name", err)
-		}
-		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
-	}
-	if !nameRE.MatchString(cfg.Name) {
-		return usagef("thelb director: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
-	}
-	cfg.Bootstrap = *bootstrap
-	cfg.Interface = *iface
-
 	if goos != "linux" {
 		return errors.New("thelb director runs only on Linux")
 	}
@@ -242,7 +186,82 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 			return n, nil
 		},
 		Dataplane: func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
+		Preflight: func() (string, error) { return preflightDirector(cfg.ControlVIP) },
 	})
+}
+
+// directorConfig reads `thelb director`'s flags - for the director, and for
+// `generate`, which checks them the same way. cmd names the command in errors.
+func directorConfig(ctx context.Context, cmd string, args []string) (director.Config, error) {
+	usagef := func(format string, a ...any) error {
+		return usageError{"thelb " + cmd + ": " + strings.TrimPrefix(fmt.Sprintf(format, a...), "thelb director: ")}
+	}
+	fs := newFlags(cmd)
+	vip := fs.String("vip", "", "")
+	port := fs.Int("port", 0, "")
+	secretFile := fs.String("secret-file", "", "")
+	backendSecretFile := fs.String("backend-secret-file", "", "")
+	bootstrap := fs.Bool("bootstrap", false, "")
+	cluster := fs.String("cluster", "thelb", "")
+	name := fs.String("name", "", "")
+	iface := fs.String("interface", "", "")
+	var cfg director.Config
+	if err := parse(fs, args); err != nil {
+		return cfg, err
+	}
+	if fs.NArg() > 0 {
+		return cfg, usagef("thelb director: unexpected %q", fs.Arg(0))
+	}
+
+	switch {
+	case *vip == "":
+		return cfg, usagef("thelb director: --vip, the control VIP, is required")
+	case strings.Contains(*vip, "/"):
+		return cfg, usagef("thelb director: --vip is the control VIP's address or name, without a prefix: %q", *vip)
+	}
+	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface, false)
+	if err != nil {
+		var u usageError
+		if errors.As(err, &u) {
+			return cfg, usagef("thelb director: %v", err)
+		}
+		return cfg, fmt.Errorf("thelb %s: %w", cmd, err)
+	}
+	cfg.ControlVIP, cfg.ControlVIPName = addr, vipName
+	if *port < 1 || *port > 65535 {
+		return cfg, usagef("thelb director: --port, the control port, must be 1 to 65535")
+	}
+	cfg.ControlPort = uint16(*port)
+	for _, f := range []struct{ flag, path string }{{"--secret-file", *secretFile}, {"--backend-secret-file", *backendSecretFile}} {
+		if f.path == "" {
+			return cfg, usagef("thelb director: %s is required", f.flag)
+		}
+		if !filepath.IsAbs(f.path) {
+			return cfg, usagef("thelb director: %s must be an absolute path: %q", f.flag, f.path)
+		}
+	}
+	if filepath.Clean(*secretFile) == filepath.Clean(*backendSecretFile) {
+		return cfg, usagef("thelb director: the directors' and the backends' secrets need two files")
+	}
+	cfg.SecretFile, cfg.BackendSecretFile = filepath.Clean(*secretFile), filepath.Clean(*backendSecretFile)
+	if !nameRE.MatchString(*cluster) {
+		return cfg, usagef("thelb director: --cluster %q: a cluster's name is lowercase letters, digits and hyphens, up to 63", *cluster)
+	}
+	cfg.Cluster = *cluster
+	cfg.Name = *name
+	if cfg.Name == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			return cfg, fmt.Errorf("thelb %s: this node's hostname: %w; name it with --name", cmd, err)
+		}
+		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
+	}
+	if !nameRE.MatchString(cfg.Name) {
+		return cfg, usagef("thelb director: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
+	}
+	cfg.Bootstrap = *bootstrap
+	cfg.Interface = *iface
+	return cfg, nil
 }
 
 // roleDir is where a role's socket is: one director and one backend may run on
@@ -397,65 +416,10 @@ func offerCmd(args []string, stdout io.Writer) error {
 }
 
 func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
-	fs := newFlags("backend")
-	joinTo := fs.String("join", "", "")
-	secretFile := fs.String("secret-file", "", "")
-	name := fs.String("name", "", "")
-	iface := fs.String("interface", "", "")
-	var offers offerFlags
-	fs.Var(&offers, "offer", "")
-	if err := parse(fs, args); err != nil {
+	cfg, err := backendConfig(ctx, "backend", args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return usagef("thelb backend: unexpected %q", fs.Arg(0))
-	}
-	var cfg backend.Config
-	host, portText, err := net.SplitHostPort(*joinTo)
-	port, perr := strconv.Atoi(portText)
-	if err != nil || perr != nil || port < 1 || port > 65535 {
-		return usagef("thelb backend: --join is the control VIP, by address or name, and its port, as 10.0.0.10:7443, thelb-vip:7443 or [fd00::10]:7443: %q", *joinTo)
-	}
-	addr, joinName, err := vipAddr(ctx, "--join", host, *iface, true)
-	if err != nil {
-		var u usageError
-		if errors.As(err, &u) {
-			return usagef("thelb backend: %v", err)
-		}
-		return fmt.Errorf("thelb backend: %w", err)
-	}
-	cfg.Join, cfg.JoinName = netip.AddrPortFrom(addr, uint16(port)), joinName
-	if *secretFile == "" || !filepath.IsAbs(*secretFile) {
-		return usagef("thelb backend: --secret-file, the backends' secret, is required, as an absolute path")
-	}
-	cfg.SecretFile = filepath.Clean(*secretFile)
-	seen := map[string]bool{}
-	for _, spec := range offers {
-		o, err := parseOffer(spec)
-		if err != nil {
-			return usagef("thelb backend: %v", err)
-		}
-		if seen[o.Key()] {
-			return usagef("thelb backend: %s is offered twice", o.Key())
-		}
-		if seen["name "+o.Name] {
-			return usagef("thelb backend: two offers are named %s", o.Name)
-		}
-		seen[o.Key()], seen["name "+o.Name] = true, true
-		cfg.Offers = append(cfg.Offers, o)
-	}
-	cfg.Name = *name
-	if cfg.Name == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return fmt.Errorf("thelb backend: this node's hostname: %w; name it with --name", err)
-		}
-		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
-	}
-	if !nameRE.MatchString(cfg.Name) {
-		return usagef("thelb backend: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
-	}
-	cfg.Interface = *iface
 	if goos != "linux" {
 		return errors.New("thelb backend runs only on Linux")
 	}
@@ -465,12 +429,81 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	log := logx.New(out, "thelb")
 	return runBackend(ctx, cfg, backend.Deps{
-		RunDir: roleDir("backend"),
-		Log:    log,
-		Now:    now,
-		Host:   hostInputs,
-		Kernel: func() (backend.Kernel, error) { return backendKernel(log.Module("kernel")) },
+		RunDir:    roleDir("backend"),
+		Log:       log,
+		Now:       now,
+		Host:      hostInputs,
+		Kernel:    func() (backend.Kernel, error) { return backendKernel(log.Module("kernel")) },
+		Preflight: func() (string, error) { return preflightBackend(cfg.Join.Addr()) },
 	})
+}
+
+// backendConfig reads `thelb backend`'s flags - for the backend, and for
+// `generate`, which checks them the same way. cmd names the command in errors.
+func backendConfig(ctx context.Context, cmd string, args []string) (backend.Config, error) {
+	usagef := func(format string, a ...any) error {
+		return usageError{"thelb " + cmd + ": " + strings.TrimPrefix(fmt.Sprintf(format, a...), "thelb backend: ")}
+	}
+	fs := newFlags(cmd)
+	joinTo := fs.String("join", "", "")
+	secretFile := fs.String("secret-file", "", "")
+	name := fs.String("name", "", "")
+	iface := fs.String("interface", "", "")
+	var offers offerFlags
+	fs.Var(&offers, "offer", "")
+	var cfg backend.Config
+	if err := parse(fs, args); err != nil {
+		return cfg, err
+	}
+	if fs.NArg() > 0 {
+		return cfg, usagef("thelb backend: unexpected %q", fs.Arg(0))
+	}
+	host, portText, err := net.SplitHostPort(*joinTo)
+	port, perr := strconv.Atoi(portText)
+	if err != nil || perr != nil || port < 1 || port > 65535 {
+		return cfg, usagef("thelb backend: --join is the control VIP, by address or name, and its port, as 10.0.0.10:7443, thelb-vip:7443 or [fd00::10]:7443: %q", *joinTo)
+	}
+	addr, joinName, err := vipAddr(ctx, "--join", host, *iface, true)
+	if err != nil {
+		var u usageError
+		if errors.As(err, &u) {
+			return cfg, usagef("thelb backend: %v", err)
+		}
+		return cfg, fmt.Errorf("thelb %s: %w", cmd, err)
+	}
+	cfg.Join, cfg.JoinName = netip.AddrPortFrom(addr, uint16(port)), joinName
+	if *secretFile == "" || !filepath.IsAbs(*secretFile) {
+		return cfg, usagef("thelb backend: --secret-file, the backends' secret, is required, as an absolute path")
+	}
+	cfg.SecretFile = filepath.Clean(*secretFile)
+	seen := map[string]bool{}
+	for _, spec := range offers {
+		o, err := parseOffer(spec)
+		if err != nil {
+			return cfg, usagef("thelb backend: %v", err)
+		}
+		if seen[o.Key()] {
+			return cfg, usagef("thelb backend: %s is offered twice", o.Key())
+		}
+		if seen["name "+o.Name] {
+			return cfg, usagef("thelb backend: two offers are named %s", o.Name)
+		}
+		seen[o.Key()], seen["name "+o.Name] = true, true
+		cfg.Offers = append(cfg.Offers, o)
+	}
+	cfg.Name = *name
+	if cfg.Name == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			return cfg, fmt.Errorf("thelb %s: this node's hostname: %w; name it with --name", cmd, err)
+		}
+		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
+	}
+	if !nameRE.MatchString(cfg.Name) {
+		return cfg, usagef("thelb backend: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
+	}
+	cfg.Interface = *iface
+	return cfg, nil
 }
 
 func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
@@ -533,7 +566,7 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 }
 
-func generateCmd(args []string, stdout io.Writer) error {
+func generateCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return usagef("thelb generate: say what to generate: secret or commands (systemd, sysctl, modules and k8s come later)")
 	}
@@ -558,7 +591,11 @@ func generateCmd(args []string, stdout io.Writer) error {
 		}
 		_, _ = fmt.Fprint(stdout, resp.Text)
 		return nil
-	case "systemd", "sysctl", "modules", "k8s":
+	case "systemd":
+		return generateSystemd(ctx, args[1:], stdout)
+	case "sysctl", "modules":
+		return generateBoot(args[0], args[1:], stdout)
+	case "k8s":
 		return notYet("thelb generate " + args[0])
 	default:
 		return usagef("thelb generate: %q is not something theLB generates", args[0])

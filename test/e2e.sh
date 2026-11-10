@@ -57,6 +57,11 @@ bin="$tmp/bin/thelb"
 declare -A pid addr4 addr6 mac
 cleanup() {
 	set +u
+	if [ -f /run/systemd/system/thelb-e2e-d1.service ]; then
+		systemctl stop thelb-e2e-d1 2>/dev/null
+		rm -f /run/systemd/system/thelb-e2e-d1.service
+		systemctl daemon-reload
+	fi
 	for n in "${!pid[@]}"; do kill -9 "${pid[$n]}" 2>/dev/null; done
 	# Every process left in the lab's namespaces - web servers included - then
 	# the namespaces. No bare wait: a process it would wait for may be one the
@@ -899,6 +904,45 @@ if [ $have6 = 1 ]; then
 else
 	echo "== IPv6: skipped - this kernel has no IPv6 (booted with ipv6.disable=1?)"
 fi
+
+echo "== preflight: a node without what theLB needs - it says what, and changes nothing"
+if command -v setpriv >/dev/null; then
+	copy_secrets d2
+	ip netns exec $P-d2 unshare --mount --propagation private \
+		sh -c 'mount -t tmpfs -o mode=0755 tmpfs /run && exec setpriv --bounding-set -net_admin -- "$@"' sh \
+		"$bin" director --port $PORT --name d2 --cluster e2e --vip $VIP4 --bootstrap \
+		--secret-file "$tmp/d2/director.secret" --backend-secret-file "$tmp/d2/backend.secret" >"$tmp/d2.preflight.log" 2>&1
+	code=$?
+	check "without CAP_NET_ADMIN, the director stops at once: exit 1, naming what is missing and how to give it" "[ $code = 1 ] && grep -q 'this node lacks what theLB needs, and theLB changed nothing' $tmp/d2.preflight.log && grep -q 'CAP_NET_ADMIN: not among this process.s capabilities' $tmp/d2.preflight.log"
+	check "and changed nothing: no control VIP, no IPVS, nothing logged as done" "! holds d2 $VIP4 && ! ipvs_on d2 | grep -q TCP && ! grep -q ' OK ' $tmp/d2.preflight.log"
+fi
+
+# The unit generate systemd prints, run as systemd runs it - its capabilities
+# bounded, the system read-only - in d1's network namespace, with a /run/thelb
+# of its own.
+echo "== under systemd: the unit thelb generate systemd prints runs a director"
+install -d -m 0700 "$tmp/sd"
+ip netns exec $P-d1 "$bin" generate systemd director --vip $VIP4 --port $PORT --bootstrap --name d1 --cluster e2e \
+	--secret-file "$tmp/sd/director.secret" --backend-secret-file "$tmp/sd/backend.secret" >"$tmp/sd/unit"
+check "generate systemd director prints a unit, ExecStart= with the flags given" "grep -q \"^ExecStart=$bin director --vip $VIP4 --port $PORT --bootstrap --name d1 --cluster e2e --secret-file $tmp/sd/director.secret\" $tmp/sd/unit && grep -q '^ReadWritePaths=-$tmp/sd\$' $tmp/sd/unit"
+# The mount point of its own /run/thelb, made here only if missing.
+made_run=""
+[ -d /run/thelb ] || { install -d -m 0700 /run/thelb && made_run=1; }
+sed '/^\[Service\]/a NetworkNamespacePath=/run/netns/'$P'-d1\nTemporaryFileSystem=/run/thelb' "$tmp/sd/unit" >/run/systemd/system/thelb-e2e-d1.service
+systemctl daemon-reload
+check "systemctl start: started, as Type=notify says - once its socket is up" "timeout 60 systemctl start thelb-e2e-d1 && [ \"\$(systemctl is-active thelb-e2e-d1)\" = active ]"
+mainpid=$(systemctl show -p MainPID --value thelb-e2e-d1)
+check "it runs with only the capabilities the unit bounds: CAP_NET_ADMIN, CAP_NET_RAW, CAP_NET_BIND_SERVICE" "[ \"\$(awk '/^CapEff/ {print \$2}' /proc/$mainpid/status)\" = 0000000000003400 ]"
+check "and works: preflight passed, the bootstrap wrote its secret files, it holds the control VIP" "journalctl -u thelb-e2e-d1 --no-pager | grep -q 'OK preflight: this node has all theLB needs' && within 30 eval '[ -s $tmp/sd/director.secret ] && holds d1 $VIP4'"
+check "status, asked in its own namespaces" "within 10 eval 'nsenter -t $mainpid -m -n $bin status | grep -qE \"^ e2e +\\|\"'"
+nsenter -t $mainpid -m -n "$bin" doctor >"$tmp/doctor.out" 2>&1
+code=$?
+check "thelb doctor there: nothing missing, theLB under systemd, the cluster seen" "[ $code = 0 ] && grep -q 'theLB doctor, for a director on this node' $tmp/doctor.out && grep -qE 'the director +\| ok +\| process $mainpid, under systemd: thelb-e2e-d1.service' $tmp/doctor.out && grep -qE 'module ip_vs +\| ok' $tmp/doctor.out && grep -qE 'directors up +\| warn +\| 1: no failover' $tmp/doctor.out"
+sed 's/^/      /' "$tmp/doctor.out" | head -40
+check "systemctl stop: a clean stop - the control VIP given up" "systemctl stop thelb-e2e-d1 && [ \"\$(systemctl is-active thelb-e2e-d1)\" != active ] && ! holds d1 $VIP4 && journalctl -u thelb-e2e-d1 --no-pager | grep -q 'OK stopped'"
+rm -f /run/systemd/system/thelb-e2e-d1.service
+systemctl daemon-reload
+[ -n "$made_run" ] && rmdir /run/thelb 2>/dev/null
 
 echo "== nothing secret in any log, nothing left behind"
 key="$(cut -d: -f2 "$tmp/d1/director.secret")"

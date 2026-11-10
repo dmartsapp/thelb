@@ -132,7 +132,7 @@ It finds the cluster on the control VIP and waits for approval; approve it on a 
 - **The control VIP and the service VIPs are leased from the kernel.** The leader adds them with a lifetime - 6 seconds, `valid_lft 6sec` in `ip address` - and renews it every 2. A leader that is killed or hangs stops renewing, and its own kernel removes the VIPs when the lease lapses: nothing is left answering for them. **No director ever takes a VIP another machine still answers for** - a new leader takes the control VIP only once two looks, a second apart, find no machine answering ARP or neighbour discovery for it and nothing accepting a connection on it, and each service VIP once two looks a second apart find no machine answering for it. A killed leader's kernel keeps forwarding its services' traffic - its VIPs and IPVS rules are kernel state - until the lease lapses; the new leader takes over then, about two seconds later. Change the lease with `sudo thelb admin lease <seconds>` (3 s to 1 h): it is kept in the cluster's state, so every director knows how long a stopped leader's VIP can still answer; a longer lease means a slower takeover after a crash, a shorter one more renewals.
 - **Two directors survive either one's planned stop, and either one's crash.** A crashed director still counts towards the majority, so the one left cannot win an election. It waits out the lease - the lease plus 2 seconds without a leader, 8 by default; 6 more for the director whose member identity, its name first, sorts later - and then looks: if the other is **gone** - its control port refuses connections (its theLB is not running), or its machine does not answer at all - its own gateway still answers, and the control VIP is no more, it **stands alone**: it claims the VIP at once, goes on as the cluster's only voter with every pool, service and assignment - including the last changes its log holds, which the crashed leader may have confirmed - and removes the other. The crashed director, started again, **waits for approval** (`thelb admin approve <name>`). A VIP the other's machine still holds after the lease is held by a theLB alive, or by hand: it is not taken, and the log says so.
 - **When both are alive but cannot talk**, what happens depends on what is between them. A firewall that **drops** the control port: each finds the other answering on the network but not on its port, so neither stands alone, and the cluster has no leader until the two reach each other again. A firewall that **rejects** it looks like a theLB not running: the director whose member identity sorts first stands alone and claims the VIP; the other, looking later, finds the VIP held, and stays out - one leader. A cut that neither sees - no gateway, link up, the other simply silent - makes **both** stand alone, each on its side; when they see each other again, the leader whose member identity sorts later stands down, starts over and waits for approval, and **the changes made on its side meanwhile are lost**. Give two directors a gateway on the control VIP's interface: it is what tells a director that it is the one cut off.
-- **Under systemd with two directors, use `RestartSec=10`**: a crashed director restarted at once may create a cluster of its own before the other has stood alone (section 6).
+- **Under systemd with two directors, use `RestartSec=30`** (`thelb generate systemd` does): a crashed director restarted sooner may create a cluster of its own before the other has stood alone, and the cluster's state would be lost (section 6). With a lease longer than 6 seconds, lengthen it to the lease plus 25 seconds.
 - **Use three directors** (or five) to survive a crash without guessing: three keep their majority when any one fails. The leader takes a director that is gone - no check-in for 10 seconds, and its port refusing or its machine silent - out of the vote, so the two left keep a majority, and the last of two stands alone if a second one crashes. The director taken out stays approved, and rejoins without approval when it starts again; `thelb status` shows it `down`.
 - **`--bootstrap`** on a director lets it create the cluster when it finds none - after looking for 5 seconds. Put it on the first director; you may put it on others too, so that the cluster does not depend on one machine coming back after every director has stopped.
 - **A director that restarts** while the cluster runs rejoins by itself, without approval: the cluster remembers it, by its node fingerprint, address and MAC address.
@@ -140,49 +140,20 @@ It finds the cluster on the control VIP and waits for approval; approve it on a 
 
 ## 6. Running under systemd
 
-theLB tells systemd when it has started (`Type=notify`) and that it is alive (`WatchdogSec=`) - only while the loops that keep it working go round: on a director, its check-ins with the leader and, while it leads, the data plane; on a backend, its heartbeat and the repair of its kernel state (section 14). A loop that has not gone round for 30 seconds stops the telling, and systemd restarts theLB - with `Restart=always`, a hung theLB comes back by itself. It installs no unit files itself (a `thelb generate systemd` that prints them is planned); write them yourself. A director:
+theLB tells systemd when it has started (`Type=notify`) and that it is alive (`WatchdogSec=`) - only while the loops that keep it working go round: on a director, its check-ins with the leader and, while it leads, the data plane; on a backend, its heartbeat and the repair of its kernel state (section 14). A loop that has not gone round for 30 seconds stops the telling, and systemd restarts theLB - with `Restart=always`, a hung theLB comes back by itself.
 
-```ini
-# /etc/systemd/system/thelb-director.service
-[Unit]
-Description=theLB director
-After=network-online.target
-Wants=network-online.target
+theLB installs no unit file itself: **`thelb generate systemd`** prints one, for the role and the flags you give it - checked as the role checks them - and this binary's path. Install what it prints:
 
-[Service]
-Type=notify
-NotifyAccess=main
-ExecStart=/usr/local/bin/thelb director --vip 10.0.0.10 --port 7443 --bootstrap \
-  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
-Restart=always
-RestartSec=10
-WatchdogSec=30
-
-[Install]
-WantedBy=multi-user.target
+```text
+sudo thelb generate systemd director --vip 10.0.0.10 --port 7443 --bootstrap \
+  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret \
+  | sudo tee /etc/systemd/system/thelb-director.service
+sudo thelb generate systemd backend --join 10.0.0.10:7443 \
+  --secret-file /etc/thelb/backend.secret --offer web=tcp/80,check=http:/ \
+  | sudo tee /etc/systemd/system/thelb-backend.service
 ```
 
-A backend:
-
-```ini
-# /etc/systemd/system/thelb-backend.service
-[Unit]
-Description=theLB backend
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=notify
-NotifyAccess=main
-ExecStart=/usr/local/bin/thelb backend --join 10.0.0.10:7443 \
-  --secret-file /etc/thelb/backend.secret --offer web=tcp/80,check=http:/
-Restart=always
-RestartSec=1
-WatchdogSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
+The unit has `Type=notify`, `WatchdogSec=30`, `Restart=always` - `RestartSec=30` for a director (section 5), 1 for a backend - and the hardening that does not stop theLB working: its capabilities bounded to `CAP_NET_ADMIN`, `CAP_NET_RAW` and `CAP_NET_BIND_SERVICE`; `ProtectSystem=full`, the secret files' directory writable only with `--bootstrap` (the first bootstrap writes missing ones); `NoNewPrivileges=`, `ProtectHome=` (read-only, not hidden, when a file it needs is in a home directory), `PrivateTmp=` (left out when one is in `/tmp` - which does not survive a reboot: keep the binary in `/usr/local/bin` and the secret files in `/etc/thelb`), and the rest. Not `ProtectKernelTunables=`: theLB writes `/proc/sys/net`. `thelb generate sysctl` and `thelb generate modules` print the kernel parameters theLB sets and the modules it uses, for a user who wants them from boot (theLB does not need them: it sets them when it starts).
 
 ```text
 sudo systemctl daemon-reload
@@ -448,8 +419,21 @@ One line per event, on standard error - in the journal, under systemd:
 
 ## 17. Troubleshooting
 
+**Start with `sudo thelb doctor`** on the node. It changes nothing, and checks:
+- the kernel, its modules and IPv6, and theLB's capabilities;
+- the kernel parameters theLB sets, and what the system sets from boot;
+- whether theLB runs under systemd - with a long enough `RestartSec=` - or was started by hand;
+- the firewall: ufw, firewalld or nftables, with the commands that open the control port and connection sync's multicast;
+- SELinux, and software in the way: keepalived, kube-proxy, Cilium, kube-router, other IPVS services;
+- on a director, what listens on every address, which answers on every VIP;
+- clouds where a VIP cannot move, and hypervisors that need a setting;
+- the clock, and the cluster this node's director sees.
+
+It prints a table, then what to do; `--json` for scripts. It exits `1` when theLB could not run there, or could not do part of its work. Give `--port` for the firewall's commands where no director runs yet.
+
 | The message | What it means, and what to do |
 |---|---|
+| `this node lacks what theLB needs, and theLB changed nothing: ...` | Preflight: before changing anything, theLB checks its capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`), that it can set `/proc/sys/net`, IPVS on a director, and IPv6 for an IPv6 control VIP. Each line says what is missing and how to give it; `thelb doctor` says more. |
 | `the cluster at ... did not accept the secret in ...: it is out of date, or belongs to another cluster` | The node's secret file is not the cluster's. On a director: `sudo thelb admin secret show --role director` (or `backend`), put what it prints in the file, start the node again. |
 | `waiting for approval` (and nothing more) | Approve the node on a director: `sudo thelb admin approve <name>`. |
 | `something that is not theLB answers on ...: the control VIP or port is taken` | Another machine or program has the control VIP or port: choose another, or remove it there. |
@@ -500,8 +484,12 @@ thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
 thelb offer remove <name>                                               (on a backend)
 thelb status   [--json] [--watch] [--role director|backend] [directors|backends|vips|all|<table> ...]
+thelb doctor   [--role director|backend] [--port <control port>] [--json]
 thelb generate secret
 thelb generate commands
+thelb generate systemd director|backend <the flags it runs with>
+thelb generate sysctl director|backend
+thelb generate modules director|backend
 thelb admin approve <name> ... | --match '<regex>' [--yes]
 thelb admin refuse <name>
 thelb admin remove <name>
@@ -540,4 +528,4 @@ make lab-down                                # take it all away
 
 ## 20. Not in this build yet
 
-`thelb doctor`; `thelb generate` for systemd units, sysctl and module files, and Kubernetes; the Kubernetes provider; secret rotation (`admin secret rotate|retire`); the return-path check before an assignment; tunnelled IPv6 services, and GUE; SCTP health checks; Prometheus metrics; detecting a service VIP claimed by another machine (the control VIP is watched); preflight checks of capabilities and modules before starting; limiting which networks backends may enrol from. See the [build state](build-state.md) for what comes next.
+`thelb generate k8s`; the Kubernetes provider; `doctor`'s plan of what `director` or `backend` would change, and its tests of a switch's handling of gratuitous ARP and of multicast between directors; secret rotation (`admin secret rotate|retire`); the return-path check before an assignment; tunnelled IPv6 services, and GUE; SCTP health checks; Prometheus metrics; limiting which networks backends may enrol from. See the [build state](build-state.md) for what comes next.

@@ -86,6 +86,9 @@ type Deps struct {
 	Kernel  func() (Kernel, error)
 	PeerUID func(*net.UnixConn) (int, error)
 	Ready   func() // nil: nothing; called once, when the backend is a member
+	// Preflight checks, before anything is changed, that the node has all theLB
+	// needs, and says what it found; nil: none (tests).
+	Preflight func() (string, error)
 }
 
 // Timing; tests shorten it.
@@ -151,6 +154,13 @@ var refuseFor = 10 * time.Second
 // Run runs the backend until ctx is done.
 func Run(ctx context.Context, cfg Config, d Deps) error {
 	log := d.Log.Module("backend")
+	if d.Preflight != nil {
+		found, err := d.Preflight()
+		if err != nil {
+			return err
+		}
+		log.OK("preflight: this node has all theLB needs", "found", found)
+	}
 	local := d.Local
 	if local == nil {
 		local = hostnet.For
