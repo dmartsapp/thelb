@@ -52,17 +52,18 @@ The cluster has its own address too, the **control VIP**, held by the leader: ba
 
 ## 3. Installing
 
-There are no packages yet. Build the binaries with Go 1.27.3 or later:
+Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries for amd64 and arm64, their SHA-256 sums, and build-provenance attestations. Download, verify, and install - for 0.1.0 on amd64:
 
 ```text
-make build        # bin/thelb.linux.amd64 and bin/thelb.linux.arm64
+curl -LO https://github.com/dmartsapp/thelb/releases/download/v0.1.0/thelb-0.1.0-linux-amd64
+curl -LO https://github.com/dmartsapp/thelb/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify thelb-0.1.0-linux-amd64 --repo dmartsapp/thelb     # optional: built by GitHub from the tag
+sudo install -m 0755 thelb-0.1.0-linux-amd64 /usr/local/bin/thelb
+thelb --version   # thelb 0.1.0 (commit ..., go1.27.3 linux/amd64)
 ```
 
-Copy the binary for your machines to each of them, as `/usr/local/bin/thelb`, and check it:
-
-```text
-thelb --version   # thelb 0.1.0-dev (commit ..., go1.27.3 linux/amd64)
-```
+Or build them from the source, with Go 1.27.3 or later: `make build` puts `bin/thelb.linux.amd64` and `bin/thelb.linux.arm64` there. Copy the binary for your machines to each, as `/usr/local/bin/thelb`.
 
 theLB writes nothing to disk except the two secret files at the first bootstrap, and reads no configuration file: everything is a command-line flag, or the cluster's state, changed with `thelb admin`.
 

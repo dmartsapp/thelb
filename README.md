@@ -13,13 +13,17 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 ## Status
 
-**Design, and the first code.** [v0.1.0, unreleased](CHANGELOG.md) has the command line, the secret files, the node fingerprint, the certificate authority, the local socket and `thelb status` - and the cluster: directors joining with their secret and a director's approval, Raft, the leader holding the control VIP, and failover. And backends: pools, services, assignments, and the kernel's IPVS forwarding to them by direct routing, with health checks from both sides. A backend maps a service's port to its application's where they differ. `doctor`, `generate` and the configuration file come next.
+**v0.1.0, the first release** ([changelog](CHANGELOG.md)): directors forming a cluster with Raft - joining with a secret and an approval, the leader holding the control VIP, failover, two directors surviving either one's crash - and backends serving services through IPVS, by direct routing or IP-in-IP, with port mapping and health checks from both sides, shared across the directors. VIPs leased from the kernel, connection synchronisation, drift repair, `thelb status`, `doctor`, `generate` (systemd units, kernel parameters, the cluster's commands) and Prometheus metrics. Linux only; Kubernetes comes next.
 
 - [User manual](docs/manual.md) - installing theLB, building a cluster, serving services, and keeping it running;
 - [Philosophy](docs/philosophy.md) - the principles every decision follows;
 - [Design](docs/design.md) - how it works, and the questions still open;
 - [Diagrams](docs/diagrams.md) - both, in pictures;
 - [Build state](docs/build-state.md) - where the code is, what is broken, and what comes next.
+
+## Releases
+
+Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries (amd64, arm64), their SHA-256 sums and build-provenance attestations - see the [manual](docs/manual.md#3-installing) to install one, and [SECURITY.md](SECURITY.md) to verify it or to report a vulnerability. Releases are cut from `release/vX.Y` branches, tagged there; `main` is where development goes on, checked by CI - `make check` and the end-to-end test - on every push.
 
 ## Building and testing
 

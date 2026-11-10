@@ -1,6 +1,7 @@
 # theLB - the one place to build and check from.
 #
 #   make build          the Linux binaries, in bin/
+#   make dist VERSION=x a release's binaries and their SHA-256 sums, in dist/
 #   make check          everything a change must pass: format, vet, tests, lint, vulnerabilities
 #   make e2e            the kernel tests as root, and the built binary in a lab of network namespaces
 #   make lab            a lab to try by hand, on this Linux machine: see test/lab.sh
@@ -22,13 +23,28 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
+.PHONY: build dist notes check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
 
 build:
 	@for arch in amd64 arm64; do \
 		echo "==> bin/thelb.linux.$$arch"; \
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb.linux.$$arch ./cmd/thelb || exit 1; \
 	done
+
+# dist: a release's files - the binaries, named for the version, and their
+# SHA-256 sums - in dist/ (make dist VERSION=0.1.0); the release workflow runs it.
+dist:
+	@[ "$(VERSION)" != "0.1.0-dev" ] || { echo "say which: make dist VERSION=<x.y.z>"; exit 1; }
+	@rm -rf dist && mkdir -p dist
+	@for arch in amd64 arm64; do \
+		echo "==> dist/thelb-$(VERSION)-linux-$$arch"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/thelb-$(VERSION)-linux-$$arch ./cmd/thelb || exit 1; \
+	done
+	@cd dist && sha256sum thelb-* > SHA256SUMS && cat SHA256SUMS
+
+# notes: the changelog's section for VERSION, for the release's page.
+notes:
+	@awk -v v="## v$(VERSION) " 'index($$0, v) == 1 { on = 1; next } on && /^## / { exit } on' CHANGELOG.md
 
 check: tools fmt-check vet test lint vuln
 
@@ -97,4 +113,4 @@ remote-scale: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make scale N=$(N) PROFILE=$(PROFILE) COMMIT=$(COMMIT)'
 
 clean:
-	rm -rf bin
+	rm -rf bin dist
