@@ -348,6 +348,8 @@ sudo thelb status --json [names]   # the same as JSON
 sudo thelb status --watch          # again every 2 seconds
 ```
 
+`thelb status`, `status directors` and `status vips` are quick at any size; the views with the backends table - `status backends`, `status all`, and `--json` of everything - also read IPVS's counters on the leader, service by service: about a second for a thousand services.
+
 What the columns say:
 
 - **nodes - state**: `up`; `down` (no check-in for 3 seconds - a director - or no heartbeat for 10 - a backend); `catching up` (a new director, not yet voting); `stopped` (a director stopped by plan, out of the vote until it starts again) - or `down` for one the leader found gone and took out of the vote; `unknown` (this director cannot reach the leader).
@@ -427,13 +429,18 @@ One line per event, on standard error - in the journal, under systemd:
 - SELinux, and software in the way: keepalived, kube-proxy, Cilium, kube-router, other IPVS services;
 - on a director, what listens on every address, which answers on every VIP;
 - clouds where a VIP cannot move, and hypervisors that need a setting;
-- the clock, and the cluster this node's director sees.
+- the clock, and the cluster this node's director sees;
+- the link: whether the gateway and the other directors answer ARP probes - a takeover reads a director's silence as its machine down - whether connection sync runs and its entries arrive, and whether a follower's cache points the control VIP at the leader (the leader's announcements arrive);
+- the plan: everything the role would add, set and start on this node - the control VIP with its label, protocol and lease, the service VIPs, IPVS, the pinned neighbours, the sync daemons, `thelb0`, nftables, `thelbt0` - and each kernel parameter it would set, or leave as it is.
 
-It prints a table, then what to do; `--json` for scripts. It exits `1` when theLB could not run there, or could not do part of its work. Give `--port` for the firewall's commands where no director runs yet.
+It prints a table, then what to do; `--json` for scripts. It exits `1` when theLB could not run there, or could not do part of its work. Give `--vip` and `--port` for the plan and the firewall's commands where no director runs yet.
 
 | The message | What it means, and what to do |
 |---|---|
 | `this node lacks what theLB needs, and theLB changed nothing: ...` | Preflight: before changing anything, theLB checks its capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`), that it can set `/proc/sys/net`, IPVS on a director, and IPv6 for an IPv6 control VIP. Each line says what is missing and how to give it; `thelb doctor` says more. |
+| `WARN this node lacks a feature theLB can do without feature=sctp\|nftables reason=...` | Preflight found the kernel without something only some services need: `sctp` - IPVS built without SCTP, so this director, leading, refuses SCTP services; `nftables` - so this backend cannot map a service's port to another, nor serve a tunnelled service, and the leader refuses such assignments. Everything else works. |
+| `the leader cannot serve SCTP: ...` | `admin service add --proto sctp` on a cluster whose leader's IPVS has no SCTP. Lead with a director whose kernel has it (`thelb doctor` shows it), or use TCP or UDP. |
+| `<node> has no nftables in its kernel, so it can neither map the service's port ... nor clamp a tunnelled service's handshakes` | Assign an offer on the service's own port, or load `nf_tables` on that backend (`sudo modprobe nf_tables`) and start its theLB again. |
 | `the cluster at ... did not accept the secret in ...: it is out of date, or belongs to another cluster` | The node's secret file is not the cluster's. On a director: `sudo thelb admin secret show --role director` (or `backend`), put what it prints in the file, start the node again. |
 | `waiting for approval` (and nothing more) | Approve the node on a director: `sudo thelb admin approve <name>`. |
 | `something that is not theLB answers on ...: the control VIP or port is taken` | Another machine or program has the control VIP or port: choose another, or remove it there. |
@@ -484,7 +491,7 @@ thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
 thelb offer remove <name>                                               (on a backend)
 thelb status   [--json] [--watch] [--role director|backend] [directors|backends|vips|all|<table> ...]
-thelb doctor   [--role director|backend] [--port <control port>] [--json]
+thelb doctor   [--role director|backend] [--vip <control VIP>] [--port <control port>] [--json]
 thelb generate secret
 thelb generate commands
 thelb generate systemd director|backend <the flags it runs with>

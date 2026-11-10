@@ -231,6 +231,9 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 	if c.Proto != "tcp" && c.Proto != "udp" && c.Proto != "sctp" {
 		return api.Result{}, fmt.Errorf("--proto is tcp, udp or sctp, not %q", c.Proto)
 	}
+	if why, ok := s.n.lacks["sctp"]; ok && c.Proto == "sctp" {
+		return api.Result{}, fmt.Errorf("the leader cannot serve SCTP: %s", why)
+	}
 	if c.Port < 1 || c.Port > 65535 {
 		return api.Result{}, errors.New("--port is 1 to 65535")
 	}
@@ -418,6 +421,12 @@ func (s *session) assign(by string, c api.Change) (api.Result, error) {
 		addr, err := netip.ParseAddr(n.Address)
 		if err != nil {
 			return api.Result{}, err
+		}
+		s.mu.Lock()
+		noNFT := s.backends[node].noNFT
+		s.mu.Unlock()
+		if noNFT && (port != svc.Port || svc.Tunnel()) {
+			return api.Result{}, fmt.Errorf("%s has no nftables in its kernel, so it can neither map the service's port %d to its offer's %d nor clamp a tunnelled service's handshakes: assign an offer on the service's port, or load nf_tables there and start its backend again", node, svc.Port, port)
 		}
 		if port != svc.Port && directorAt(nodes, n.Address) {
 			return api.Result{}, fmt.Errorf("%s runs on a director, so its offer must be on the service's port, %d: while that director leads, a port mapping there would take the clients' packets before IPVS", node, svc.Port)

@@ -4,6 +4,13 @@ package preflight
 
 import "strings"
 
+// Result is what preflight found: the kernel, and the features this node lacks
+// that theLB can do without - each refusing only what needs it.
+type Result struct {
+	Found string
+	Lacks map[string]string // by feature - "sctp", "nftables" - why, and what it refuses
+}
+
 // Missing is one thing theLB needs and lacks, and how to give it.
 type Missing struct {
 	What string

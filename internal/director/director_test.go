@@ -16,10 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/wire"
@@ -165,7 +167,8 @@ type world struct {
 	local   hostnet.Address
 	net     *loopNet
 	machine string
-	plane   Dataplane // nil: none
+	plane   Dataplane         // nil: none
+	lacks   map[string]string // what preflight says the node lacks; nil: no preflight
 	logs    *syncBuffer
 	started chan struct{}
 	stop    context.CancelFunc
@@ -227,7 +230,15 @@ func (w *world) deps() Deps {
 			}
 			return w.plane, nil
 		},
+		Preflight: w.preflight(),
 	}
+}
+
+func (w *world) preflight() func() (preflight.Result, error) {
+	if w.lacks == nil {
+		return nil
+	}
+	return func() (preflight.Result, error) { return preflight.Result{Found: "kernel test", Lacks: w.lacks}, nil }
 }
 
 // launch runs the director until the test ends, or until stopped.
@@ -538,5 +549,22 @@ func TestTheControlVIPMustBeInANetworkOfThisNode(t *testing.T) {
 	d.Local = nil
 	if err := Run(context.Background(), w.cfg, d); err == nil || !strings.Contains(err.Error(), "--interface") {
 		t.Errorf("a VIP in no network of this node: %v", err)
+	}
+}
+
+// TestALeaderWithoutSCTPRefusesSCTPServices: preflight's lacks are logged, and a
+// leader whose IPVS has no SCTP refuses an SCTP service, saying why.
+func TestALeaderWithoutSCTPRefusesSCTPServices(t *testing.T) {
+	w := single(t)
+	w.lacks = map[string]string{"sctp": "IPVS here was built without SCTP"}
+	w.start(t)
+	w.waitReady(t)
+	eventually(t, "it leads", func() bool { return strings.Contains(w.logs.String(), "OK control VIP taken") })
+	if !strings.Contains(w.logs.String(), "WARN this node lacks a feature theLB can do without feature=sctp") {
+		t.Errorf("the lack is not logged:\n%s", w.logs)
+	}
+	resp, err := localsock.Call(w.run, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "service.add", Names: []string{"sig"}, Proto: "sctp", Port: 2905}})
+	if err == nil && resp.Error == "" || !strings.Contains(fmt.Sprint(err, resp.Error), "the leader cannot serve SCTP: IPVS here was built without SCTP") {
+		t.Errorf("an SCTP service on a leader without SCTP: %v %q", err, resp.Error)
 	}
 }

@@ -166,3 +166,26 @@ func TestABackendShowsOnlyItself(t *testing.T) {
 		t.Errorf("a backend's status:\n%s", text)
 	}
 }
+
+// TestOnlyTheBackendsTableNeedsCounters: the summary and the views without the
+// backends table are made without IPVS's counters; JSON of everything has them.
+func TestOnlyTheBackendsTableNeedsCounters(t *testing.T) {
+	for _, c := range []struct {
+		json bool
+		only []string
+		want bool
+	}{
+		{false, nil, false},
+		{false, []string{"directors"}, false},
+		{false, []string{"vips"}, false},
+		{false, []string{"nodes", "services"}, false},
+		{false, []string{"backends"}, true},
+		{false, []string{"all"}, true},
+		{true, nil, true},
+		{true, []string{"cluster"}, false},
+	} {
+		if got := Counters(c.json, c.only...); got != c.want {
+			t.Errorf("Counters(json %v, %v) = %v, want %v", c.json, c.only, got, c.want)
+		}
+	}
+}

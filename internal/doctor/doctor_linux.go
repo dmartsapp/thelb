@@ -18,8 +18,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dmartsapp/thelb/internal/announce"
+	"github.com/dmartsapp/thelb/internal/ctlnet"
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/ipvs"
+	"github.com/dmartsapp/thelb/internal/netlink"
 )
 
 // Check checks the node for the roles in f, and the theLB running on it.
@@ -39,6 +42,8 @@ func Check(f Facts) []Finding {
 	add(platform()...)
 	add(clock()...)
 	add(cluster(f)...)
+	add(link(f)...)
+	add(plan(f)...)
 	return out
 }
 
@@ -89,6 +94,15 @@ func kernel(f Facts) []Finding {
 		out = append(out, Finding{Area: "kernel", Check: "IPv6", State: Info, Detail: "disabled (ipv6.disable=1?): IPv6 VIPs cannot be used"})
 	} else {
 		out = append(out, Finding{Area: "kernel", Check: "IPv6", State: OK, Detail: "enabled"})
+	}
+	if has(f, "director") {
+		fd := Finding{Area: "kernel", Check: "SCTP in IPVS", State: OK, Detail: "built in: SCTP services can be served"}
+		if _, err := os.Stat("/proc/sys/net/ipv4/vs"); err != nil {
+			fd.State, fd.Detail = Info, "IPVS not loaded yet: known once it is"
+		} else if _, err := os.Stat("/proc/sys/net/ipv4/vs/sloppy_sctp"); err != nil {
+			fd.State, fd.Detail = Warn, "IPVS here was built without it (CONFIG_IP_VS_PROTO_SCTP): this director, leading, refuses SCTP services"
+		}
+		out = append(out, fd)
 	}
 	type need struct {
 		name, role, why string
@@ -545,6 +559,191 @@ func cluster(f Facts) []Finding {
 	}
 	if ifc, err := net.InterfaceByName(f.Interface); err == nil && ifc.Flags&net.FlagMulticast == 0 {
 		out = append(out, Finding{Area: "cluster", Check: "multicast", State: Warn, Detail: f.Interface + " has no multicast: connection sync cannot run, and a failover loses connections in progress", Fix: "an interface with multicast for the control VIP"})
+	}
+	return out
+}
+
+// self is this node's director in the status: the node whose address is one
+// of this machine's.
+func self(st *Facts) (name string) {
+	if st.Status == nil {
+		return ""
+	}
+	addrs, _ := net.InterfaceAddrs()
+	mine := map[string]bool{}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			mine[n.IP.String()] = true
+		}
+	}
+	for _, n := range st.Status.Nodes {
+		if (n.Role == "director" || n.Role == "leader") && mine[n.Address] {
+			return n.Node
+		}
+	}
+	return ""
+}
+
+// link tests what theLB relies on from the link, sending nothing that changes
+// anything: whether the gateway and the other directors answer ARP probes - a
+// takeover reads a director's silence as its machine down; whether connection
+// sync runs, and entries arrive; and, on a follower, whether its cache points
+// the control VIP at the leader - the leader's announcements arrive.
+func link(f Facts) []Finding {
+	if !has(f, "director") {
+		return nil
+	}
+	ifname, _ := network(f)
+	ifc, err := net.InterfaceByName(ifname)
+	if err != nil {
+		return nil
+	}
+	var out []Finding
+	src := netip.Addr{}
+	if addrs, err := ifc.Addrs(); err == nil {
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok {
+				if ip, ok := netip.AddrFromSlice(n.IP); ok && ip.Unmap().Is4() {
+					src = ip.Unmap()
+					break
+				}
+			}
+		}
+	}
+	probe := func(ip netip.Addr) string {
+		who, err := announce.Probe(ifc.Index, ifc.HardwareAddr, src, ip, time.Second)
+		if err != nil {
+			return ""
+		}
+		return who
+	}
+	if gw, ok := ctlnet.Gateway(ifname, true); ok {
+		fd := Finding{Area: "link", Check: "the gateway answers ARP", State: OK, Detail: gw.String() + " answers: a director cut off from it knows it, and does not take over"}
+		if probe(gw) == "" {
+			fd.State, fd.Detail, fd.Fix = Warn, gw.String()+" does not answer ARP probes: a director of two decides it is cut off, and never stands alone", "let the gateway answer ARP (probes from 0.0.0.0, RFC 5227), or remove the route through it from the control VIP's interface"
+		}
+		out = append(out, fd)
+	}
+	me := self(&f)
+	var leaderMAC string
+	if f.Status != nil {
+		for _, n := range f.Status.Nodes {
+			if n.Role == "leader" {
+				leaderMAC = n.MAC
+			}
+			if (n.Role != "director" && n.Role != "leader") || n.Node == me || n.State != "up" {
+				continue
+			}
+			ip, err := netip.ParseAddr(n.Address)
+			if err != nil {
+				continue
+			}
+			fd := Finding{Area: "link", Check: "director " + n.Node + " answers ARP", State: OK, Detail: n.Address + " answers probes: its silence would mean its machine is down"}
+			if who := probe(ip); who == "" {
+				fd.State, fd.Detail, fd.Fix = Warn, n.Address+" is up, but does not answer ARP probes: a takeover would read that as its machine down", "let ARP probes (from 0.0.0.0, RFC 5227) between the directors through - a switch's or a hypervisor's ARP filtering, or arp_ignore on "+n.Node
+			}
+			out = append(out, fd)
+		}
+	}
+	if module("ip_vs") == "loaded" {
+		var ds []ipvs.Daemon
+		if c, err := ipvs.Open(); err == nil {
+			ds, _ = c.Daemons()
+		}
+		switch {
+		case len(ds) > 0:
+			var roles []string
+			for _, d := range ds {
+				roles = append(roles, d.Role()+" on "+d.Interface)
+			}
+			fd := Finding{Area: "link", Check: "connection sync", State: OK, Detail: strings.Join(roles, ", ")}
+			if b, err := os.ReadFile("/proc/net/ip_vs_conn"); err == nil {
+				n := max(strings.Count(string(b), "\n")-1, 0)
+				fd.Detail += fmt.Sprintf("; %d connection entries here", n)
+				if n == 0 && me != "" && f.Status != nil && f.Status.Cluster != nil && f.Status.Cluster.Leader != me {
+					fd.Detail += " - none yet; if the leader has connections in progress, multicast to 224.0.0.81 does not pass"
+				}
+			}
+			out = append(out, fd)
+		case f.Running["director"]:
+			out = append(out, Finding{Area: "link", Check: "connection sync", State: Warn, Detail: "no IPVS sync daemon runs here: a failover loses connections in progress", Fix: "theLB starts them while it is a member: its log says why it could not"})
+		}
+	}
+	if f.VIP != "" && leaderMAC != "" && me != "" && f.Status.Cluster.Leader != me {
+		if vip, err := netip.ParseAddr(f.VIP); err == nil {
+			e, ok, err := netlink.Neighbour(ifc.Index, vip)
+			fd := Finding{Area: "link", Check: "gratuitous ARP", State: Info, Detail: "this node has no entry for the control VIP yet: nothing here has asked for it"}
+			switch {
+			case err != nil || !ok || len(e.MAC) == 0:
+			case strings.EqualFold(e.MAC.String(), leaderMAC):
+				fd.State, fd.Detail = OK, "this node's cache points the control VIP at the leader ("+leaderMAC+"): its announcements arrive"
+			default:
+				fd.State, fd.Detail, fd.Fix = Warn, "this node's cache points the control VIP at "+e.MAC.String()+", not the leader's "+leaderMAC+": its announcements did not arrive here, or another machine answers for the VIP", "a switch or hypervisor that drops gratuitous ARP: let it through; or find the other machine (thelb doctor on the leader)"
+			}
+			out = append(out, fd)
+		}
+	}
+	return out
+}
+
+// plan is what theLB would change on this node, in its role: what director or
+// backend adds, sets and starts - all of it runtime state, removed or restored
+// when theLB stops.
+func plan(f Facts) []Finding {
+	var out []Finding
+	lease := "6s"
+	if f.Status != nil && f.Status.Cluster != nil && f.Status.Cluster.Lease > 0 {
+		lease = fmt.Sprintf("%ds", f.Status.Cluster.Lease)
+	}
+	set := func(role string) {
+		for _, p := range setting[role] {
+			now := ""
+			if b, err := os.ReadFile("/proc/sys/" + strings.ReplaceAll(p[0], ".", "/")); err == nil {
+				now = strings.TrimSpace(string(b))
+			}
+			d := fmt.Sprintf("sets %s, restored when theLB stops (now %s)", p[1], now)
+			switch now {
+			case p[1]:
+				d = "leaves it: already " + p[1]
+			case "":
+				d = "sets " + p[1] + " once its module is loaded, restored when theLB stops"
+			}
+			out = append(out, Finding{Area: "plan", Check: p[0], State: Info, Detail: d})
+		}
+	}
+	if has(f, "director") {
+		ifname, _ := network(f)
+		vip := "the control VIP"
+		if f.VIP != "" {
+			vip = f.VIP
+		}
+		label := "label <interface>:thelb"
+		if ifname != "" {
+			label = "label " + ifname + ":thelb"
+		}
+		out = append(out, Finding{Area: "plan", Check: "control VIP", State: Info, Detail: fmt.Sprintf("while it leads: %s on %s - %s, protocol 116, leased %s, renewed every third of it - announced by gratuitous ARP", vip, ifname, label, lease)})
+		svcs := "while it leads: each service VIP on its pool's interface, leased the same, once a backend serves it"
+		if f.Status != nil && len(f.Status.Services) > 0 {
+			n := len(f.Status.Services)
+			svcs = fmt.Sprintf("while it leads: the VIPs of %d service%s on their pools' interfaces, leased the same, once a backend serves them", n, map[bool]string{true: "", false: "s"}[n == 1])
+		}
+		out = append(out,
+			Finding{Area: "plan", Check: "service VIPs", State: Info, Detail: svcs},
+			Finding{Area: "plan", Check: "IPVS", State: Info, Detail: "while it leads: the cluster's services and their backends, over netlink"},
+			Finding{Area: "plan", Check: "neighbour entries", State: Info, Detail: "while it leads: each directly reached backend's address pinned to its MAC address"},
+			Finding{Area: "plan", Check: "connection sync", State: Info, Detail: "IPVS's sync daemons on " + ifname + ": a backup while a member, a master too while it leads"},
+			Finding{Area: "plan", Check: "/run/thelb/director", State: Info, Detail: "its socket and lock, root only"},
+		)
+		set("director")
+	}
+	if has(f, "backend") {
+		out = append(out,
+			Finding{Area: "plan", Check: "thelb0", State: Info, Detail: "a dummy interface, holding the VIPs of the services its offers are assigned to"},
+			Finding{Area: "plan", Check: "nftables", State: Info, Detail: "the table inet thelb, only while a port mapping or a tunnelled service needs it"},
+			Finding{Area: "plan", Check: "thelbt0", State: Info, Detail: "an IPIP interface, only while a tunnelled service is assigned; rp_filter 0 on it, and 2 for all if it was 1"},
+			Finding{Area: "plan", Check: "/run/thelb/backend", State: Info, Detail: "its socket and lock, root only"},
+		)
+		set("backend")
 	}
 	return out
 }

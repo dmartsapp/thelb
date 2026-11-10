@@ -33,6 +33,7 @@ type Request struct {
 	Change  *Change `json:"change,omitempty"`
 	Beat    *Beat   `json:"beat,omitempty"`
 	Offer   *Offer  `json:"offer,omitempty"`
+	Brief   bool    `json:"brief,omitempty"` // live: without IPVS's counters
 }
 
 // Offer is a backend's offer of one of its applications, or its withdrawal:
@@ -120,6 +121,7 @@ type Beat struct {
 	Checks  map[string]bool `json:"checks"` // offer key (proto/port) -> its own check passes
 	Holding []string        `json:"holding"`
 	Leaving bool            `json:"leaving,omitempty"` // stopping: send it nothing new
+	NoNFT   bool            `json:"no_nft,omitempty"`  // its kernel has no nftables: no port mapping, no tunnelled service
 }
 
 // Orders are what a backend is to serve - and the offers the cluster holds

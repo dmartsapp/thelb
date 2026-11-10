@@ -56,7 +56,8 @@ type Request struct {
 	Op     string      `json:"op"`
 	Role   string      `json:"role,omitempty"`
 	Change *api.Change `json:"change,omitempty"`
-	What   string      `json:"what,omitempty"` // generate: what to generate
+	What   string      `json:"what,omitempty"`  // generate: what to generate
+	Brief  bool        `json:"brief,omitempty"` // status: without IPVS's counters
 	Offer  *api.Offer  `json:"offer,omitempty"`
 }
 
@@ -69,6 +70,11 @@ type Response struct {
 	Secret string         `json:"secret,omitempty"`
 	Result *api.Result    `json:"result,omitempty"`
 	Text   string         `json:"text,omitempty"` // generate: what was generated
+}
+
+// BriefStatuser is a Handler with a quicker status, without IPVS's counters.
+type BriefStatuser interface {
+	BriefStatus() status.Status
 }
 
 // Handler answers requests: the running director or backend.
@@ -220,7 +226,12 @@ func (s *Server) handle(c *net.UnixConn) {
 	}
 	switch req.Op {
 	case OpStatus:
-		st := s.h.Status()
+		var st status.Status
+		if b, ok := s.h.(BriefStatuser); ok && req.Brief {
+			st = b.BriefStatus()
+		} else {
+			st = s.h.Status()
+		}
 		st.Normalize()
 		answer(Response{OK: true, Status: &st})
 	case OpSecretShow:

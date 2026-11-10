@@ -48,6 +48,7 @@ type Node struct {
 	State              string     `json:"state"`
 	Version            string     `json:"version"`
 	NodeFingerprint    string     `json:"node_fingerprint"`
+	MAC                string     `json:"mac,omitempty"`
 	LastCheckIn        *time.Time `json:"last_check_in"`
 	LastCheckInSeconds *float64   `json:"last_check_in_seconds"`
 }
@@ -225,6 +226,25 @@ func parts(only []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// Counters is whether a selection shows IPVS's counters - only the backends
+// table does: a status without them is quicker to make, as the leader reads
+// them service by service. JSON without a name is everything.
+func Counters(asJSON bool, only ...string) bool {
+	if asJSON && len(only) == 0 {
+		return true
+	}
+	ps, err := parts(only)
+	if err != nil {
+		return true
+	}
+	for _, p := range ps {
+		if strings.SplitN(p, ":", 2)[0] == "backends" {
+			return true
+		}
+	}
+	return false
 }
 
 // Text renders a selection - views, or tables, by name; the summary when none is

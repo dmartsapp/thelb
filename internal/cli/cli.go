@@ -186,7 +186,7 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 			return n, nil
 		},
 		Dataplane: func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
-		Preflight: func() (string, error) { return preflightDirector(cfg.ControlVIP) },
+		Preflight: func() (preflight.Result, error) { return preflightDirector(cfg.ControlVIP) },
 	})
 }
 
@@ -282,8 +282,8 @@ func callDirector(req localsock.Request) (localsock.Response, error) {
 
 // callStatus asks for the status: of the role named, or of the director if one
 // runs here, of the backend otherwise.
-func callStatus(role string) (localsock.Response, error) {
-	req := localsock.Request{Op: localsock.OpStatus}
+func callStatus(role string, brief bool) (localsock.Response, error) {
+	req := localsock.Request{Op: localsock.OpStatus, Brief: brief}
 	if role != "" {
 		return localsock.Call(roleDir(role), req)
 	}
@@ -434,7 +434,7 @@ func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
 		Now:       now,
 		Host:      hostInputs,
 		Kernel:    func() (backend.Kernel, error) { return backendKernel(log.Module("kernel")) },
-		Preflight: func() (string, error) { return preflightBackend(cfg.Join.Addr()) },
+		Preflight: func() (preflight.Result, error) { return preflightBackend(cfg.Join.Addr()) },
 	})
 }
 
@@ -523,8 +523,9 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 			return usagef("thelb status: no view or table %q: name one of %s", t, strings.Join(status.Names, ", "))
 		}
 	}
+	brief := !status.Counters(*asJSON, names...)
 	show := func() error {
-		resp, err := callStatus(*role)
+		resp, err := callStatus(*role, brief)
 		if err != nil {
 			return err
 		}

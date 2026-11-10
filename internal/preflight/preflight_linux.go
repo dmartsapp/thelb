@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/dmartsapp/thelb/internal/ipvs"
+	"github.com/dmartsapp/thelb/internal/nft"
 )
 
 // Capabilities theLB uses (linux/capability.h).
@@ -23,27 +24,36 @@ const (
 // Director checks a director's node: its capabilities, the kernel parameters
 // it sets, IPVS, and IPv6 if the control VIP is IPv6. It returns what it found
 // - the kernel, and how theLB adapts to it - or everything missing.
-func Director(vip netip.Addr) (string, error) {
+func Director(vip netip.Addr) (Result, error) {
 	var miss Error
 	miss = append(miss, common(vip)...)
+	r := Result{Lacks: map[string]string{}}
 	if _, err := ipvs.Open(); err != nil {
 		miss = append(miss, Missing{"IPVS", "the kernel has no IPVS: load it (sudo modprobe ip_vs), or install the kernel's extra modules (linux-modules-extra, kernel-modules-extra), then start theLB again"})
 	} else if err := writable("/proc/sys/net/ipv4/vs/sloppy_tcp"); err != nil {
 		miss = append(miss, Missing{"IPVS's kernel parameters", err.Error()})
+	} else if _, err := os.Stat("/proc/sys/net/ipv4/vs/sloppy_sctp"); err != nil {
+		// IPVS has the parameter exactly when it was built with SCTP.
+		r.Lacks["sctp"] = "IPVS here was built without SCTP (CONFIG_IP_VS_PROTO_SCTP): while this director leads, SCTP services are refused, and those there are not served"
 	}
 	if len(miss) > 0 {
-		return "", miss
+		return Result{}, miss
 	}
-	return found(), nil
+	r.Found = found()
+	return r, nil
 }
 
 // Backend checks a backend's node: its capabilities, the kernel parameters it
 // sets, and IPv6 if the control VIP is IPv6.
-func Backend(vip netip.Addr) (string, error) {
+func Backend(vip netip.Addr) (Result, error) {
 	if miss := common(vip); len(miss) > 0 {
-		return "", miss
+		return Result{}, miss
 	}
-	return found(), nil
+	r := Result{Found: found(), Lacks: map[string]string{}}
+	if _, err := nft.Exists(); err != nil {
+		r.Lacks["nftables"] = "this kernel has no nftables (" + err.Error() + "): assignments that map a service's port to another, and tunnelled services, are refused for this backend"
+	}
+	return r, nil
 }
 
 func common(vip netip.Addr) Error {

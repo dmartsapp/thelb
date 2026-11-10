@@ -26,6 +26,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/sdnotify"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
@@ -98,8 +99,9 @@ type Deps struct {
 	// control VIP before it creates a cluster; 0: the default.
 	ProbeWindow time.Duration
 	// Preflight checks, before anything is changed, that the node has all theLB
-	// needs, and says what it found; nil: none (tests).
-	Preflight func() (string, error)
+	// needs, and says what it found and what it can do without; nil: none
+	// (tests).
+	Preflight func() (preflight.Result, error)
 }
 
 // Timing. Variables, so that tests can shorten them.
@@ -184,6 +186,7 @@ type node struct {
 	cfg   Config
 	d     Deps
 	log   *logx.Logger
+	lacks map[string]string // features this node's kernel lacks, by preflight
 	net   Network
 	plane Dataplane
 	addr  hostnet.Address
@@ -208,12 +211,17 @@ type node struct {
 // Run runs the director until ctx is done.
 func Run(ctx context.Context, cfg Config, d Deps) error {
 	log := d.Log.Module("director")
+	var lacks map[string]string
 	if d.Preflight != nil {
-		found, err := d.Preflight()
+		r, err := d.Preflight()
 		if err != nil {
 			return err
 		}
-		log.OK("preflight: this node has all theLB needs", "found", found)
+		log.OK("preflight: this node has all theLB needs", "found", r.Found)
+		for _, f := range sortedNames(r.Lacks) {
+			log.Warn("this node lacks a feature theLB can do without", "feature", f, "reason", r.Lacks[f])
+		}
+		lacks = r.Lacks
 	}
 	local := d.Local
 	if local == nil {
@@ -225,7 +233,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 
 	// One theLB per node: the socket first, before anything else is touched.
-	n := &node{cfg: cfg, d: d, log: log, addr: addr, phase: "starting", alive: alive.New(d.Log.Module("watchdog"))}
+	n := &node{cfg: cfg, d: d, log: log, addr: addr, phase: "starting", alive: alive.New(d.Log.Module("watchdog")), lacks: lacks}
 	srv, err := localsock.Listen(d.RunDir, n, d.Log.Module("socket"))
 	if err != nil {
 		return err
@@ -548,12 +556,18 @@ func randomHex(nbytes int) (string, error) {
 }
 
 // Status is the director's view, for `thelb status`.
-func (n *node) Status() status.Status {
+func (n *node) Status() status.Status { return n.statusOf(false) }
+
+// BriefStatus is the view without IPVS's counters: quicker, for the views that
+// do not show them.
+func (n *node) BriefStatus() status.Status { return n.statusOf(true) }
+
+func (n *node) statusOf(brief bool) status.Status {
 	n.mu.Lock()
 	s, phase, joining, joinID := n.sess, n.phase, n.joining, n.joinID
 	n.mu.Unlock()
 	if s != nil {
-		return s.status()
+		return s.status(brief)
 	}
 	st := status.Status{View: "director"}
 	if joining != nil {

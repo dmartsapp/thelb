@@ -35,6 +35,10 @@ func (*Net) MACOf(netip.Addr) string                        { return "" }
 func (*Net) Holder(context.Context, netip.Addr) (string, error) {
 	return "", errors.ErrUnsupported
 }
+
+// Gateway: none, off Linux.
+func Gateway(string, bool) (netip.Addr, bool) { return netip.Addr{}, false }
+
 func (*Net) Uplink(context.Context) (bool, string) {
 	return false, "a director's network is Linux only"
 }

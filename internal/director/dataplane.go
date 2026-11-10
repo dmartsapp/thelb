@@ -154,6 +154,7 @@ type backendLive struct {
 	at      time.Time
 	checks  map[string]bool
 	holding map[string]bool // the VIPs it holds: a set, looked up for every assignment
+	noNFT   bool            // its kernel has no nftables
 	leaving bool
 }
 
@@ -581,7 +582,7 @@ func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkI
 }
 
 // liveNow is what only the leader knows, for status.
-func (s *session) liveNow() ([]api.CheckIn, []api.Live, []api.Own) {
+func (s *session) liveNow(brief bool) ([]api.CheckIn, []api.Live, []api.Own) {
 	var cis []api.CheckIn
 	for _, ci := range s.checkInsCopy() {
 		cis = append(cis, api.CheckIn(ci))
@@ -610,7 +611,10 @@ func (s *session) liveNow() ([]api.CheckIn, []api.Live, []api.Own) {
 			own = append(own, api.Own{Node: node, Offer: key, Check: w})
 		}
 	}
-	stats := s.dp().Stats()
+	var stats map[string]ipvs.Stats
+	if !brief {
+		stats = s.dp().Stats()
+	}
 	var live []api.Live
 	var assignments []cluster.Assignment
 	vips := map[string]string{}
@@ -706,7 +710,7 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 		for _, v := range b.Holding {
 			holding[v] = true
 		}
-		s.backends[name] = backendLive{at: now, checks: b.Checks, holding: holding, leaving: b.Leaving}
+		s.backends[name] = backendLive{at: now, checks: b.Checks, holding: holding, leaving: b.Leaving, noNFT: b.NoNFT}
 		s.mu.Unlock()
 		if b.Leaving {
 			s.log.OK("backend stopping: draining it", "node", name)

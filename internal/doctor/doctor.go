@@ -34,6 +34,7 @@ type Facts struct {
 	Running   map[string]bool // the roles running here
 	Port      int             // the control port, 0 when not known
 	Interface string          // the control VIP's interface, "" when not known
+	VIP       string          // the control VIP, "" when not known
 	Status    *status.Status  // the running director's, or nil
 }
 

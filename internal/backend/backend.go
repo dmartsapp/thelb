@@ -40,6 +40,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/nft"
+	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/sdnotify"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
@@ -87,8 +88,9 @@ type Deps struct {
 	PeerUID func(*net.UnixConn) (int, error)
 	Ready   func() // nil: nothing; called once, when the backend is a member
 	// Preflight checks, before anything is changed, that the node has all theLB
-	// needs, and says what it found; nil: none (tests).
-	Preflight func() (string, error)
+	// needs, and says what it found and what it can do without; nil: none
+	// (tests).
+	Preflight func() (preflight.Result, error)
 }
 
 // Timing; tests shorten it.
@@ -113,6 +115,7 @@ type agent struct {
 	cfg    Config
 	d      Deps
 	log    *logx.Logger
+	noNFT  bool // its kernel has no nftables, by preflight: said in every heartbeat
 	local  hostnet.Address
 	claim  cluster.Claim
 	secret secret.Secret
@@ -154,12 +157,17 @@ var refuseFor = 10 * time.Second
 // Run runs the backend until ctx is done.
 func Run(ctx context.Context, cfg Config, d Deps) error {
 	log := d.Log.Module("backend")
+	var lacks map[string]string
 	if d.Preflight != nil {
-		found, err := d.Preflight()
+		r, err := d.Preflight()
 		if err != nil {
 			return err
 		}
-		log.OK("preflight: this node has all theLB needs", "found", found)
+		log.OK("preflight: this node has all theLB needs", "found", r.Found)
+		for f, why := range r.Lacks {
+			log.Warn("this node lacks a feature theLB can do without", "feature", f, "reason", why)
+		}
+		lacks = r.Lacks
 	}
 	local := d.Local
 	if local == nil {
@@ -177,7 +185,8 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	if err != nil {
 		return fmt.Errorf("the control VIP %s: %w", cfg.Join.Addr(), err)
 	}
-	b := &agent{cfg: cfg, d: d, log: log, local: addr, phase: "starting", ctx: ctx, alive: alive.New(d.Log.Module("watchdog")),
+	_, noNFT := lacks["nftables"]
+	b := &agent{cfg: cfg, d: d, log: log, local: addr, phase: "starting", ctx: ctx, alive: alive.New(d.Log.Module("watchdog")), noNFT: noNFT,
 		wanted: map[string]cluster.Offer{}, recorded: map[string]cluster.Offer{}, refused: map[string]time.Time{},
 		checkers: map[string]*checker{}, said: map[string]time.Time{}}
 	for _, o := range cfg.Offers {
@@ -607,7 +616,7 @@ func (b *agent) session(ctx context.Context, m *membership, until time.Time) err
 func (b *agent) beat(m *membership) api.Beat {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	beat := api.Beat{Member: m.member, Version: version.Version, Checks: map[string]bool{}}
+	beat := api.Beat{Member: m.member, Version: version.Version, Checks: map[string]bool{}, NoNFT: b.noNFT}
 	for _, c := range b.checkers {
 		beat.Checks[c.offer.Key()] = c.state.Healthy
 	}

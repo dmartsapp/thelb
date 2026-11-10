@@ -18,7 +18,7 @@ import (
 // view of who leads and who votes, and - from the leader - check-ins,
 // heartbeats, checks and counters. It holds no secret material: the status
 // types have no field for any.
-func (s *session) status() status.Status {
+func (s *session) status(brief bool) status.Status {
 	st := status.Status{View: "director"}
 	_, leaderID := s.r.LeaderWithID()
 	term := s.r.CurrentTerm()
@@ -30,7 +30,7 @@ func (s *session) status() status.Status {
 			suffrage[string(srv.ID)] = srv.Suffrage
 		}
 	}
-	lv := s.leaderLive()
+	lv := s.leaderLive(brief)
 	checkIns, live, known := lv.checkIns, lv.live, lv.known
 	now := time.Now()
 
@@ -51,7 +51,7 @@ func (s *session) status() status.Status {
 
 		for _, name := range sortedNames(cs.Nodes) {
 			n := cs.Nodes[name]
-			row := status.Node{Node: name, Role: n.Role, Address: n.Address, Version: n.Version, NodeFingerprint: n.Fingerprint}
+			row := status.Node{Node: name, Role: n.Role, Address: n.Address, Version: n.Version, NodeFingerprint: n.Fingerprint, MAC: n.MAC}
 			ci, checked := checkIns[name]
 			checked = checked && ci.RaftID == n.RaftID
 			lease := liveFor

@@ -124,7 +124,7 @@ again every 2 seconds. On a backend, status shows that backend alone; on a
 host that runs both, status asks the director, and --role backend the backend.
 `,
 	"doctor": `Usage:
-  thelb doctor [--role director|backend] [--port <control port>] [--json]
+  thelb doctor [--role director|backend] [--vip <control VIP>] [--port <control port>] [--json]
 
 Checks this node for theLB, and says what to do; it changes nothing. For the
 roles running here, the one --role names, or both:
@@ -136,10 +136,14 @@ roles running here, the one --role names, or both:
   (keepalived, kube-proxy, Cilium, kube-router, other IPVS services); on a
   director, what listens on every address - it answers on every VIP; the
   platform - clouds where a VIP cannot move, hypervisors that need a setting;
-  the clock; and the cluster this node's director sees.
+  the clock; and the cluster this node's director sees. Then the link: whether
+  the gateway and the other directors answer ARP probes - a takeover reads a
+  director's silence as its machine down - whether connection sync runs, and
+  whether a follower's cache points the control VIP at the leader. Then the
+  plan: what the role adds, sets and starts here, and what it leaves as it is.
 
---port is the control port, for the firewall's commands, when no director runs
-here to say it. Exit status 1 when theLB could not run, or not do part of its
+--vip and --port are the control VIP and port, for the plan and the firewall's
+commands, when no director runs here to say them. Exit status 1 when theLB could not run, or not do part of its
 work.
 `,
 	"generate": `Usage:

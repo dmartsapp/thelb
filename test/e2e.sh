@@ -574,6 +574,10 @@ if command -v ipvsadm >/dev/null; then
 	ipvs_on d1 | sed 's/^/      /'
 fi
 check "the client's requests are spread across b1, b2 and b3" "[ \"\$(answers 12)\" = 'b1=4 b2=4 b3=4' ]"
+on d2 "$bin" doctor >"$tmp/doctor.d2" 2>&1
+code=$?
+check "thelb doctor on a follower: nothing missing; the leader answers ARP, connection sync runs, the plan names the control VIP" "[ $code = 0 ] && grep -qE 'director d1 answers ARP +\| ok' $tmp/doctor.d2 && grep -qE 'connection sync +\| ok +\| backup on eth0' $tmp/doctor.d2 && grep -qE 'control VIP +\| info +\| while it leads: $VIP4 on eth0 - label eth0:thelb, protocol 116, leased 6s' $tmp/doctor.d2"
+grep -E '^ (link|plan) ' "$tmp/doctor.d2" | sed 's/^/      /'
 check "status: the service up, 3 of 3" "on d2 $bin status vips | grep -qE '^ web +\| $SVC +\| tcp/80 +\| wrr +\| direct +\| 3 of 3'"
 check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep -c '| ok / ok |') = 3 ]"
 on d1 "$bin" status >"$tmp/summary"

@@ -230,6 +230,9 @@ func (n *Net) Uplink(ctx context.Context) (bool, string) {
 	return true, ""
 }
 
+// Gateway is a gateway on the interface, as Uplink asks it: for doctor.
+func Gateway(ifname string, v4 bool) (netip.Addr, bool) { return gateway(ifname, v4) }
+
 // gateway is a gateway on the interface, from the kernel's routes: the default
 // route's if it has one there, or another route's.
 func gateway(ifname string, v4 bool) (netip.Addr, bool) {

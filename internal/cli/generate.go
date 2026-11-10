@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -203,6 +204,7 @@ func doctorCmd(args []string, stdout io.Writer) error {
 	fs := newFlags("doctor")
 	role := fs.String("role", "", "")
 	port := fs.Int("port", 0, "")
+	vip := fs.String("vip", "", "")
 	asJSON := fs.Bool("json", false, "")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -216,12 +218,15 @@ func doctorCmd(args []string, stdout io.Writer) error {
 	if *port < 0 || *port > 65535 {
 		return usagef("thelb doctor: --port is the control port, 1 to 65535")
 	}
+	if _, err := netip.ParseAddr(*vip); *vip != "" && err != nil {
+		return usagef("thelb doctor: --vip is the control VIP's address, not %q", *vip)
+	}
 	facts := doctor.Facts{Running: map[string]bool{}}
 	if resp, err := localsock.Call(roleDir("director"), localsock.Request{Op: localsock.OpStatus}); err == nil && resp.Status != nil {
 		facts.Running["director"], facts.Status = true, resp.Status
 		for _, v := range resp.Status.VIPs {
 			if v.Purpose == "control" {
-				facts.Port, facts.Interface = v.Port, v.Interface
+				facts.Port, facts.Interface, facts.VIP = v.Port, v.Interface, v.VIP
 			}
 		}
 	}
@@ -242,6 +247,9 @@ func doctorCmd(args []string, stdout io.Writer) error {
 	}
 	if *port > 0 {
 		facts.Port = *port
+	}
+	if *vip != "" {
+		facts.VIP = *vip
 	}
 	findings := doctor.Check(facts)
 	if *asJSON {

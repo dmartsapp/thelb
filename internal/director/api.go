@@ -84,7 +84,7 @@ func (s *session) answer(w *wire.Conn, by string, req api.Request) {
 	case s.leading() == nil:
 		err = errNotLeader
 	case req.Op == api.OpLive:
-		resp.CheckIns, resp.Live, resp.Own = s.liveNow()
+		resp.CheckIns, resp.Live, resp.Own = s.liveNow(req.Brief)
 	case req.Op == api.OpOffer && req.Offer != nil:
 		var r api.Result
 		r, err = s.offer(by, *req.Offer)
@@ -319,14 +319,14 @@ type leaderView struct {
 
 // leaderLive is the leader's view: this director's own when it leads, asked of
 // the leader otherwise.
-func (s *session) leaderLive() leaderView {
+func (s *session) leaderLive(brief bool) leaderView {
 	var cis []api.CheckIn
 	var live []api.Live
 	var own []api.Own
 	if s.leading() != nil {
-		cis, live, own = s.liveNow()
+		cis, live, own = s.liveNow(brief)
 	} else {
-		resp, err := s.callLeader(api.Request{Op: api.OpLive})
+		resp, err := s.callLeader(api.Request{Op: api.OpLive, Brief: brief})
 		if err != nil {
 			return leaderView{}
 		}
