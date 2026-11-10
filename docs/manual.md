@@ -258,7 +258,9 @@ A backend gets traffic - its weight - only while all of these hold, and weight 0
 - its **heartbeat** reached the leader in the last 10 seconds (it sends one every 2 seconds);
 - its **own check** of the application passes;
 - it **holds the service's VIP**;
-- the **leader's check** of the application, at the backend's address and the application's port, passes.
+- the **directors' check** of the application, at the backend's address and the application's port, passes.
+
+The directors share that check: the leader gives each application to one director - itself or another that checks in - and the same one each time, so that a director coming or going moves only its own share; each makes its checks and reports with its check-in, every second. Until a director's first result has come, and whenever one is older than 3 seconds, the leader makes that check itself. One check of an application serves every service it is assigned to. `thelb status backends --json` says who makes each (`checked_by`).
 
 Checks run every 2 seconds, with a 1-second timeout: healthy after 2 successes in a row, unhealthy after 3 failures. Kinds: `check=tcp` (connect; TCP's default), `check=http:/path` (a GET, any 2xx or 3xx), `check=none` (UDP's and SCTP's default).
 

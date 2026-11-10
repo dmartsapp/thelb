@@ -128,6 +128,7 @@ type Backend struct {
 	AppPort            int     `json:"app_port"`
 	OwnCheck           string  `json:"own_check"`
 	DirectorCheck      string  `json:"director_check"`
+	CheckedBy          string  `json:"checked_by,omitempty"` // the director that makes the director's check
 	Weight             int     `json:"weight"`
 	Connections        uint64  `json:"connections"`
 	Packets            uint64  `json:"packets"`

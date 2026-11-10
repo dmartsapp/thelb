@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -155,12 +156,19 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.
 		}
 		s.mu.Lock()
 		s.checkIns[name] = checkIn{Name: name, RaftID: req.RaftID, At: time.Now(), Applied: req.Applied, Version: req.Version}
+		p := s.plane
 		s.mu.Unlock()
 		if req.Applied >= n.AdmitIndex {
 			s.promote(name, n)
 		}
+		// Its results of the checks it makes for the leader, and those it is
+		// to make now.
+		var probes []api.Probe
+		if p != nil {
+			probes = p.report(name, req.Probes)
+		}
 		_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		if w.Send(api.Response{V: wire.Version, OK: true}) != nil {
+		if w.Send(api.Response{V: wire.Version, OK: true, Probes: probes}) != nil {
 			return
 		}
 		_ = c.SetReadDeadline(time.Now().Add(liveFor + 2*checkInEvery))
@@ -221,6 +229,9 @@ func (s *session) checkInLoop() {
 		s.n.alive.Tick("check-in", stallAfter)
 		resync()
 		addr, id := s.r.LeaderWithID()
+		if string(id) == s.raftID {
+			s.checksGiven(nil) // leading: it makes its own
+		}
 		if id == "" || string(id) == s.raftID {
 			s.sleep(checkInEvery)
 			continue
@@ -236,7 +247,7 @@ func (s *session) checkInLoop() {
 			if _, now := s.r.LeaderWithID(); now != id {
 				break
 			}
-			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version}
+			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version, Probes: s.checkResults()}
 			s.n.alive.Tick("check-in", stallAfter)
 			resync()
 			if w.Send(req) != nil {
@@ -247,11 +258,56 @@ func (s *session) checkInLoop() {
 			if w.Recv(&resp) != nil || !resp.OK {
 				break
 			}
+			s.checksGiven(resp.Probes)
 			s.sleep(checkInEvery)
 		}
 		stop()
 		_ = tc.Close()
 	}
+}
+
+// checksGiven runs the checks the leader gives this director, and stops those
+// it no longer does; nil stops them all.
+func (s *session) checksGiven(probes []api.Probe) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.given == nil {
+		s.given = map[string]*prober{}
+	}
+	want := map[string]bool{}
+	for _, pb := range probes {
+		target, err := netip.ParseAddrPort(pb.Target)
+		if err != nil {
+			continue
+		}
+		want[pb.Key] = true
+		if pr, ok := s.given[pb.Key]; ok && pr.spec == pb.Spec && pr.target == target {
+			continue
+		} else if ok {
+			pr.stop()
+		}
+		s.given[pb.Key] = startProber(s.ctx, pb.Spec, target, pb.Healthy)
+	}
+	for key, pr := range s.given {
+		if !want[key] {
+			pr.stop()
+			delete(s.given, key)
+		}
+	}
+}
+
+// checkResults is this director's results of the checks the leader gave it.
+func (s *session) checkResults() map[string]api.ProbeResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.given) == 0 {
+		return nil
+	}
+	out := make(map[string]api.ProbeResult, len(s.given))
+	for key, pr := range s.given {
+		out[key] = pr.result()
+	}
+	return out
 }
 
 func (s *session) sleep(d time.Duration) {

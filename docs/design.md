@@ -481,6 +481,7 @@ The cluster's state is gone, by design; its secrets are not, because they are th
 - **Kinds**: TCP connect; SCTP association (set up, then shut down cleanly); HTTP or HTTPS `GET` with an expected status; none (always healthy).
 - **Defaults**: every 2 s, 1 s timeout, healthy after 2 successes, unhealthy after 3 failures.
 - **The director's check goes to the backend's own address and the application's port** - never through the VIP, which on a director is local.
+- **The directors share it**: one check per application - its address, port and kind - however many services it is assigned to, given by the leader to one director: itself or another whose check-in is current, chosen by rendezvous hashing of the application over the directors, so a director coming or going moves only the checks that were, or become, its own. The leader sends each director its share with the answer to its check-in; the director checks, from where the leader's view stands, and reports with its next one. The leader goes by a director's result once it has one and while it is fresh (3 s), and makes the check itself otherwise - before the first result, and when a director stops checking in - so a check is never left unmade.
 - **Result**: an unhealthy backend gets weight 0; when every backend of a service is unhealthy, the service stays (connections are refused by the backends, not black-holed) and the state is reported. The other services on the same VIP are unaffected.
 - IPv4 and IPv6 backends alike.
 

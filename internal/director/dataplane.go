@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
+	"hash/fnv"
 	"net/netip"
 	"sort"
 	"sync"
@@ -158,13 +159,56 @@ type backendLive struct {
 	leaving bool
 }
 
-// prober is the leader's own check of one assignment.
+// prober is a director's check of a backend's application: the leader's own,
+// or one it gave this director.
 type prober struct {
 	spec   string
 	target netip.AddrPort
 	stop   context.CancelFunc
 	mu     sync.Mutex
 	state  check.State
+	seen   bool // checked at least once
+}
+
+// startProber checks spec at target every check.Every until ctx ends, from
+// healthy: where the leader's view of it stands.
+func startProber(ctx context.Context, spec string, target netip.AddrPort, healthy bool) *prober {
+	cctx, stop := context.WithCancel(ctx)
+	pr := &prober{spec: spec, target: target, stop: stop, state: check.State{Healthy: healthy}}
+	go func() {
+		t := time.NewTicker(check.Every)
+		defer t.Stop()
+		for {
+			err := check.Probe(cctx, spec, target, check.Timeout)
+			if cctx.Err() != nil {
+				return
+			}
+			pr.mu.Lock()
+			pr.state.Observe(err)
+			pr.seen = true
+			pr.mu.Unlock()
+			select {
+			case <-cctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return pr
+}
+
+// result is the prober's result, as a check-in reports it.
+func (p *prober) result() api.ProbeResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return api.ProbeResult{Healthy: p.state.Healthy, Seen: p.seen}
+}
+
+// remoteCheck is a member's last result of a check the leader gave it.
+type remoteCheck struct {
+	by  string
+	at  time.Time
+	res api.ProbeResult
 }
 
 func (p *prober) healthy() bool {
@@ -177,10 +221,13 @@ func (p *prober) healthy() bool {
 type plane struct {
 	s       *session
 	mu      sync.Mutex
-	probers map[string]*prober // by what it checks - its spec and target: one for every assignment of that offer
-	checkOf map[string]string  // by assignment key: its prober's key
-	weights map[string]int     // by assignment key: what IPVS has
-	since   time.Time          // leadership began: beats before it are unknown
+	probers map[string]*prober              // the leader's own, by what it checks - its spec and target: one for every assignment of that offer
+	checkOf map[string]string               // by assignment key: its check's key
+	remote  map[string]remoteCheck          // by check key: a member's last result
+	given   map[string]map[string]api.Probe // by director, by check key: the checks the leader gives it
+	checkBy map[string]string               // by check key: who makes it now
+	weights map[string]int                  // by assignment key: what IPVS has
+	since   time.Time                       // leadership began: beats before it are unknown
 
 	held      map[netip.Addr]bool      // the service VIPs the kernel holds, as applied
 	freeSince map[netip.Addr]time.Time // a VIP to take: when a look first found no machine answering for it
@@ -195,6 +242,7 @@ func (s *session) dp() Dataplane { return s.n.plane }
 // VIPs, programs IPVS, checks the backends, and writes their health.
 func (s *session) serve(ctx context.Context) {
 	p := &plane{s: s, probers: map[string]*prober{}, checkOf: map[string]string{}, weights: map[string]int{}, since: time.Now(),
+		remote: map[string]remoteCheck{}, given: map[string]map[string]api.Probe{}, checkBy: map[string]string{},
 		held: map[netip.Addr]bool{}, freeSince: map[netip.Addr]time.Time{}, answered: map[netip.Addr]time.Time{}, said: map[netip.Addr]string{}}
 	s.mu.Lock()
 	s.plane = p
@@ -345,6 +393,8 @@ func (p *plane) step(ctx context.Context) error {
 	wantProbers := map[string]bool{}
 	wantAssigned := map[string]bool{}
 	pinned := map[netip.Addr]bool{}
+	checkers := p.checkers(checkIns, nodes)
+	given := map[string]map[string]api.Probe{}
 	for _, a := range assignments {
 		i, found := byKey[a.Service]
 		n, ok := nodes[a.Node]
@@ -367,11 +417,11 @@ func (p *plane) step(ctx context.Context) error {
 		target := netip.AddrPortFrom(addr, uint16(a.Port))
 		probeKey := spec + " " + target.String()
 		wantProbers[probeKey], wantAssigned[key] = true, true
-		pr := p.prober(ctx, probeKey, spec, target, a.Healthy)
+		dirOK := p.check(ctx, probeKey, spec, target, a.Healthy, checkers, wantProbers, given)
 		p.mu.Lock()
 		p.checkOf[key] = probeKey
 		p.mu.Unlock()
-		ready := p.ready(a, n, ps.Addr, checkIns, beats, pr)
+		ready := p.ready(a, n, ps.Addr, checkIns, beats, dirOK)
 		w := 0
 		if ready {
 			w = a.Weight
@@ -390,7 +440,7 @@ func (p *plane) step(ctx context.Context) error {
 				if ready {
 					s.log.OK("backend serving", "service", a.Service, "node", a.Node, "at", netip.AddrPortFrom(addr, uint16(a.Port)), "weight", a.Weight)
 				} else {
-					s.log.Warn("backend not serving: weight 0", "service", a.Service, "node", a.Node, "at", netip.AddrPortFrom(addr, uint16(a.Port)), "reason", p.why(a, n, ps.Addr, checkIns, beats, pr))
+					s.log.Warn("backend not serving: weight 0", "service", a.Service, "node", a.Node, "at", netip.AddrPortFrom(addr, uint16(a.Port)), "reason", p.why(a, n, ps.Addr, checkIns, beats, dirOK))
 				}
 			}
 		}
@@ -412,6 +462,7 @@ func (p *plane) step(ctx context.Context) error {
 	plan.VIPs = p.claim(ctx, serve)
 	plan.Lease = s.vipLease()
 	p.mu.Lock()
+	p.given = given
 	for key, pr := range p.probers {
 		if !wantProbers[key] {
 			pr.stop()
@@ -515,8 +566,8 @@ func (p *plane) claim(ctx context.Context, want []PlanVIP) []PlanVIP {
 	return out
 }
 
-// prober is the leader's check of an assignment, started on first need; a new
-// leader starts it as healthy as the state says the assignment was.
+// prober is the leader's own check of an application, started on first need;
+// a new leader starts it as healthy as the state says the assignment was.
 func (p *plane) prober(ctx context.Context, key, spec string, target netip.AddrPort, healthy bool) *prober {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -525,38 +576,92 @@ func (p *plane) prober(ctx context.Context, key, spec string, target netip.AddrP
 	} else if ok {
 		pr.stop()
 	}
-	cctx, stop := context.WithCancel(ctx)
-	pr := &prober{spec: spec, target: target, stop: stop, state: check.State{Healthy: healthy}}
+	pr := startProber(ctx, spec, target, healthy)
 	p.probers[key] = pr
-	go func() {
-		t := time.NewTicker(check.Every)
-		defer t.Stop()
-		for {
-			err := check.Probe(cctx, spec, target, check.Timeout)
-			if cctx.Err() != nil {
-				return
-			}
-			pr.mu.Lock()
-			pr.state.Observe(err)
-			pr.mu.Unlock()
-			select {
-			case <-cctx.Done():
-				return
-			case <-t.C:
-			}
-		}
-	}()
 	return pr
+}
+
+// checkers is who may check backends' applications for the leader: itself, and
+// every director that checked in within liveFor - sorted.
+func (p *plane) checkers(checkIns map[string]checkIn, nodes map[string]cluster.Node) []string {
+	out := []string{p.s.n.cfg.Name}
+	for name, ci := range checkIns {
+		if n, ok := nodes[name]; ok && n.Role == "director" && name != p.s.n.cfg.Name && !ci.Gone && time.Since(ci.At) < liveFor {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checker is the director that checks an application, of those that may:
+// rendezvous hashing, so that a director coming or going moves only the checks
+// that were, or become, its own.
+func checker(key string, checkers []string) string {
+	best, top := "", uint64(0)
+	for _, d := range checkers {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(key + "\x00" + d))
+		if v := h.Sum64(); best == "" || v > top {
+			best, top = d, v
+		}
+	}
+	return best
+}
+
+// check is whether the director's check of an application passes: its
+// director's last result - once it has one, and fresh - or the leader's own,
+// meanwhile. A check given to another director is put in given, for its next
+// check-in; one the leader makes itself in local.
+func (p *plane) check(ctx context.Context, key, spec string, target netip.AddrPort, healthy bool, checkers []string, local map[string]bool, given map[string]map[string]api.Probe) bool {
+	self := p.s.n.cfg.Name
+	p.mu.Lock()
+	if pr, ok := p.probers[key]; ok {
+		healthy = pr.healthy() // where the leader's view stands now
+	}
+	by := checker(key, checkers)
+	if by != self {
+		if given[by] == nil {
+			given[by] = map[string]api.Probe{}
+		}
+		given[by][key] = api.Probe{Key: key, Spec: spec, Target: target.String(), Healthy: healthy}
+		if r, ok := p.remote[key]; ok && r.by == by && r.res.Seen && time.Since(r.at) < liveFor {
+			p.checkBy[key] = by
+			p.mu.Unlock()
+			return r.res.Healthy
+		}
+	}
+	p.checkBy[key] = self
+	p.mu.Unlock()
+	local[key] = true
+	return p.prober(ctx, key, spec, target, healthy).healthy()
+}
+
+// report takes a member's results, with its check-in, and is the checks the
+// leader gives it.
+func (p *plane) report(name string, results map[string]api.ProbeResult) []api.Probe {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for key, r := range results {
+		p.remote[key] = remoteCheck{by: name, at: now, res: r}
+	}
+	out := make([]api.Probe, 0, len(p.given[name]))
+	for _, pb := range p.given[name] {
+		out = append(out, pb)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // ready is whether an assignment serves: the backend's heartbeat lease is
 // current, its own check passes, it holds the VIP, and the leader's check
 // passes. Until a new leader hears from a backend, it goes by the state.
-func (p *plane) ready(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkIns map[string]checkIn, beats map[string]backendLive, pr *prober) bool {
-	return p.why(a, n, vip, checkIns, beats, pr) == ""
+func (p *plane) ready(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkIns map[string]checkIn, beats map[string]backendLive, dirOK bool) bool {
+	return p.why(a, n, vip, checkIns, beats, dirOK) == ""
 }
 
-func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkIns map[string]checkIn, beats map[string]backendLive, pr *prober) string {
+func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkIns map[string]checkIn, beats map[string]backendLive, dirOK bool) string {
 	ci, ok := checkIns[n.Name]
 	if !ok || ci.RaftID != n.RaftID || time.Since(ci.At) > backendLease {
 		return "no heartbeat"
@@ -575,7 +680,7 @@ func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkI
 	} else if !a.Healthy {
 		return "no heartbeat since this director began to lead"
 	}
-	if !pr.healthy() {
+	if !dirOK {
 		return "the director's check fails"
 	}
 	return ""
@@ -642,9 +747,13 @@ func (s *session) liveNow(brief bool) ([]api.CheckIn, []api.Live, []api.Own) {
 			}
 		}
 		p.mu.Lock()
-		if pr := p.probers[p.checkOf[key]]; pr != nil {
+		ck := p.checkOf[key]
+		l.By = p.checkBy[ck]
+		if r, ok := p.remote[ck]; ok && l.By != s.n.cfg.Name && r.by == l.By {
+			l.Director = map[bool]string{true: "ok", false: "fail"}[r.res.Healthy]
+		} else if pr := p.probers[ck]; pr != nil {
 			pr.mu.Lock()
-			if pr.state.Last != nil || pr.state.Healthy {
+			if pr.seen || pr.state.Healthy {
 				l.Director = pr.state.Word()
 			}
 			pr.mu.Unlock()

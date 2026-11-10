@@ -61,12 +61,13 @@ type session struct {
 	conns     map[net.Conn]struct{}
 	authority *ca.Authority
 	closing   bool
-	member    bool       // the replicated state has this director as a member
-	evict     string     // after a takeover: the director left behind, to remove once leading
-	left      *peer      // after a takeover: the director left behind, which the guard knows by its MAC
-	claimed   bool       // after a takeover: the control VIP is held already, found no more when it was claimed
-	syncErr   string     // the IPVS sync daemons' last error, said once
-	syncMu    sync.Mutex // one change to the sync daemons at a time
+	member    bool               // the replicated state has this director as a member
+	evict     string             // after a takeover: the director left behind, to remove once leading
+	left      *peer              // after a takeover: the director left behind, which the guard knows by its MAC
+	given     map[string]*prober // the checks the leader gave this director, by key
+	claimed   bool               // after a takeover: the control VIP is held already, found no more when it was claimed
+	syncErr   string             // the IPVS sync daemons' last error, said once
+	syncMu    sync.Mutex         // one change to the sync daemons at a time
 }
 
 // checkIn is a member's last check-in with the leader: a director's, or a

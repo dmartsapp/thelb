@@ -34,6 +34,24 @@ type Request struct {
 	Beat    *Beat   `json:"beat,omitempty"`
 	Offer   *Offer  `json:"offer,omitempty"`
 	Brief   bool    `json:"brief,omitempty"` // live: without IPVS's counters
+	// Probes are a director's results of the checks the leader gave it, with
+	// its check-in.
+	Probes map[string]ProbeResult `json:"probes,omitempty"`
+}
+
+// Probe is a check of a backend's application the leader gives a director to
+// make: checks are spread across the directors.
+type Probe struct {
+	Key     string `json:"key"`     // its spec and target: what the leader knows it by
+	Spec    string `json:"spec"`    // tcp, none, http:<path>
+	Target  string `json:"target"`  // the backend's address and port
+	Healthy bool   `json:"healthy"` // as the leader sees it now: where the check starts
+}
+
+// ProbeResult is a director's result of a check it makes for the leader.
+type ProbeResult struct {
+	Healthy bool `json:"healthy"`
+	Seen    bool `json:"seen"` // it has checked at least once
 }
 
 // Offer is a backend's offer of one of its applications, or its withdrawal:
@@ -54,6 +72,7 @@ type Response struct {
 	Live     []Live    `json:"live,omitempty"`
 	Own      []Own     `json:"own,omitempty"`
 	Orders   *Orders   `json:"orders,omitempty"`
+	Probes   []Probe   `json:"probes,omitempty"` // a check-in's: the checks the leader gives this director
 }
 
 // Own is a backend's own check of one of its offers, as its last heartbeat
@@ -105,9 +124,10 @@ type CheckIn struct {
 type Live struct {
 	Service  string `json:"service"`
 	Node     string `json:"node"`
-	Own      string `json:"own"`      // the backend's own check: ok, fail, or "-" without a heartbeat
-	Director string `json:"director"` // the leader's check
-	Weight   int    `json:"weight"`   // what IPVS has
+	Own      string `json:"own"`          // the backend's own check: ok, fail, or "-" without a heartbeat
+	Director string `json:"director"`     // the director's check
+	By       string `json:"by,omitempty"` // the director that makes it
+	Weight   int    `json:"weight"`       // what IPVS has
 	Conns    uint64 `json:"conns"`
 	Packets  uint64 `json:"packets"`
 	Bytes    uint64 `json:"bytes"`
