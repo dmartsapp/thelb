@@ -129,7 +129,8 @@ sudo thelb director --vip 10.0.0.10 --port 7443 \
 It finds the cluster on the control VIP and waits for approval; approve it on a director (`sudo thelb admin approve lb-2`). It then follows the leader, is promoted to a voting member once it has caught up, and takes over if the leader fails.
 
 - **A planned stop takes a director out of the vote.** Stopped with `SIGTERM`, `Ctrl+C` or `SIGHUP`, a director - after handing leadership over, if it led - has the leader take its member identity out of Raft, so the directors left keep their majority without it. It stays approved, and rejoins without approval when it starts again. `thelb status directors` shows it as `stopped`, not `down`.
-- **Two directors survive either one's planned stop, not a crash.** A crashed director still counts towards the majority, and with two, the one left can neither lead nor win an election. Put `--bootstrap` on both: the crashed one, started again, finds no leader on the control VIP and creates the cluster again; the other moves over to it by itself and waits for approval - approve it, and run your `thelb generate commands` script (section 9).
+- **Two directors survive either one's planned stop, and either one's crash.** A crashed director still counts towards the majority, so the one left cannot win an election. After 3 seconds without a leader (6 for the director whose member identity sorts later), it looks: if the other is **gone** - its control port refuses connections (its theLB is not running), or its machine does not answer at all - and nothing but the crashed director's leftover holds the control VIP, and its own gateway still answers, it **stands alone**: it goes on as the cluster's only voter, with every pool, service and assignment, takes the control VIP, and removes the other. The crashed director, started again, **waits for approval** (`thelb admin approve <name>`). If the other answers on the network but its control port does not - a firewall, a partition - neither stands alone, and the cluster has no leader until the two reach each other again: guessing there could give two leaders.
+- **Under systemd with two directors, use `RestartSec=10`**: a crashed director restarted at once may create a cluster of its own before the other has stood alone (section 6).
 - **Use three directors** (or five) to survive a crash: three keep their majority when any one fails.
 - **`--bootstrap`** on a director lets it create the cluster when it finds none - after looking for 5 seconds. Put it on the first director; you may put it on others too, so that the cluster does not depend on one machine coming back after every director has stopped.
 - **A director that restarts** while the cluster runs rejoins by itself, without approval: the cluster remembers it, by its node fingerprint, address and MAC address.
@@ -152,7 +153,7 @@ NotifyAccess=main
 ExecStart=/usr/local/bin/thelb director --vip 10.0.0.10 --port 7443 --bootstrap \
   --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
 Restart=always
-RestartSec=1
+RestartSec=10
 WatchdogSec=30
 
 [Install]
@@ -429,6 +430,8 @@ One line per event, on standard error - in the journal, under systemd:
 | The leader dies | The other directors elect a leader - within 1.5 to 3 seconds in tests - which takes the control VIP and the service VIPs, announces them and programs IPVS the same way. New connections go on, and so do connections in progress: IPVS's connection synchronisation has told the new leader where each one goes. Where multicast does not pass between the directors, connections in progress are lost; new ones are not. |
 | The leader is stopped (`SIGTERM`, `Ctrl+C`, or `SIGHUP` when its terminal or SSH session closes) | It hands leadership to another director first: a short, clean failover. Then the new leader takes it out of the vote, so the others keep their majority without it - two directors survive it. |
 | Another director is stopped by plan | The leader takes it out of the vote: it leads on, even when it is the only director left. |
+| One of two directors crashes - its theLB killed, or its machine down | After 3 to 6 seconds without a leader the other finds it gone and stands alone: it leads with the cluster's state, takes the control VIP, and removes the crashed one, which waits for approval when it comes back. A crashed theLB whose machine stays up leaves the control VIP on its interface, still answering ARP, until it starts again and removes it. |
+| Two directors cannot reach each other, though both run | Neither stands alone: each finds the other answering on the network, so the cluster has no leader - no VIP held - until they reach each other again. Look for `not standing alone reason=...` in their logs. |
 | The leader is cut off from the others | It gives every VIP up by itself, within about a second; the others elect a leader. |
 | A director restarts | It removes what it left in the kernel, rejoins without approval, and follows. |
 | Every director stops | The cluster's state is gone: on restart, a director with `--bootstrap` creates a new cluster (new CA, same secrets); **every node waits for approval again, and pools, services and assignments must be created again** - from the script `thelb generate commands` printed (section 9). The backends lose nothing: each enrols again by itself and, once approved, offers again what it offered. |
@@ -460,6 +463,8 @@ One line per event, on standard error - in the journal, under systemd:
 | `backend not serving: weight 0 ... reason="..."` | The reason says which condition failed: `no heartbeat`, `its own check fails`, `it does not hold the VIP yet`, `the director's check fails`, `it is stopping`. |
 | `IPVS is not available (is the ip_vs module loaded?)` | Load `ip_vs` (`sudo modprobe ip_vs`), or install the kernel's modules. |
 | `IPVS connection synchronisation failed: connections in progress would not survive a failover` | The kernel refused the sync daemon: the error says why - often no IPv4 address on the control VIP's interface. theLB tries again every 10 seconds; services work meanwhile, but a failover loses connections in progress. |
+| `standing alone: the other director is gone; ... node=<name> reason=...` | The other of two directors crashed: this one leads alone and removes it. Start the crashed one again, and approve it (`thelb admin approve <name>`). |
+| `no leader, and the other director may be alive: not standing alone reason=...` | Two directors without a leader, and this one cannot tell that the other is gone. `a partition, not a crash`: it answers on the network but its control port does not - open the control port between them (a firewall), or reconnect them. `does not reach its network`: this director's own link or gateway is down. |
 | `removed an IPVS connection sync daemon an earlier run left role=master` | A director that crashed while it led left its sync master running: removed at the next start, as it no longer leads. |
 | `creating thelbt0: ... (is the ipip module available?)` | The backend of a tunnelled service needs `ipip`: `sudo modprobe ipip`. |
 | `the cluster no longer accepts this backend's certificate` | The backend was removed, or the cluster was created again: it asks to join again, and waits for approval. |

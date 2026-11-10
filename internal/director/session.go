@@ -61,6 +61,7 @@ type session struct {
 	authority *ca.Authority
 	closing   bool
 	member    bool       // the replicated state has this director as a member
+	evict     string     // after a takeover: the director left behind, to remove once leading
 	syncErr   string     // the IPVS sync daemons' last error, said once
 	syncMu    sync.Mutex // one change to the sync daemons at a time
 }
@@ -71,7 +72,7 @@ type checkIn api.CheckIn
 
 // newSession starts a Raft member: it listens on the node's address, and - if
 // it creates the cluster - bootstraps a configuration of itself alone.
-func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, caCert *x509.Certificate, creating *cluster.Create) (*session, error) {
+func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, caCert *x509.Certificate, creating *cluster.Create, standing *takeover) (*session, error) {
 	id, err := wire.NewIdentity(caCert)
 	if err != nil {
 		return nil, err
@@ -125,7 +126,18 @@ func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, c
 	// In memory only, by design: every start is a new member identity, so a
 	// vote can never be cast twice in a term by a voter that forgot it.
 	store := raft.NewInmemStore()
-	r, err := raft.NewRaft(conf, s.fsm, store, store, raft.NewInmemSnapshotStore(), s.trans)
+	snaps := raft.NewInmemSnapshotStore()
+	if standing != nil {
+		if err := seed(store, snaps, s.trans, standing, s.addr); err != nil {
+			_ = s.trans.Close()
+			_ = s.stream.Close()
+			_ = ln.Close()
+			s.cancel()
+			return nil, err
+		}
+		s.evict = standing.evict
+	}
+	r, err := raft.NewRaft(conf, s.fsm, store, store, snaps, s.trans)
 	if err != nil {
 		_ = s.trans.Close()
 		_ = s.stream.Close()
@@ -402,6 +414,13 @@ func (s *session) lead() {
 	}
 	s.log.OK("leader", "node", s.n.cfg.Name, "term", term, "member", s.raftID)
 	s.log.OK("control VIP taken", "vip", s.n.cfg.ControlVIP, "port", s.n.cfg.ControlPort, "interface", s.n.addr.Interface)
+	s.mu.Lock()
+	evict := s.evict
+	s.evict = ""
+	s.mu.Unlock()
+	if evict != "" {
+		s.evictLeftBehind(evict)
+	}
 	s.wg.Add(2)
 	go func() {
 		defer s.wg.Done()
@@ -487,7 +506,8 @@ func (s *session) sweep(ctx context.Context) {
 func (s *session) monitor() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	var noLeaderSince time.Time
+	var noLeaderSince, lookAt time.Time
+	var notAlone string
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -499,41 +519,64 @@ func (s *session) monitor() {
 			return
 		}
 		if _, id := s.r.LeaderWithID(); id != "" {
-			noLeaderSince = time.Time{}
+			noLeaderSince, notAlone = time.Time{}, ""
 			continue
 		}
 		if noLeaderSince.IsZero() {
 			noLeaderSince = time.Now()
+			lookAt = noLeaderSince.Add(orphanAfter)
 			continue
 		}
-		if time.Since(noLeaderSince) < orphanAfter {
+		// One of two directors, the other gone: stand alone.
+		if wait, two := s.takeoverWait(); two && time.Since(noLeaderSince) >= wait {
+			tk, why := s.tryTakeover()
+			if tk != nil {
+				s.finish(tk)
+				return
+			}
+			if why != notAlone {
+				notAlone = why
+				s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
+			}
+		}
+		if time.Now().Before(lookAt) {
 			continue
 		}
-		noLeaderSince = time.Now() // look again after another while
-		if other, ok := s.otherCluster(); ok {
-			s.finish(fmt.Errorf("%w: another cluster (%s) holds the control VIP, and this one has no leader", errRejoin, other))
+		lookAt = time.Now().Add(orphanAfter) // look again after another while
+		switch desc, same, ok := s.vipAnswer(); {
+		case ok && !same:
+			s.finish(fmt.Errorf("%w: another cluster (%s) holds the control VIP, and this one has no leader", errRejoin, desc))
+			return
+		case ok:
+			// This cluster leads on the control VIP, and not with this director:
+			// it was left behind - by a takeover, or a partition.
+			s.finish(fmt.Errorf("%w: this cluster leads on the control VIP without this director", errRejoin))
 			return
 		}
 	}
 }
 
-// otherCluster is whether a cluster with another CA answers on the control VIP.
-func (s *session) otherCluster() (string, bool) {
+// vipAnswer is which cluster answers theLB's handshake on the control VIP: none
+// (ok false), this one (same), or another, described by its name and CA.
+func (s *session) vipAnswer() (desc string, same, ok bool) {
 	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
 	defer cancel()
 	c, err := s.n.net.DialVIP(ctx)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
 	var cl wire.Cluster
 	tc := tls.Client(c, wire.JoinConfig(s.n.cfg.ControlVIP, &cl))
 	_ = tc.SetDeadline(time.Now().Add(2 * time.Second))
 	err = tc.Handshake()
 	_ = tc.Close()
-	if err != nil || cl.CA == nil || cl.CA.Equal(s.id.CA) {
-		return "", false
+	if err != nil || cl.CA == nil {
+		return "", false, false
 	}
-	return cl.Name + ", CA " + ca.Fingerprint(cl.CA.Raw)[:16], true
+	if cl.CA.Equal(s.id.CA) {
+		return cl.Name, true, true
+	}
+	return cl.Name + ", CA " + ca.Fingerprint(cl.CA.Raw)[:16], false, true
 }
 
 // waitMember reports the director a member once its state has caught up with

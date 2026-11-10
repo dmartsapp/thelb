@@ -49,7 +49,7 @@ func (n *node) create() (*session, error) {
 		Cert: certRecord(n.cfg.Name, "director", cert),
 	}
 	n.log.OK("creating the cluster: nothing answers on the control VIP", "cluster", n.cfg.Cluster, "vip", n.cfg.ControlVIP, "port", n.cfg.ControlPort)
-	return newSession(n, raftID, key, der, authority.Cert, creating)
+	return newSession(n, raftID, key, der, authority.Cert, creating, nil)
 }
 
 // memberID is a new member identity: the node's name and a random suffix.
@@ -162,7 +162,7 @@ func (n *node) joinOnce(ctx context.Context, key *ecdsa.PrivateKey, csr []byte, 
 	if err != nil {
 		return nil, err
 	}
-	s, err := newSession(n, raftID, key, ap.Cert, ap.CA, nil)
+	s, err := newSession(n, raftID, key, ap.Cert, ap.CA, nil, nil)
 	if err != nil {
 		return nil, err
 	}

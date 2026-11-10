@@ -408,6 +408,42 @@ check "the leader, d1, hands over to d2 and leaves the vote" "logged $tmp/d1.ful
 check "d2 leads alone, and keeps the control VIP" "within 10 holds d2 $VIP4 && sleep 3 && holds d2 $VIP4 && leader_is d2 d2 && ! logged $tmp/d2.two.log 'stepping down'"
 start d1 "$tmp/d1.two.log" --vip $VIP4 --bootstrap
 check "d1 starts again - with --bootstrap - and rejoins d2's cluster without approval" "within 30 logged $tmp/d1.two.log 'OK director ready' && ! logged $tmp/d1.two.log 'waiting for approval' && within 20 up_is d2 2"
+
+echo "== two directors: the leader's theLB is killed, its machine up - the other stands alone"
+cid=$(json d1 's["cluster"]["id"]')
+stop d2 KILL
+check "d2's crash leaves the control VIP on its interface, answering" "holds d2 $VIP4"
+check "d1 finds d2's control port refusing - its theLB gone - and stands alone" "within 30 logged $tmp/d1.two.log 'WARN standing alone: .* node=d2 .*refuses connections'"
+check "d1 leads alone, and takes the control VIP" "within 20 holds d1 $VIP4 && within 10 leader_is d1 d1"
+check "the same cluster, its state kept" "is d1 's[\"cluster\"][\"id\"]' $cid"
+check "d2 is removed: it must be approved when it comes back" "within 10 logged $tmp/d1.two.log 'WARN the director left behind is removed: it waits for approval when it comes back node=d2' && is d1 '[n[\"node\"] for n in s[\"nodes\"]]' \"['d1']\""
+start d2 "$tmp/d2.crash.log" --vip $VIP4 --bootstrap
+check "d2, started again, removes the control VIP its crash left" "within 20 logged $tmp/d2.crash.log 'WARN removed the control VIP an earlier run left'"
+check "finds d1's cluster on it, and waits for approval" "within 20 logged $tmp/d2.crash.log 'OK waiting for approval'"
+check "approved, it is a voter again" "on d1 $bin admin approve d2 >/dev/null && within 20 logged $tmp/d2.crash.log 'OK director ready' && within 20 up_is d1 2"
+
+echo "== two directors: the leader's machine goes down - the other stands alone"
+stop d1 KILL
+ip -n $P-d1 link set eth0 down
+check "d2 finds d1 not answering at all, and stands alone" "within 30 logged $tmp/d2.crash.log 'WARN standing alone: .* node=d1 .*does not answer on the network'"
+check "d2 leads alone, with the control VIP" "within 20 holds d2 $VIP4 && within 10 leader_is d2 d2"
+link_up d1
+start d1 "$tmp/d1.crash.log" --vip $VIP4 --bootstrap
+check "d1, back, waits for approval; approved, it is a voter again" "within 30 logged $tmp/d1.crash.log 'OK waiting for approval' && on d2 $bin admin approve d1 >/dev/null && within 20 logged $tmp/d1.crash.log 'OK director ready' && within 20 up_is d2 2"
+
+if command -v nft >/dev/null; then
+	echo "== two directors: a partition between them - neither stands alone"
+	ip netns exec $P-d2 nft -f - <<EOF
+table inet e2e_cut {
+	chain in { type filter hook input priority 0; ip saddr ${addr4[d1]} drop; }
+	chain out { type filter hook output priority 0; ip daddr ${addr4[d1]} drop; }
+}
+EOF
+	check "the leader, d2, loses its majority and gives the control VIP up" "within 10 eval '! holds d2 $VIP4'"
+	check "each finds the other answering on the network: a partition, so neither stands alone" "within 30 eval 'logged $tmp/d1.crash.log \"not standing alone reason=.*a partition, not a crash\" && logged $tmp/d2.crash.log \"not standing alone reason=.*a partition, not a crash\"' && ! logged $tmp/d1.crash.log 'WARN standing alone:' && [ \$(grep -c 'WARN standing alone:' $tmp/d2.crash.log) = 1 ]"
+	ip netns exec $P-d2 nft delete table inet e2e_cut
+	check "the partition heals: one of them leads again, with both voting" "within 30 held $VIP4 && within 20 eval 'up_is \$(holder $VIP4) 2'"
+fi
 for n in d1 d2; do stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"

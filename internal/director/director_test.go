@@ -95,6 +95,8 @@ func (l *loopNet) dial(ctx context.Context, addr string) (net.Conn, error) {
 func (l *loopNet) DialVIP(ctx context.Context) (net.Conn, error)           { return l.dial(ctx, l.vip) }
 func (l *loopNet) Dial(ctx context.Context, addr string) (net.Conn, error) { return l.dial(ctx, addr) }
 func (l *loopNet) VIPHolder(context.Context) (string, error)               { return l.held, nil }
+func (l *loopNet) Holder(context.Context, netip.Addr) (string, error)      { return "", nil }
+func (l *loopNet) Uplink(context.Context) (bool, string)                   { return true, "" }
 func (l *loopNet) Cleanup() error                                          { return nil }
 func (l *loopNet) Repair() (bool, error)                                   { return false, nil }
 

@@ -69,6 +69,11 @@ type Network interface {
 	Cleanup() error
 	// MACOf is the MAC address the neighbour table holds for ip, or "".
 	MACOf(ip netip.Addr) string
+	// Holder asks the link who has ip: a MAC address, or "".
+	Holder(ctx context.Context, ip netip.Addr) (string, error)
+	// Uplink is whether this node still reaches its network - a gateway on its
+	// interface answers, or, with none, its link is up - and, if not, why.
+	Uplink(ctx context.Context) (bool, string)
 }
 
 // Deps are what the director reads the world through; tests replace them.
@@ -285,72 +290,88 @@ func (n *node) setPhase(p string) {
 // loop finds or creates the cluster and is a member of it, until ctx is done -
 // starting over when the session ends in a way that allows it.
 func (n *node) loop(ctx context.Context) error {
+	var standing *takeover
 	for {
-		exists, err := secret.Exists(n.cfg.SecretFile)
-		if err != nil {
-			return err
-		}
-		if !exists && !n.cfg.Bootstrap {
-			return n.noSecret()
-		}
-		n.setPhase("looking for the cluster on the control VIP")
-		p, takenBy, err := n.probe(ctx)
-		if err != nil {
-			return err
-		}
-		if ctx.Err() != nil {
-			return nil
-		}
 		var s *session
-		switch decide(exists, n.cfg.Bootstrap, p) {
-		case actRefuseTaken:
-			if takenBy != tcpServer {
-				// It answers ARP, but no connection to the port: often a firewall
-				// on the holder - theLB's own leader among them - dropping it.
-				return fmt.Errorf("%s holds %s, but nothing accepts a connection on port %d: open the control port to the directors in that machine's firewall if it runs theLB, or choose another VIP", takenBy, n.cfg.ControlVIP, n.cfg.ControlPort)
-			}
-			return fmt.Errorf("something that is not theLB answers on %s port %d: the control VIP or port is taken", n.cfg.ControlVIP, n.cfg.ControlPort)
-		case actStopNoSecret:
-			return n.noSecret()
-		case actCreate, actBootstrap:
-			if err := n.settleSecrets(); err != nil {
+		if standing != nil {
+			// The other of two directors is gone: a session of this director
+			// alone, from the state it had - no probe, no join.
+			t := standing
+			standing = nil
+			var err error
+			if s, err = n.standAlone(t); err != nil {
 				return err
 			}
-			if err := n.loadSecrets(); err != nil {
+		} else {
+			exists, err := secret.Exists(n.cfg.SecretFile)
+			if err != nil {
 				return err
 			}
-			if s, err = n.create(); err != nil {
+			if !exists && !n.cfg.Bootstrap {
+				return n.noSecret()
+			}
+			n.setPhase("looking for the cluster on the control VIP")
+			p, takenBy, err := n.probe(ctx)
+			if err != nil {
 				return err
 			}
-		case actJoin:
-			if err := n.loadSecrets(); err != nil {
-				return err
-			}
-			if s, err = n.join(ctx); err != nil {
-				if errors.Is(err, errRejoin) {
-					n.log.Warn("starting over: looking for the cluster on the control VIP", "reason", err)
-					continue
-				}
-				return err
-			}
-			if s == nil { // ctx done
+			if ctx.Err() != nil {
 				return nil
 			}
-		default: // actWait: probe waits for a cluster, so this is not reached
-			continue
+			switch decide(exists, n.cfg.Bootstrap, p) {
+			case actRefuseTaken:
+				if takenBy != tcpServer {
+					// It answers ARP, but no connection to the port: often a firewall
+					// on the holder - theLB's own leader among them - dropping it.
+					return fmt.Errorf("%s holds %s, but nothing accepts a connection on port %d: open the control port to the directors in that machine's firewall if it runs theLB, or choose another VIP", takenBy, n.cfg.ControlVIP, n.cfg.ControlPort)
+				}
+				return fmt.Errorf("something that is not theLB answers on %s port %d: the control VIP or port is taken", n.cfg.ControlVIP, n.cfg.ControlPort)
+			case actStopNoSecret:
+				return n.noSecret()
+			case actCreate, actBootstrap:
+				if err := n.settleSecrets(); err != nil {
+					return err
+				}
+				if err := n.loadSecrets(); err != nil {
+					return err
+				}
+				if s, err = n.create(); err != nil {
+					return err
+				}
+			case actJoin:
+				if err := n.loadSecrets(); err != nil {
+					return err
+				}
+				if s, err = n.join(ctx); err != nil {
+					if errors.Is(err, errRejoin) {
+						n.log.Warn("starting over: looking for the cluster on the control VIP", "reason", err)
+						continue
+					}
+					return err
+				}
+				if s == nil { // ctx done
+					return nil
+				}
+			default: // actWait: probe waits for a cluster, so this is not reached
+				continue
+			}
 		}
 
 		n.mu.Lock()
 		n.sess, n.joining = s, nil
 		n.mu.Unlock()
-		err = s.run(ctx)
+		err := s.run(ctx)
 		n.mu.Lock()
 		n.sess = nil
 		n.mu.Unlock()
 		s.close(ctx.Err() != nil)
+		var t *takeover
 		switch {
 		case ctx.Err() != nil:
 			return nil
+		case errors.As(err, &t):
+			standing = t
+			continue
 		case errors.Is(err, errRejoin):
 			n.log.Warn("starting over: looking for the cluster on the control VIP", "reason", err)
 			continue

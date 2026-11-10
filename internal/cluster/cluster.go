@@ -813,6 +813,14 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	return snapshot(b), nil
 }
 
+// Bytes is the state as Snapshot writes it - for a director that stands alone,
+// seeding a Raft of its own with it.
+func (f *FSM) Bytes() ([]byte, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return json.Marshal(f.s)
+}
+
 // Restore replaces the state with a snapshot's.
 func (f *FSM) Restore(r io.ReadCloser) error {
 	defer func() { _ = r.Close() }()

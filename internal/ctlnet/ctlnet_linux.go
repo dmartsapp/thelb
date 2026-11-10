@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -103,6 +105,106 @@ func (n *Net) VIPHolder(ctx context.Context) (string, error) {
 		wait = time.Until(d)
 	}
 	return announce.Probe(n.ifc.Index, n.ifc.HardwareAddr, n.local.Prefix.Addr(), n.vip, wait)
+}
+
+// Holder asks the link who has ip.
+func (n *Net) Holder(ctx context.Context, ip netip.Addr) (string, error) {
+	wait := time.Second
+	if d, ok := ctx.Deadline(); ok && time.Until(d) < wait {
+		wait = time.Until(d)
+	}
+	return announce.Probe(n.ifc.Index, n.ifc.HardwareAddr, n.local.Prefix.Addr(), ip, wait)
+}
+
+// Uplink is whether this node still reaches its network: a gateway on the
+// control VIP's interface - the default route's, or another route's - answers;
+// with none, the link is up.
+func (n *Net) Uplink(ctx context.Context) (bool, string) {
+	if gw, ok := gateway(n.ifc.Name, n.vip.Is4()); ok {
+		mac, err := n.Holder(ctx, gw)
+		switch {
+		case err != nil:
+			return false, fmt.Sprintf("looking for its gateway %s failed: %v", gw, err)
+		case mac == "":
+			return false, fmt.Sprintf("its gateway %s does not answer", gw)
+		}
+		return true, ""
+	}
+	b, err := os.ReadFile("/sys/class/net/" + n.ifc.Name + "/carrier")
+	if err != nil || strings.TrimSpace(string(b)) != "1" {
+		return false, "the link of " + n.ifc.Name + " is down"
+	}
+	return true, ""
+}
+
+// gateway is a gateway on the interface, from the kernel's routes: the default
+// route's if it has one there, or another route's.
+func gateway(ifname string, v4 bool) (netip.Addr, bool) {
+	if v4 {
+		b, err := os.ReadFile("/proc/net/route")
+		if err != nil {
+			return netip.Addr{}, false
+		}
+		return gateway4(string(b), ifname)
+	}
+	b, err := os.ReadFile("/proc/net/ipv6_route")
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return gateway6(string(b), ifname)
+}
+
+// gateway4 reads /proc/net/route: Iface Destination Gateway Flags ... Mask ...,
+// addresses in hexadecimal, in the host's byte order (little-endian here).
+func gateway4(table, ifname string) (netip.Addr, bool) {
+	var other netip.Addr
+	for _, line := range strings.Split(table, "\n")[1:] {
+		f := strings.Fields(line)
+		if len(f) < 8 || f[0] != ifname || f[2] == "00000000" {
+			continue
+		}
+		var gw [4]byte
+		if _, err := fmt.Sscanf(f[2], "%02x%02x%02x%02x", &gw[3], &gw[2], &gw[1], &gw[0]); err != nil {
+			continue
+		}
+		a := netip.AddrFrom4(gw)
+		if f[1] == "00000000" && f[7] == "00000000" {
+			return a, true
+		}
+		if !other.IsValid() {
+			other = a
+		}
+	}
+	return other, other.IsValid()
+}
+
+// gateway6 reads /proc/net/ipv6_route: destination, its length, source, its
+// length, next hop, metric, references, use, flags, interface.
+func gateway6(table, ifname string) (netip.Addr, bool) {
+	var other netip.Addr
+	for _, line := range strings.Split(table, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 10 || f[9] != ifname || f[4] == strings.Repeat("0", 32) {
+			continue
+		}
+		var hop [16]byte
+		ok := len(f[4]) == 32
+		for i := 0; ok && i < 16; i++ {
+			_, err := fmt.Sscanf(f[4][2*i:2*i+2], "%02x", &hop[i])
+			ok = err == nil
+		}
+		if !ok {
+			continue
+		}
+		a := netip.AddrFrom16(hop)
+		if f[0] == strings.Repeat("0", 32) && f[1] == "00" {
+			return a, true
+		}
+		if !other.IsValid() {
+			other = a
+		}
+	}
+	return other, other.IsValid()
 }
 
 // Take listens on the control VIP, adds it to the interface, and announces it.

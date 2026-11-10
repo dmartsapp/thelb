@@ -29,3 +29,9 @@ func (*Net) Release()                                       {}
 func (*Net) Repair() (bool, error)                          { return false, errors.ErrUnsupported }
 func (*Net) Cleanup() error                                 { return errors.ErrUnsupported }
 func (*Net) MACOf(netip.Addr) string                        { return "" }
+func (*Net) Holder(context.Context, netip.Addr) (string, error) {
+	return "", errors.ErrUnsupported
+}
+func (*Net) Uplink(context.Context) (bool, string) {
+	return false, "a director's network is Linux only"
+}
