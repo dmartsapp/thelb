@@ -98,6 +98,9 @@ for n in d1 d2 d3 d4 b1 b2 b3 c; do
 	ip -n $P-$n link set lo up
 	ip -n $P-$n link set eth0 up
 	ip -n $P-$n addr add ${addr4[$n]}/24 dev eth0
+	# Linux drops a link's IPv6 addresses when the link goes down, as the
+	# crash scenarios take it: keep them, as a machine's own setup would.
+	[ $have6 = 1 ] && ip netns exec $P-$n sh -c 'echo 1 >/proc/sys/net/ipv6/conf/eth0/keep_addr_on_down'
 	[ $have6 = 1 ] && ip -n $P-$n addr add ${addr6[$n]}/64 dev eth0 nodad
 	mac[$n]=$(ip netns exec $P-$n cat /sys/class/net/eth0/address)
 	install -d -m 0700 "$tmp/$n"
@@ -310,8 +313,12 @@ done
 line=$(ip -n $P-d1 -o addr show dev eth0 | grep -F " $VIP4/32")
 check "the control VIP is on d1's eth0 as $VIP4/32" "[ -n \"\$line\" ]"
 check "with theLB's label, eth0:thelb" "echo \"\$line\" | grep -q 'eth0:thelb'"
-check "and theLB's address protocol, 116" "echo \"\$line\" | grep -qE 'proto (0x74|116) '"
-echo "      $line"
+# iproute2 shows address protocols from 6.3 on.
+if ip -V | grep -qE 'iproute2-(6\.([3-9]|[1-9][0-9])|[7-9]|[1-9][0-9])'; then
+	check "and theLB's address protocol, 116" "echo \"\$line\" | grep -qE 'proto (0x74|116) '"
+else
+	echo "  skip  theLB's address protocol: $(ip -V | awk '{print $3}') does not show address protocols"
+fi
 check "leased from the kernel - 6 s, renewed - not forever" "echo \"\$line\" | grep -qE 'valid_lft [1-6]sec preferred_lft [1-6]sec' && sleep 8 && ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE 'valid_lft [1-6]sec'"
 check "admin lease 9: in the cluster's state, and the kernel's lease follows" "on d1 $bin admin lease 9 | grep -q 'control VIP lease: 9s' && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 9 && within 10 eval 'ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE \"valid_lft [7-9]sec\"'"
 check "admin lease refuses less than 3 s" "! on d1 $bin admin lease 2 2>/dev/null && on d1 $bin admin lease 6 >/dev/null && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 6"
@@ -571,7 +578,9 @@ check "admin service add web: the pool's first address" "on d1 $bin admin servic
 check "its VIP waits for a backend: no director holds it yet" "sleep 2; [ -z \"\$(holder $SVC)\" ]"
 check "admin assign web b1 b2 b3" "on d1 $bin admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 | grep -q 'assigned to web: b1, b2, b3'"
 check "the leader holds the service VIP, once a backend serves it" "within 20 holds d1 $SVC"
-check "each backend holds it on thelb0, with theLB's address protocol" "within 10 eval 'ip -n $P-b1 -o addr show dev thelb0 | grep -q \" $SVC/32 .*proto 0x74\" && ip -n $P-b3 -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
+proto=""
+ip -V | grep -qE 'iproute2-(6\.([3-9]|[1-9][0-9])|[7-9]|[1-9][0-9])' && proto=".*proto 0x74"
+check "each backend holds it on thelb0, with theLB's address protocol" "within 10 eval 'ip -n $P-b1 -o addr show dev thelb0 | grep -q \" $SVC/32$proto\" && ip -n $P-b3 -o addr show dev thelb0 | grep -q \" $SVC/32\"'"
 check "and answers no ARP for it: arp_ignore 1, arp_announce 2" "[ \"\$(ip netns exec $P-b1 cat /proc/sys/net/ipv4/conf/all/arp_ignore /proc/sys/net/ipv4/conf/all/arp_announce | xargs)\" = '1 2' ]"
 check "the leader pins each backend's address to its MAC address" "within 10 eval '[ \$(ip -n $P-d1 neigh show nud permanent | grep -c lladdr) = 3 ]'"
 if command -v ipvsadm >/dev/null; then
@@ -835,6 +844,15 @@ if [ "$(answers 8 $FAR)" != "b1=4 b4=4" ]; then
 	ip netns exec $P-b4 nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpInHdrErrors|TcpInErrs|IpExtInCsumErrors' | sed 's/^/      b4 /'
 	ip netns exec $P-r nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpForwDatagrams|IpOutNoRoutes' | sed 's/^/      router /'
 	ip netns exec $P-b4 nft list ruleset 2>/dev/null | sed 's/^/      b4 nft /'
+	if command -v tcpdump >/dev/null; then
+		ip netns exec $P-b4 timeout 4 tcpdump -lni any -c 12 'tcp port 80 or ip proto 4' >"$tmp/far.b4.pcap.txt" 2>&1 &
+		ip netns exec $P-c timeout 4 tcpdump -lni eth0 -c 12 "host $FAR" >"$tmp/far.c.pcap.txt" 2>&1 &
+		sleep 1
+		ip netns exec $P-c curl -s --max-time 2 "http://$FAR/" >/dev/null
+		sleep 3
+		sed 's/^/      b4: /' "$tmp/far.b4.pcap.txt"
+		sed 's/^/      client: /' "$tmp/far.c.pcap.txt"
+	fi
 fi
 check "admin unassign far b1: b1's tunnel goes" "on $new $bin admin unassign far b1 >/dev/null && within 10 eval '! ip -n $P-b1 link show thelbt0 >/dev/null 2>&1'"
 check "admin service remove far: b4's tunnel, clamp and VIP go" "on $new $bin admin service remove far >/dev/null && within 10 eval '! ip -n $P-b4 link show thelbt0 >/dev/null 2>&1 && ! nft_on b4 >/dev/null && ! ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/\"'"
@@ -921,7 +939,7 @@ if [ $have6 = 1 ]; then
 	ip -n $P-d1 link set eth0 down
 	check "the leader crashes: another takes the VIP" "within 20 held_not_by $VIP6 d1"
 	new=$(holder $VIP6)
-	check "its neighbor advertisement moved the client's entry to $new's MAC address" "within 5 neigh_is $VIP6 ${mac[$new]}"
+	check "its neighbor advertisement moved the client's entry to $new's MAC address" "[ -n \"$new\" ] && within 5 neigh_is $VIP6 \${mac[$new]:-none}"
 	for n in d2 d3; do stop $n; done
 else
 	echo "== IPv6: skipped - this kernel has no IPv6 (booted with ipv6.disable=1?)"

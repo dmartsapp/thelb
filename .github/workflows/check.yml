@@ -37,7 +37,7 @@ jobs:
       - name: what the lab needs
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q ipvsadm nftables bc
+          sudo apt-get install -y -q ipvsadm nftables bc tcpdump
           sudo modprobe -a ip_vs ip_vs_wrr ip_vs_mh ipip dummy nf_tables
       - run: make e2e
       - name: the logs of a failed run
