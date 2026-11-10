@@ -351,6 +351,7 @@ func replay(state []byte, logs raft.LogStore, applied uint64) ([]byte, uint64, i
 // of two is gone.
 func (n *node) standAlone(t *takeover) (*session, error) {
 	n.log.Warn("standing alone: the other director is gone; this one goes on as the cluster's only voter, and removes it", "node", t.left.name, "reason", t.why)
+	n.takeovers.Add(1)
 	if t.replayed > 0 {
 		n.log.OK("the last entries of Raft's log replayed: changes the leader may have confirmed before it went are kept", "entries", t.replayed)
 	}

@@ -550,14 +550,14 @@ for n in d1 d2; do [ -n "${pid[$n]:-}" ] && stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"
 SVC=$NET4.20
-start d1 "$tmp/d1.svc.log" --vip $VIP4 --bootstrap
+start d1 "$tmp/d1.svc.log" --vip $VIP4 --bootstrap --metrics 127.0.0.1:9732
 check "d1 creates a cluster" "within 30 logged $tmp/d1.svc.log 'OK control VIP taken'"
 for n in d2 d3; do start $n "$tmp/$n.svc.log" --vip $VIP4; done
 check "d2 and d3 join, once approved" "within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK waiting for approval' && on d1 $bin admin approve --match 'd[23]' --yes >/dev/null && within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK director ready'"
 for n in b1 b2 b3; do
 	cp -p "$tmp/d1/backend.secret" "$tmp/$n/"
 	app $n up
-	startb $n "$tmp/$n.log" --offer "alt=tcp/$(altport $n),check=http:/"
+	startb $n "$tmp/$n.log" --offer "alt=tcp/$(altport $n),check=http:/" --metrics 127.0.0.1:9733
 done
 check "the backends enrol, and wait for approval" "within 20 eval 'logged $tmp/b1.log \"OK waiting for approval\" && logged $tmp/b2.log \"OK waiting for approval\" && logged $tmp/b3.log \"OK waiting for approval\"'"
 check "approve --match 'b[1-3]' --yes" "on d1 $bin admin approve --match 'b[1-3]' --yes | grep -q 'approved: b1, b2, b3'"
@@ -583,6 +583,10 @@ code=$?
 check "thelb doctor on a follower: nothing missing; the leader answers ARP, connection sync runs, the plan names the control VIP" "[ $code = 0 ] && grep -qE 'director d1 answers ARP +\| ok' $tmp/doctor.d2 && grep -qE 'connection sync +\| ok +\| backup on eth0' $tmp/doctor.d2 && grep -qE 'control VIP +\| info +\| while it leads: $VIP4 on eth0 - label eth0:thelb, protocol 116, leased 6s' $tmp/doctor.d2"
 grep -E '^ (link|plan) ' "$tmp/doctor.d2" | sed 's/^/      /'
 check "the backends' checks are spread across the directors - more than one makes them - and pass" "within 20 eval '[ \$(checkers_of d1) -ge 2 ]' && [ \"\$(director_checks d1)\" = \"['ok']\" ]"
+ip netns exec $P-d1 curl -s --max-time 5 http://127.0.0.1:9732/metrics >"$tmp/metrics.d1"
+ip netns exec $P-b1 curl -s --max-time 5 http://127.0.0.1:9733/metrics >"$tmp/metrics.b1"
+check "--metrics: the leader serves Prometheus's text - it leads, its backends' weights, the VIP it holds" "grep -qx 'thelb_leader 1' $tmp/metrics.d1 && grep -qx 'thelb_backend_weight{service=\"web\",backend=\"b1\"} 1' $tmp/metrics.d1 && grep -q '^thelb_vip_held{vip=\"$SVC\",purpose=\"service\"' $tmp/metrics.d1 && grep -q '^# TYPE thelb_backend_connections_total counter' $tmp/metrics.d1"
+check "and a backend its own: a member, its offers' checks" "grep -qx 'thelb_member 1' $tmp/metrics.b1 && grep -qx 'thelb_offer_check_up{offer=\"web\",port=\"tcp/80\"} 1' $tmp/metrics.b1"
 check "status: the service up, 3 of 3" "on d2 $bin status vips | grep -qE '^ web +\| $SVC +\| tcp/80 +\| wrr +\| direct +\| 3 of 3'"
 check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep -c '| ok / ok |') = 3 ]"
 on d1 "$bin" status >"$tmp/summary"

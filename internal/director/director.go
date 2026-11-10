@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dmartsapp/thelb/internal/alive"
@@ -26,6 +27,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/metrics"
 	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/sdnotify"
 	"github.com/dmartsapp/thelb/internal/secret"
@@ -45,6 +47,7 @@ type Config struct {
 	Cluster           string
 	Name              string
 	Interface         string
+	Metrics           string // where to serve metrics, address:port; "" for nowhere
 }
 
 // Network is how a director reaches the control VIP and the other directors.
@@ -187,10 +190,12 @@ type node struct {
 	d     Deps
 	log   *logx.Logger
 	lacks map[string]string // features this node's kernel lacks, by preflight
-	net   Network
-	plane Dataplane
-	addr  hostnet.Address
-	claim cluster.Claim
+
+	takeovers atomic.Int64 // how many times this director stood alone
+	net       Network
+	plane     Dataplane
+	addr      hostnet.Address
+	claim     cluster.Claim
 
 	dirSecret secret.Secret
 	bkSecret  secret.Secret
@@ -239,6 +244,12 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		return err
 	}
 	defer srv.Close()
+	if cfg.Metrics != "" {
+		gather := func() string { return metrics.Director(n.statusOf(false), cfg.Name, n.takeovers.Load()) }
+		if err := metrics.Serve(ctx, cfg.Metrics, gather, d.Log.Module("metrics")); err != nil {
+			return err
+		}
+	}
 	if d.PeerUID != nil {
 		srv.PeerUID = d.PeerUID
 	}

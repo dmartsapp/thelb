@@ -39,6 +39,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/join"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/metrics"
 	"github.com/dmartsapp/thelb/internal/nft"
 	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/sdnotify"
@@ -56,6 +57,7 @@ type Config struct {
 	Name       string
 	Interface  string
 	Offers     []cluster.Offer
+	Metrics    string // where to serve metrics, address:port; "" for nowhere
 }
 
 // Kernel is the backend's kernel state.
@@ -200,6 +202,11 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		return err
 	}
 	defer srv.Close()
+	if cfg.Metrics != "" {
+		if err := metrics.Serve(ctx, cfg.Metrics, func() string { return metrics.Backend(b.Status()) }, d.Log.Module("metrics")); err != nil {
+			return err
+		}
+	}
 	if d.PeerUID != nil {
 		srv.PeerUID = d.PeerUID
 	}

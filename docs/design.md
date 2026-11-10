@@ -709,7 +709,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
   2026-11-08T18:58:22.816Z [director] OK director rejoined: approved before node=d3 approved_by=d1 member=d3-976b0f6f address=198.18.0.13
   2026-11-08T18:58:24.283Z [director] WARN join refused: the directors' secret was not proved from=198.18.0.14
   ```
-- **Metrics**: Prometheus, on a configurable address: VIP ownership, backend health, IPVS counters per service and backend (connections, packets, bytes), cluster state, failovers, enrolments, drift corrections, conflicts.
+- **Metrics**: Prometheus's text format, on the address `--metrics` names (`GET /metrics`, plain HTTP, written without a client library), from the node's own status: every director says how it stands - `thelb_leader`, `thelb_member`, `thelb_raft_term`, `thelb_nodes{role,state}`, `thelb_vip_lease_seconds`, `thelb_takeovers_total` - and the leader alone what the cluster serves - `thelb_vip_held`, `thelb_service_backends[_up]`, `thelb_backend_weight`, `thelb_backend_check_up{check=own|director}`, `thelb_backend_{connections,packets,bytes}_total` - so nothing is counted twice; a backend says `thelb_member`, `thelb_offer_check_up`, `thelb_offer_assigned`. Not yet: enrolments, drift corrections and conflicts as counters.
 - **`thelb status`** is the one view of the cluster - see [above](#thelb-status). It, `doctor` and `admin` talk to the running theLB over [the local socket](#the-local-socket).
 
 ## Security

@@ -108,3 +108,21 @@ func TestDoctorFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestMetricsNeedsAnAddressOfItsOwn: --metrics takes an address and port, and
+// refuses every address, which would include the VIPs.
+func TestMetricsNeedsAnAddressOfItsOwn(t *testing.T) {
+	savedFor, savedExe := localFor, executable
+	t.Cleanup(func() { localFor, executable = savedFor, savedExe })
+	localFor = func(netip.Addr, string) (hostnet.Address, error) { return hostnet.Address{}, nil }
+	executable = func() (string, error) { return "/usr/local/bin/thelb", nil }
+	base := []string{"generate", "systemd", "director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d", "--backend-secret-file", "/etc/thelb/b"}
+	if code, out, errOut := as(t, 0, append(base, "--metrics", "127.0.0.1:9732")...); code != 0 || !strings.Contains(out, "--metrics 127.0.0.1:9732\n") {
+		t.Errorf("--metrics 127.0.0.1:9732: exit %d %s\n%s", code, errOut, out)
+	}
+	for _, bad := range []string{"0.0.0.0:9732", "[::]:9732", "9732", "localhost:9732"} {
+		if code, _, _ := as(t, 0, append(base, "--metrics", bad)...); code != 2 {
+			t.Errorf("--metrics %s: exit %d, want 2", bad, code)
+		}
+	}
+}

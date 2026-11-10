@@ -52,6 +52,8 @@ Flags:
   --cluster <name>               the cluster's name, when this director creates it (default thelb)
   --name <name>                  this node's name (default: its hostname)
   --interface <name>             the control VIP's interface (default: the one in its network)
+  --metrics <address:port>       serve Prometheus metrics there, at /metrics - an address only your
+                                 monitoring reaches; not 0.0.0.0, which would include the VIPs
 `,
 	"backend": `Usage:
   thelb backend --join <control VIP:port> --secret-file <file> [--offer <offer> ...] [flags]
@@ -80,6 +82,8 @@ Flags:
                           SCTP's default)
   --name <name>           this node's name (default: its hostname)
   --interface <name>      the control VIP's interface (default: the one in its network)
+  --metrics <address:port>
+                          serve Prometheus metrics there, at /metrics; not 0.0.0.0
 
 Where a service's port differs from its offer's - the service on 80, the
 application on 8080 - the backend maps it, in theLB's own nftables table,

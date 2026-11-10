@@ -401,6 +401,24 @@ One line per event, on standard error - in the journal, under systemd:
 2026-11-09T05:03:40.120Z [watchdog] ERROR a loop has stopped: systemd's watchdog is told no more, and restarts theLB loop="data plane" late=31s
 ```
 
+### Metrics
+
+`--metrics <address:port>` on a director or a backend serves Prometheus's text format at `http://<address:port>/metrics` - plain HTTP, so give it an address only your monitoring reaches (`127.0.0.1`, or the machine's own management address; never `0.0.0.0`, which would include the VIPs). Every director says how it stands, and the leader alone what the cluster serves, so scrape them all and nothing is counted twice:
+
+| Metric | What |
+|---|---|
+| `thelb_build_info{role,version,commit}` | 1, with the build as labels |
+| `thelb_member`, `thelb_leader` | 1 or 0: a member of a cluster; the leader |
+| `thelb_raft_term`, `thelb_vip_lease_seconds` | the term this director knows; the VIPs' lease |
+| `thelb_nodes{role,state}` | the cluster's nodes, as this director sees them |
+| `thelb_takeovers_total` | times this director stood alone, the other of two gone |
+| `thelb_vip_held{vip,purpose,interface}` | the leader's: 1 for each VIP it holds |
+| `thelb_service_backends{service,vip}`, `thelb_service_backends_up{service,vip}` | the leader's: backends assigned, and serving |
+| `thelb_backend_weight{service,backend}` | the leader's: what IPVS has - 0 while it does not serve |
+| `thelb_backend_check_up{service,backend,check}` | the leader's: `check="own"` or `"director"`, 1 when it passes |
+| `thelb_backend_connections_total`, `_packets_total`, `_bytes_total` | the leader's: what IPVS sent each backend of each service |
+| `thelb_offer_check_up{offer,port}`, `thelb_offer_assigned{offer,service}` | a backend's: its own checks, and its offers' services |
+
 ## 16. When things fail
 
 | What | What happens |
@@ -487,9 +505,9 @@ Every command but `--help` and `--version` runs only as root. Exit status: `0` d
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
-               [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>]
+               [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>] [--metrics <address:port>]
 thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name>=]<proto>/<port>[,check=tcp|none|http:<path>] ...]
-               [--name <name>] [--interface <name>]
+               [--name <name>] [--interface <name>] [--metrics <address:port>]
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
 thelb offer remove <name>                                               (on a backend)
 thelb status   [--json] [--watch] [--role director|backend] [directors|backends|vips|all|<table> ...]

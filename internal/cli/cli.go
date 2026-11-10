@@ -205,6 +205,7 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 	cluster := fs.String("cluster", "thelb", "")
 	name := fs.String("name", "", "")
 	iface := fs.String("interface", "", "")
+	metricsAt := fs.String("metrics", "", "")
 	var cfg director.Config
 	if err := parse(fs, args); err != nil {
 		return cfg, err
@@ -261,6 +262,12 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 	}
 	cfg.Bootstrap = *bootstrap
 	cfg.Interface = *iface
+	if *metricsAt != "" {
+		if ap, err := netip.ParseAddrPort(*metricsAt); err != nil || ap.Addr().IsUnspecified() {
+			return cfg, usagef("thelb director: --metrics is an address and port to serve metrics on, as 127.0.0.1:9732 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)
+		}
+		cfg.Metrics = *metricsAt
+	}
 	return cfg, nil
 }
 
@@ -451,6 +458,7 @@ func backendConfig(ctx context.Context, cmd string, args []string) (backend.Conf
 	iface := fs.String("interface", "", "")
 	var offers offerFlags
 	fs.Var(&offers, "offer", "")
+	metricsAt := fs.String("metrics", "", "")
 	var cfg backend.Config
 	if err := parse(fs, args); err != nil {
 		return cfg, err
@@ -503,6 +511,12 @@ func backendConfig(ctx context.Context, cmd string, args []string) (backend.Conf
 		return cfg, usagef("thelb backend: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
 	}
 	cfg.Interface = *iface
+	if *metricsAt != "" {
+		if ap, err := netip.ParseAddrPort(*metricsAt); err != nil || ap.Addr().IsUnspecified() {
+			return cfg, usagef("thelb backend: --metrics is an address and port to serve metrics on, as 127.0.0.1:9733 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)
+		}
+		cfg.Metrics = *metricsAt
+	}
 	return cfg, nil
 }
 
