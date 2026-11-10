@@ -238,6 +238,7 @@ both_logged() { logged "$1" "$3" && logged "$2" "$3"; }
 leader_is() { [ "$(leader_of "$1")" = "$2" ]; }
 held_not_by() { local h; h=$(holder "$1"); [ -n "$h" ] && [ "$h" != "$2" ]; }
 held() { [ -n "$(holder "$1")" ]; }
+holder_up() { local h; h=$(holder "$1"); [ -n "$h" ] && up_is "$h" "$2"; }
 neigh_is() { [ "$(neigh_of "$1")" = "$2" ]; }
 same_view() { [ "$(json "$1" "s['cluster']['leader'], s['cluster']['term']")" = "$(json "$2" "s['cluster']['leader'], s['cluster']['term']")" ]; }
 # holder: the director holding the VIP on a link that is up - a crashed
@@ -442,7 +443,8 @@ EOF
 	check "the leader, d2, loses its majority and gives the control VIP up" "within 10 eval '! holds d2 $VIP4'"
 	check "each finds the other answering on the network: a partition, so neither stands alone" "within 30 eval 'logged $tmp/d1.crash.log \"not standing alone reason=.*a partition, not a crash\" && logged $tmp/d2.crash.log \"not standing alone reason=.*a partition, not a crash\"' && ! logged $tmp/d1.crash.log 'WARN standing alone:' && [ \$(grep -c 'WARN standing alone:' $tmp/d2.crash.log) = 1 ]"
 	ip netns exec $P-d2 nft delete table inet e2e_cut
-	check "the partition heals: one of them leads again, with both voting" "within 30 held $VIP4 && within 20 eval 'up_is \$(holder $VIP4) 2'"
+	check "the partition heals: one of them leads again, with both voting" "within 30 held $VIP4 && within 20 holder_up $VIP4 2"
+	check "and neither started over: the one that leads stays the same cluster's" "sleep 3; holder_up $VIP4 2 && ! grep -q 'starting over' $tmp/d1.crash.log $tmp/d2.crash.log"
 fi
 for n in d1 d2; do stop $n; done
 

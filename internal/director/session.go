@@ -530,11 +530,11 @@ func (s *session) monitor() {
 		// One of two directors, the other gone: stand alone.
 		if wait, two := s.takeoverWait(); two && time.Since(noLeaderSince) >= wait {
 			tk, why := s.tryTakeover()
-			if tk != nil {
+			if tk != nil && !s.hasLeader() { // looking takes seconds: a leader may have come
 				s.finish(tk)
 				return
 			}
-			if why != notAlone {
+			if tk == nil && why != notAlone && !s.hasLeader() {
 				notAlone = why
 				s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
 			}
@@ -543,17 +543,29 @@ func (s *session) monitor() {
 			continue
 		}
 		lookAt = time.Now().Add(orphanAfter) // look again after another while
-		switch desc, same, ok := s.vipAnswer(); {
-		case ok && !same:
+		desc, same, ok := s.vipAnswer()
+		if !ok || s.hasLeader() {
+			// Nothing answers - or a leader came while this director looked, and
+			// what answered may be itself, leading.
+			continue
+		}
+		switch {
+		case !same:
 			s.finish(fmt.Errorf("%w: another cluster (%s) holds the control VIP, and this one has no leader", errRejoin, desc))
 			return
-		case ok:
+		default:
 			// This cluster leads on the control VIP, and not with this director:
 			// it was left behind - by a takeover, or a partition.
 			s.finish(fmt.Errorf("%w: this cluster leads on the control VIP without this director", errRejoin))
 			return
 		}
 	}
+}
+
+// hasLeader is whether Raft knows a leader - this director or another.
+func (s *session) hasLeader() bool {
+	_, id := s.r.LeaderWithID()
+	return id != "" || s.leading() != nil
 }
 
 // vipAnswer is which cluster answers theLB's handshake on the control VIP: none

@@ -794,10 +794,11 @@ func approveCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	done := names
+	done := slices.Clone(names)
 	if resp.Result != nil && len(resp.Result.Names) > 0 {
-		done = resp.Result.Names
+		done = slices.Clone(resp.Result.Names)
 	}
+	slices.Sort(done) // by name, not by the order they asked in
 	_, _ = fmt.Fprintf(stdout, "approved: %s\n", strings.Join(done, ", "))
 	return nil
 }
