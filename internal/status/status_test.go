@@ -49,11 +49,15 @@ func TestAllShowsEveryTableInOrder(t *testing.T) {
 		" web-1 | shop    | 10.0.0.21 | tcp/8080 | http /healthz | ok        | nginx   | 2 h",
 		" web-1 | metrics | 10.0.0.21 | tcp/9100 | tcp           | fail      | -       | 1 min",
 		" theLB prod CA | ca   | abababababababab |",
-		"(0 rows)",
+		" waiting\n",  // the pending table, empty: its header and separator
+		"-\n\n pool ", // then a blank line before the next table
 	} {
 		if !strings.Contains(text, s) {
 			t.Errorf("text lacks %q:\n%s", s, text)
 		}
+	}
+	if strings.Contains(text, "rows)") || strings.Contains(text, "(1 row)") {
+		t.Errorf("a table counts its rows:\n%s", text)
 	}
 }
 

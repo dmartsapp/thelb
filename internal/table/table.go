@@ -1,9 +1,9 @@
 // Package table renders rows the way a SQL client shows a result: a header, a
-// separator, the rows, and how many there were.
+// separator, and the rows - without the count a SQL client adds, which says
+// nothing the rows do not.
 package table
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -56,11 +56,6 @@ func Render(headers []string, rows [][]string, right ...int) string {
 	b.WriteByte('\n')
 	for _, row := range rows {
 		line(row, false)
-	}
-	if len(rows) == 1 {
-		b.WriteString("(1 row)\n")
-	} else {
-		fmt.Fprintf(&b, "(%d rows)\n", len(rows))
 	}
 	return b.String()
 }

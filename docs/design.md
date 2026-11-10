@@ -581,7 +581,6 @@ $ sudo thelb status all
  cluster | id       | created             | leader | term | leader since
 ---------+----------+---------------------+--------+------+---------------------
  prod    | 7f3c91a2 | 2026-11-09 10:02:11 | lb-1   |    4 | 2026-11-09 10:02:13
-(1 row)
 
  node  | role     | address   | state | version | node fingerprint | last check-in
 -------+----------+-----------+-------+---------+------------------+---------------
@@ -591,52 +590,44 @@ $ sudo thelb status all
  web-1 | backend  | 10.0.0.21 | up    | v0.1.0  | 0be98d17c46a2f83 | 1.1 s ago
  web-2 | backend  | 10.0.0.22 | up    | v0.1.0  | 3d7e21f9a0c46b18 | 0.6 s ago
  db-1  | backend  | 10.0.0.31 | up    | v0.1.0  | c5a8e3071bd92f64 | 1.9 s ago
-(6 rows)
 
  certificate   | kind     | fingerprint      | not after
 ---------------+----------+------------------+---------------------
  theLB prod CA | ca       | b39b2bc27e695d13 | 2036-11-06 10:02:11
  lb-1          | director | 113b8cd5ce3cffd4 | 2026-11-10 10:02:11
  lb-2          | director | 6a04d1e95b3c27f8 | 2026-11-10 10:03:40
-(3 rows)
 
  pending | role     | address   | mac               | node fingerprint | waiting
 ---------+----------+-----------+-------------------+------------------+---------
  lb-4    | director | 10.0.0.14 | 52:54:00:3a:19:04 | 7c41e0a2f39b55d1 | 2 min
  web-3   | backend  | 10.0.0.23 | 52:54:00:3a:19:23 | 9f12c4e07ab35d61 | 15 s
-(2 rows)
 
  pool     | network      | addresses               | interface | used
 ----------+--------------+-------------------------+-----------+---------
  external | 10.10.1.0/24 | 10.10.1.20 - 10.10.1.29 | eth0      | 1 of 10
  internal | 10.0.0.0/24  | 10.0.0.50 - 10.0.0.59   | eth1      | 1 of 10
-(2 rows)
 
  node  | offer | address   | port     | check         | own check | service | since
 -------+-------+-----------+----------+---------------+-----------+---------+-------
  web-1 | shop  | 10.0.0.21 | tcp/8080 | http /healthz | ok        | nginx   | 2 h
  web-2 | shop  | 10.0.0.22 | tcp/9090 | http /healthz | ok        | -       | 40 s
  db-1  | pg    | 10.0.0.31 | tcp/5432 | tcp           | ok        | db      | 2 h
-(3 rows)
 
  vip        | purpose | pool     | interface | held by | since
 ------------+---------+----------+-----------+---------+---------------------
  10.0.0.10  | control | -        | eth1      | lb-1    | 2026-11-09 10:02:13
  10.10.1.20 | service | external | eth0      | lb-1    | 2026-11-09 10:05:40
  10.0.0.50  | service | internal | eth1      | lb-1    | 2026-11-09 10:06:02
-(3 rows)
 
  service | vip        | port     | scheduler | method | backends up
 ---------+------------+----------+-----------+--------+-------------
  nginx   | 10.10.1.20 | tcp/80   | wrr       | direct | 1 of 1
  db      | 10.0.0.50  | tcp/5432 | wrr       | direct | 1 of 1
-(2 rows)
 
  service | vip            | backend | at             | checks  | weight | connections | packets | bytes  | last check-in
 ---------+----------------+---------+----------------+---------+--------+-------------+---------+--------+---------------
  nginx   | 10.10.1.20:80  | web-1   | 10.0.0.21:8080 | ok / ok |      3 |         412 |  918244 | 1.1 GB | 1.1 s ago
  db      | 10.0.0.50:5432 | db-1    | 10.0.0.31:5432 | ok / ok |      1 |          37 |   40116 | 9.8 MB | 1.9 s ago
-(2 rows)
 ```
 
 `--json` prints the same, one key per table, each a list of rows; times are RFC 3339, and every "ago" is also a number of seconds:
@@ -667,7 +658,6 @@ $ sudo thelb status
  role    | cluster | state                   | offer | port     | check         | own check | offered | service | node fingerprint
 ---------+---------+-------------------------+-------+----------+---------------+-----------+---------+---------+------------------
  backend | prod    | a member of the cluster | shop  | tcp/8080 | http /healthz | ok        | yes     | nginx   | 0be98d17c46a2f83
-(1 row)
 ```
 
 `--json` gives the same: `{ "role": "backend", "cluster": "prod", "offers": [ { "offer": "shop", "port": "tcp/8080", "offered": "yes", "service": "nginx" } ], "node_fingerprint": "0be98d17c46a2f83" }`. While the backend waits for approval, it has no offers listed yet, and its fingerprint is the one a director's `pending` table shows for it. (The VIP is on the backend's `thelb0` all the same - `ip address` shows it; leaving it out of `status` keeps the backend's view to what the backend needs, it does not hide it.)

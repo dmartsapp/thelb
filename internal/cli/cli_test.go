@@ -232,7 +232,7 @@ func TestStatusAsTablesAndJSON(t *testing.T) {
 		t.Errorf("status nodes: %s", out)
 	}
 	code, out, _ = as(t, 0, "status", "all")
-	if code != 0 || !strings.Contains(out, "(0 rows)") || !strings.Contains(out, " pool ") {
+	if code != 0 || strings.Contains(out, "rows)") || !strings.Contains(out, " pool ") {
 		t.Errorf("status all: %s", out)
 	}
 	code, out, _ = as(t, 0, "status", "--json")
@@ -282,7 +282,7 @@ func TestApprove(t *testing.T) {
 	if code != 1 || !strings.Contains(errOut, "no terminal to confirm on") || adminCalls != nil {
 		t.Errorf("no terminal, no --yes: exit %d, %q, %v", code, errOut, adminCalls)
 	}
-	if !strings.Contains(out, " web-1   | director") || !strings.Contains(out, " web-12  | director") || strings.Contains(out, "db-1") || !strings.Contains(out, "(2 rows)") {
+	if !strings.Contains(out, " web-1   | director") || !strings.Contains(out, " web-12  | director") || strings.Contains(out, "db-1") || strings.Count(out, "| director") != 2 {
 		t.Errorf("the matching nodes are not shown first:\n%s", out)
 	}
 	code, _, _ = run(true, "n\n", "admin", "approve", "--match", "web-[0-9]+")
