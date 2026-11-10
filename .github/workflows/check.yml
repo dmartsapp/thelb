@@ -1,0 +1,47 @@
+# Every change: make check, then the end-to-end test as root - the kernel
+# tests and the lab of network namespaces - on a fresh Linux machine.
+name: check
+
+on:
+  push:
+    branches: [main, "release/**", "wip/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: tools
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - run: make check
+
+  e2e:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: what the lab needs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ipvsadm nftables bc
+          sudo modprobe -a ip_vs ip_vs_wrr ip_vs_mh ipip dummy nf_tables
+      - run: make e2e
+      - name: the logs of a failed run
+        if: failure()
+        run: |
+          d=$(ls -d /tmp/thelb-e2e.* 2>/dev/null | head -1)
+          [ -n "$d" ] && sudo tail -n 60 "$d"/*.log
