@@ -828,6 +828,14 @@ if command -v nft >/dev/null; then
 fi
 check "status: the service's method is tunnel" "on $new $bin status vips | grep -qE '^ far +\| $FAR +\| tcp/80 +\| wrr +\| tunnel '"
 check "the client is served by both - b4's replies coming back through the router" "within 20 eval '[ \"\$(answers 8 $FAR)\" = \"b1=4 b4=4\" ]'"
+if [ "$(answers 8 $FAR)" != "b1=4 b4=4" ]; then
+	echo "      the client: $(answers 8 $FAR)"
+	ip -n $P-b4 -s link show thelbt0 | sed 's/^/      /'
+	echo "      b4 rp_filter all/eth0/thelbt0: $(ip netns exec $P-b4 cat /proc/sys/net/ipv4/conf/all/rp_filter /proc/sys/net/ipv4/conf/eth0/rp_filter /proc/sys/net/ipv4/conf/thelbt0/rp_filter | xargs)"
+	ip netns exec $P-b4 nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpInHdrErrors|TcpInErrs|IpExtInCsumErrors' | sed 's/^/      b4 /'
+	ip netns exec $P-r nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpForwDatagrams|IpOutNoRoutes' | sed 's/^/      router /'
+	ip netns exec $P-b4 nft list ruleset 2>/dev/null | sed 's/^/      b4 nft /'
+fi
 check "admin unassign far b1: b1's tunnel goes" "on $new $bin admin unassign far b1 >/dev/null && within 10 eval '! ip -n $P-b1 link show thelbt0 >/dev/null 2>&1'"
 check "admin service remove far: b4's tunnel, clamp and VIP go" "on $new $bin admin service remove far >/dev/null && within 10 eval '! ip -n $P-b4 link show thelbt0 >/dev/null 2>&1 && ! nft_on b4 >/dev/null && ! ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/\"'"
 stop b4 HUP
