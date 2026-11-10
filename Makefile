@@ -22,7 +22,7 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build check tools fmt-check vet test lint vuln e2e lab lab-down remote-sync remote-check remote-e2e clean
+.PHONY: build check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
 
 build:
 	@for arch in amd64 arm64; do \
@@ -67,6 +67,15 @@ e2e:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
 	@sudo -n test/e2e.sh bin/e2e/thelb
 
+# scale: N services - each its own VIP, three backends - on three directors,
+# and what that costs (N=1000 by default).
+N ?= 1000
+# PROFILE=1: a build with -tags profile, and the leader's CPU profile at rest.
+scale:
+	@CGO_ENABLED=0 $(GO) build -trimpath $(if $(PROFILE),-tags profile) -ldflags "$(LDFLAGS)" -o bin/scale/thelb ./cmd/thelb
+	@sudo -n $(if $(PROFILE),PROFILE=$(CURDIR)/bin/scale/leader.cpu) test/scale.sh bin/scale/thelb $(N)
+	@$(if $(PROFILE),$(GO) tool pprof -top -nodecount=35 bin/scale/thelb bin/scale/leader.cpu 2>/dev/null | head -45)
+
 lab:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb
 	@sudo test/lab.sh up bin/thelb
@@ -83,6 +92,9 @@ remote-check: remote-sync
 
 remote-e2e: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e COMMIT=$(COMMIT)'
+
+remote-scale: remote-sync
+	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make scale N=$(N) PROFILE=$(PROFILE) COMMIT=$(COMMIT)'
 
 clean:
 	rm -rf bin

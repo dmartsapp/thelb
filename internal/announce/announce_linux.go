@@ -77,73 +77,78 @@ func Announce(index int, mac net.HardwareAddr, vip netip.Addr) error {
 // answer can be lost, and "no one has it" decides things. It returns the MAC
 // address of a host that has vip, or "" if none answered.
 func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Duration) (string, error) {
-	vip = vip.Unmap()
-	deadline := time.Now().Add(wait)
-	if vip.Is4() {
-		fd, err := arpSocket(index)
-		if err != nil {
-			return "", err
+	m, err := ProbeAll(index, mac, src, []netip.Addr{vip}, wait)
+	return m[vip.Unmap()], err
+}
+
+// ProbeAll asks the link who has each of vips at once, as Probe does one: every
+// question sent, then the answers read for up to wait - asking again, a third
+// of the way through, for those not answered yet. It returns the MAC address
+// that answered for each VIP answered for; it returns early once every one has
+// been.
+func ProbeAll(index int, mac net.HardwareAddr, src netip.Addr, vips []netip.Addr, wait time.Duration) (map[netip.Addr]string, error) {
+	out := map[netip.Addr]string{}
+	var v4, v6 []netip.Addr
+	for _, v := range vips {
+		if v = v.Unmap(); v.Is4() {
+			v4 = append(v4, v)
+		} else {
+			v6 = append(v6, v)
 		}
-		defer func() { _ = syscall.Close(fd) }()
-		ask := func() error { return sendARP(fd, index, 1, mac, netip.IPv4Unspecified(), make([]byte, 6), vip) }
-		if err := ask(); err != nil {
-			return "", err
-		}
-		again := time.Now().Add(wait / 3)
-		buf := make([]byte, 1500)
-		for time.Now().Before(deadline) {
-			if !again.IsZero() && time.Now().After(again) {
-				again = time.Time{}
-				if err := ask(); err != nil {
-					return "", err
-				}
-			}
-			n, _, err := syscall.Recvfrom(fd, buf, 0)
-			if err != nil {
-				if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
-					continue
-				}
-				return "", fmt.Errorf("reading ARP: %w", err)
-			}
-			if n < arpLen || binary.BigEndian.Uint16(buf[2:4]) != 0x0800 || buf[4] != 6 || buf[5] != 4 {
-				continue
-			}
-			sha := net.HardwareAddr(buf[8:14])
-			spa, _ := netip.AddrFromSlice(buf[14:18])
-			if spa == vip && sha.String() != mac.String() {
-				return sha.String(), nil
-			}
-		}
-		return "", nil
 	}
-	fd, err := icmp6Socket(index, src)
+	deadline := time.Now().Add(wait)
+	if len(v4) > 0 {
+		if err := probeARP(index, mac, v4, deadline, wait, out); err != nil {
+			return out, err
+		}
+	}
+	if len(v6) > 0 {
+		if err := probeNS(index, mac, src, v6, deadline, wait, out); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// unanswered is the VIPs of want that out has no answer for.
+func unanswered(want []netip.Addr, out map[netip.Addr]string) []netip.Addr {
+	var left []netip.Addr
+	for _, v := range want {
+		if _, ok := out[v]; !ok {
+			left = append(left, v)
+		}
+	}
+	return left
+}
+
+func probeARP(index int, mac net.HardwareAddr, vips []netip.Addr, deadline time.Time, wait time.Duration, out map[netip.Addr]string) error {
+	fd, err := arpSocket(index)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer func() { _ = syscall.Close(fd) }()
-	msg := make([]byte, 24, 32)
-	msg[0] = icmpNS
-	copy(msg[8:24], vip.AsSlice())
-	msg = append(msg, optSLLA, 1)
-	msg = append(msg, mac...)
-	v := vip.As16()
-	solicited := [16]byte{0xff, 0x02, 10: 0, 11: 0x01, 12: 0xff, 13: v[13], 14: v[14], 15: v[15]}
-	ask := func() error {
-		if err := syscall.Sendto(fd, msg, 0, &syscall.SockaddrInet6{Addr: solicited, ZoneId: uint32(index)}); err != nil {
-			return fmt.Errorf("sending a neighbor solicitation: %w", err)
+	want := map[netip.Addr]bool{}
+	for _, v := range vips {
+		want[v] = true
+	}
+	ask := func(vs []netip.Addr) error {
+		for _, v := range vs {
+			if err := sendARP(fd, index, 1, mac, netip.IPv4Unspecified(), make([]byte, 6), v); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
-	if err := ask(); err != nil {
-		return "", err
+	if err := ask(vips); err != nil {
+		return err
 	}
 	again := time.Now().Add(wait / 3)
 	buf := make([]byte, 1500)
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && len(unanswered(vips, out)) > 0 {
 		if !again.IsZero() && time.Now().After(again) {
 			again = time.Time{}
-			if err := ask(); err != nil {
-				return "", err
+			if err := ask(unanswered(vips, out)); err != nil {
+				return err
 			}
 		}
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
@@ -151,13 +156,71 @@ func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Durat
 			if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
 				continue
 			}
-			return "", fmt.Errorf("reading ICMPv6: %w", err)
+			return fmt.Errorf("reading ARP: %w", err)
+		}
+		if n < arpLen || binary.BigEndian.Uint16(buf[2:4]) != 0x0800 || buf[4] != 6 || buf[5] != 4 {
+			continue
+		}
+		sha := net.HardwareAddr(buf[8:14])
+		spa, _ := netip.AddrFromSlice(buf[14:18])
+		if want[spa] && sha.String() != mac.String() {
+			if _, ok := out[spa]; !ok {
+				out[spa] = sha.String()
+			}
+		}
+	}
+	return nil
+}
+
+func probeNS(index int, mac net.HardwareAddr, src netip.Addr, vips []netip.Addr, deadline time.Time, wait time.Duration, out map[netip.Addr]string) error {
+	fd, err := icmp6Socket(index, src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	want := map[netip.Addr]bool{}
+	for _, v := range vips {
+		want[v] = true
+	}
+	ask := func(vs []netip.Addr) error {
+		for _, vip := range vs {
+			msg := make([]byte, 24, 32)
+			msg[0] = icmpNS
+			copy(msg[8:24], vip.AsSlice())
+			msg = append(msg, optSLLA, 1)
+			msg = append(msg, mac...)
+			v := vip.As16()
+			solicited := [16]byte{0xff, 0x02, 10: 0, 11: 0x01, 12: 0xff, 13: v[13], 14: v[14], 15: v[15]}
+			if err := sendto(fd, msg, &syscall.SockaddrInet6{Addr: solicited, ZoneId: uint32(index)}, "sending a neighbor solicitation"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := ask(vips); err != nil {
+		return err
+	}
+	again := time.Now().Add(wait / 3)
+	buf := make([]byte, 1500)
+	for time.Now().Before(deadline) && len(unanswered(vips, out)) > 0 {
+		if !again.IsZero() && time.Now().After(again) {
+			again = time.Time{}
+			if err := ask(unanswered(vips, out)); err != nil {
+				return err
+			}
+		}
+		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
+				continue
+			}
+			return fmt.Errorf("reading ICMPv6: %w", err)
 		}
 		if n < 24 || buf[0] != icmpNA {
 			continue
 		}
 		target, _ := netip.AddrFromSlice(buf[8:24])
-		if target != vip {
+		if !want[target] {
 			continue
 		}
 		who := "unknown"
@@ -167,10 +230,12 @@ func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Durat
 			}
 		}
 		if who != mac.String() {
-			return who, nil
+			if _, ok := out[target]; !ok {
+				out[target] = who
+			}
 		}
 	}
-	return "", nil
+	return nil
 }
 
 func arpSocket(index int) (int, error) {
@@ -199,10 +264,22 @@ func sendARP(fd, index int, op uint16, sha net.HardwareAddr, spa netip.Addr, tha
 	copy(p[24:28], tpa.AsSlice())
 	to := &syscall.SockaddrLinklayer{Protocol: htons(ethPARP), Ifindex: index, Halen: 6}
 	copy(to.Addr[:], broadcast)
-	if err := syscall.Sendto(fd, p, 0, to); err != nil {
-		return fmt.Errorf("sending ARP: %w", err)
+	return sendto(fd, p, to, "sending ARP")
+}
+
+// sendto sends, waiting a little while the interface's queue is full: a probe
+// of thousands of VIPs sends as many packets at once.
+func sendto(fd int, p []byte, to syscall.Sockaddr, what string) error {
+	for i := 0; ; i++ {
+		err := syscall.Sendto(fd, p, 0, to)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.ENOBUFS) && !errors.Is(err, syscall.EAGAIN) || i == 100 {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	return nil
 }
 
 // icmp6Socket is a raw ICMPv6 socket sending from src on the interface, with

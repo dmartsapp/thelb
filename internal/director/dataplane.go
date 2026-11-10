@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/netip"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -33,6 +32,9 @@ type Dataplane interface {
 	Clear()
 	// Probe asks the network who has addr: a MAC address, or "".
 	Probe(ctx context.Context, addr netip.Addr) (string, error)
+	// ProbeAll asks the network, on each VIP's interface, who has it - all at
+	// once: a MAC address for each VIP another machine answers for.
+	ProbeAll(ctx context.Context, vips []PlanVIP) (map[netip.Addr]string, error)
 	// Leftovers removes the plan's IPVS services and pinned backends where the
 	// kernel has them and this data plane did not add them: what a crash left,
 	// on a director that does not lead.
@@ -110,6 +112,9 @@ type Plan struct {
 	// pool's address is theLB's, though the cluster no longer has it - a service
 	// removed while this director was down.
 	Pools []cluster.Pool
+	// Lease is how long the kernel keeps a service VIP after its last renewal:
+	// the cluster's VIP lease.
+	Lease time.Duration
 }
 
 // PlanVIP is a service VIP, on its pool's interface.
@@ -148,7 +153,7 @@ var (
 type backendLive struct {
 	at      time.Time
 	checks  map[string]bool
-	holding []string
+	holding map[string]bool // the VIPs it holds: a set, looked up for every assignment
 	leaving bool
 }
 
@@ -171,9 +176,16 @@ func (p *prober) healthy() bool {
 type plane struct {
 	s       *session
 	mu      sync.Mutex
-	probers map[string]*prober // by assignment key
+	probers map[string]*prober // by what it checks - its spec and target: one for every assignment of that offer
+	checkOf map[string]string  // by assignment key: its prober's key
 	weights map[string]int     // by assignment key: what IPVS has
 	since   time.Time          // leadership began: beats before it are unknown
+
+	held      map[netip.Addr]bool      // the service VIPs the kernel holds, as applied
+	freeSince map[netip.Addr]time.Time // a VIP to take: when a look first found no machine answering for it
+	answered  map[netip.Addr]time.Time // a VIP to take: since when another machine answers for it
+	said      map[netip.Addr]string    // the last warning about a VIP to take
+	probeErr  string
 }
 
 func (s *session) dp() Dataplane { return s.n.plane }
@@ -181,7 +193,8 @@ func (s *session) dp() Dataplane { return s.n.plane }
 // serve runs the data plane while this director leads: it holds the service
 // VIPs, programs IPVS, checks the backends, and writes their health.
 func (s *session) serve(ctx context.Context) {
-	p := &plane{s: s, probers: map[string]*prober{}, weights: map[string]int{}, since: time.Now()}
+	p := &plane{s: s, probers: map[string]*prober{}, checkOf: map[string]string{}, weights: map[string]int{}, since: time.Now(),
+		held: map[netip.Addr]bool{}, freeSince: map[netip.Addr]time.Time{}, answered: map[netip.Addr]time.Time{}, said: map[netip.Addr]string{}}
 	s.mu.Lock()
 	s.plane = p
 	s.mu.Unlock()
@@ -198,6 +211,7 @@ func (s *session) serve(ctx context.Context) {
 	}()
 	defer s.n.alive.Done("data plane")
 	var lastErr, repairErr string
+	var slowSaid time.Time
 	repaired := time.Now()
 	s.syncDaemons(false) // the master too, now that it leads
 	defer func() {
@@ -225,7 +239,13 @@ func (s *session) serve(ctx context.Context) {
 				}
 			}
 		}
-		if err := p.step(ctx); err != nil {
+		began := time.Now()
+		err := p.step(ctx)
+		if took := time.Since(began); took > 2*time.Second && time.Since(slowSaid) > time.Minute {
+			slowSaid = time.Now()
+			s.log.Warn("building and applying the data plane took longer than it should", "took", took.Round(time.Millisecond))
+		}
+		if err != nil {
 			if err.Error() != lastErr {
 				s.log.Error("programming the data plane failed", "error", err)
 			}
@@ -291,21 +311,30 @@ func (p *plane) step(ctx context.Context) error {
 	// Each service's place in plan.Services - an index, not a pointer: the
 	// slice moves as it grows.
 	byKey := map[string]int{}
+	// Each pool's interface, found once: finding one reads every address.
+	ifcOf := map[string]string{}
 	for _, v := range services {
 		vip, err := netip.ParseAddr(v.VIP)
 		if err != nil {
 			continue
 		}
 		pool := pools[v.Pool]
-		first, _ := netip.ParseAddr(pool.First)
 		if !seenVIP[vip] {
 			seenVIP[vip] = true
-			ifc, err := s.n.local(first, pool.Interface)
-			if err != nil {
-				s.log.Warn("this director cannot hold a pool's VIPs", "pool", pool.Name, "error", err)
+			ifname, ok := ifcOf[pool.Name]
+			if !ok {
+				first, _ := netip.ParseAddr(pool.First)
+				if ifc, err := s.n.local(first, pool.Interface); err != nil {
+					s.log.Warn("this director cannot hold a pool's VIPs", "pool", pool.Name, "error", err)
+				} else {
+					ifname = ifc.Interface
+				}
+				ifcOf[pool.Name] = ifname
+			}
+			if ifname == "" {
 				continue
 			}
-			vips = append(vips, PlanVIP{Addr: vip, Interface: ifc.Interface})
+			vips = append(vips, PlanVIP{Addr: vip, Interface: ifname})
 		}
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		plan.Services = append(plan.Services, PlanService{Service: ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port), Scheduler: v.Scheduler}})
@@ -313,6 +342,7 @@ func (p *plane) step(ctx context.Context) error {
 	}
 
 	wantProbers := map[string]bool{}
+	wantAssigned := map[string]bool{}
 	pinned := map[netip.Addr]bool{}
 	for _, a := range assignments {
 		i, found := byKey[a.Service]
@@ -326,14 +356,20 @@ func (p *plane) step(ctx context.Context) error {
 			continue
 		}
 		key := cluster.AssignmentKey(a.Service, a.Node)
-		wantProbers[key] = true
 		spec := "tcp"
 		for _, o := range offers[a.Node] {
 			if o.Proto == a.Proto && o.Port == a.Port {
 				spec = o.Check
 			}
 		}
-		pr := p.prober(ctx, key, spec, netip.AddrPortFrom(addr, uint16(a.Port)), a.Healthy)
+		// One check of a backend's application, however many services it serves.
+		target := netip.AddrPortFrom(addr, uint16(a.Port))
+		probeKey := spec + " " + target.String()
+		wantProbers[probeKey], wantAssigned[key] = true, true
+		pr := p.prober(ctx, probeKey, spec, target, a.Healthy)
+		p.mu.Lock()
+		p.checkOf[key] = probeKey
+		p.mu.Unlock()
 		ready := p.ready(a, n, ps.Addr, checkIns, beats, pr)
 		w := 0
 		if ready {
@@ -366,21 +402,116 @@ func (p *plane) step(ctx context.Context) error {
 			}
 		}
 	}
+	var serve []PlanVIP
 	for _, v := range vips {
 		if serving[v.Addr] {
-			plan.VIPs = append(plan.VIPs, v)
+			serve = append(serve, v)
 		}
 	}
+	plan.VIPs = p.claim(ctx, serve)
+	plan.Lease = s.vipLease()
 	p.mu.Lock()
 	for key, pr := range p.probers {
 		if !wantProbers[key] {
 			pr.stop()
 			delete(p.probers, key)
+		}
+	}
+	for key := range p.weights {
+		if !wantAssigned[key] {
 			delete(p.weights, key)
+			delete(p.checkOf, key)
 		}
 	}
 	p.mu.Unlock()
-	return s.dp().Apply(plan)
+	err := s.dp().Apply(plan)
+	held := map[netip.Addr]bool{}
+	for _, v := range plan.VIPs {
+		if err == nil || p.held[v.Addr] {
+			held[v.Addr] = true
+		}
+	}
+	p.held = held
+	return err
+}
+
+// claim is the service VIPs of want this leader may hold: those it holds
+// already, and each other one once it is no more - two looks, a second or more
+// apart, found no machine answering for it. A leader never takes a VIP another
+// machine still answers for: a leader killed leaves its VIPs on its interface
+// - and its IPVS forwarding to the backends - until their lease lapses.
+func (p *plane) claim(ctx context.Context, want []PlanVIP) []PlanVIP {
+	s := p.s
+	var out, pending []PlanVIP
+	wanted := map[netip.Addr]bool{}
+	for _, v := range want {
+		wanted[v.Addr] = true
+		if p.held[v.Addr] {
+			out = append(out, v)
+		} else {
+			pending = append(pending, v)
+		}
+	}
+	for a := range p.freeSince {
+		if !wanted[a] || p.held[a] {
+			delete(p.freeSince, a)
+		}
+	}
+	for a := range p.answered {
+		if !wanted[a] || p.held[a] {
+			delete(p.answered, a)
+			delete(p.said, a)
+		}
+	}
+	if len(pending) == 0 {
+		return out
+	}
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	answers, err := s.dp().ProbeAll(pctx, pending)
+	cancel()
+	if err != nil {
+		if err.Error() != p.probeErr {
+			s.log.Warn("asking who has the service VIPs to take failed: they wait", "error", err)
+		}
+		p.probeErr = err.Error()
+		return out
+	}
+	p.probeErr = ""
+	now := time.Now()
+	lease := s.vipLease()
+	for _, v := range pending {
+		if who := answers[v.Addr]; who != "" {
+			delete(p.freeSince, v.Addr)
+			since, ok := p.answered[v.Addr]
+			if !ok {
+				since = now
+				p.answered[v.Addr] = now
+			}
+			why := fmt.Sprintf("%s still answers for it: this leader takes it once it is no more - within the %s lease, if a theLB that stopped left it", who, lease)
+			if now.Sub(since) > lease+leaseSlack {
+				why = fmt.Sprintf("%s still answers for it, past the %s lease: set there by hand, or by a theLB alive - remove it there (ip address del)", who, lease)
+			}
+			if p.said[v.Addr] != why {
+				p.said[v.Addr] = why
+				s.log.Warn("another machine answers for a service VIP: this leader waits", "vip", v.Addr, "reason", why)
+			}
+			continue
+		}
+		delete(p.answered, v.Addr)
+		first, ok := p.freeSince[v.Addr]
+		switch {
+		case !ok:
+			p.freeSince[v.Addr] = now
+		case now.Sub(first) >= time.Second:
+			delete(p.freeSince, v.Addr)
+			if p.said[v.Addr] != "" {
+				s.log.OK("the service VIP is no more: taking it", "vip", v.Addr)
+				delete(p.said, v.Addr)
+			}
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // prober is the leader's check of an assignment, started on first need; a new
@@ -437,7 +568,7 @@ func (p *plane) why(a cluster.Assignment, n cluster.Node, vip netip.Addr, checkI
 		if !b.checks[fmt.Sprintf("%s/%d", a.Proto, a.Port)] {
 			return "its own check fails"
 		}
-		if !slices.Contains(b.holding, vip.String()) {
+		if !b.holding[vip.String()] {
 			return "it does not hold the VIP yet"
 		}
 	} else if !a.Healthy {
@@ -507,7 +638,7 @@ func (s *session) liveNow() ([]api.CheckIn, []api.Live, []api.Own) {
 			}
 		}
 		p.mu.Lock()
-		if pr := p.probers[key]; pr != nil {
+		if pr := p.probers[p.checkOf[key]]; pr != nil {
 			pr.mu.Lock()
 			if pr.state.Last != nil || pr.state.Healthy {
 				l.Director = pr.state.Word()
@@ -571,7 +702,11 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 		now := time.Now()
 		s.mu.Lock()
 		s.checkIns[name] = checkIn{Name: name, RaftID: b.Member, At: now, Version: b.Version}
-		s.backends[name] = backendLive{at: now, checks: b.Checks, holding: b.Holding, leaving: b.Leaving}
+		holding := make(map[string]bool, len(b.Holding))
+		for _, v := range b.Holding {
+			holding[v] = true
+		}
+		s.backends[name] = backendLive{at: now, checks: b.Checks, holding: holding, leaving: b.Leaving}
 		s.mu.Unlock()
 		if b.Leaving {
 			s.log.OK("backend stopping: draining it", "node", name)
@@ -606,6 +741,9 @@ func (nothing) Clear()                                            {}
 func (nothing) Probe(context.Context, netip.Addr) (string, error) { return "", nil }
 func (nothing) Leftovers(Plan) error                              { return nil }
 func (nothing) Sync(SyncState) error                              { return nil }
+func (nothing) ProbeAll(context.Context, []PlanVIP) (map[netip.Addr]string, error) {
+	return nil, nil
+}
 
 // known is what the cluster's state says a holder of the VIPs programs - its
 // services and pinned backends, whatever their health - for Leftovers.

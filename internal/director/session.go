@@ -377,25 +377,6 @@ func (s *session) lead() {
 	}
 	term := s.r.CurrentTerm()
 	s.n.net.SetLease(s.vipLease())
-	s.mu.Lock()
-	claimed := s.claimed
-	s.claimed = false
-	s.mu.Unlock()
-	if !claimed && !s.waitForVIP() {
-		return
-	}
-	ln, err := s.n.net.Take()
-	if err != nil {
-		s.log.Error("taking the control VIP failed", "vip", s.n.cfg.ControlVIP, "error", err)
-		if s.voters() > 1 {
-			_ = s.r.LeadershipTransfer().Error()
-		}
-		return
-	}
-	if s.ctx.Err() != nil { // the session is closing
-		s.n.net.Release()
-		return
-	}
 	ctx, stop := context.WithCancel(s.ctx)
 	now := time.Now()
 	// Every member counts as live for a moment: a new leader has had no
@@ -413,7 +394,34 @@ func (s *session) lead() {
 	s.leadCtx, s.leadStop, s.vipSince, s.served = ctx, stop, now, served
 	s.checkIns = fresh
 	s.backends = map[string]backendLive{}
+	claimed := s.claimed
+	s.claimed = false
 	s.mu.Unlock()
+	// The data plane at once, beside the wait for the control VIP: it takes
+	// each service VIP once that is no more, so the two waits - after a leader
+	// killed, until their leases lapse - run together.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer close(served)
+		s.serve(ctx)
+	}()
+	if !claimed && !s.waitForVIP() {
+		return // leadership lost, or the session closing: unlead stops the data plane
+	}
+	ln, err := s.n.net.Take()
+	if err != nil {
+		s.log.Error("taking the control VIP failed", "vip", s.n.cfg.ControlVIP, "error", err)
+		s.unlead("the control VIP could not be taken")
+		if s.voters() > 1 {
+			_ = s.r.LeadershipTransfer().Error()
+		}
+		return
+	}
+	if s.ctx.Err() != nil { // the session is closing
+		s.n.net.Release()
+		return
+	}
 	go s.mux.Serve(ln, s.id.ServerConfig([]string{"director", "backend"}, wire.ALPNJoin, wire.ALPNAPI))
 
 	if created {
@@ -434,7 +442,7 @@ func (s *session) lead() {
 	if evict != "" {
 		s.evictLeftBehind(evict)
 	}
-	s.wg.Add(3)
+	s.wg.Add(2)
 	go func() {
 		defer s.wg.Done()
 		s.sweep(ctx)
@@ -442,11 +450,6 @@ func (s *session) lead() {
 	go func() {
 		defer s.wg.Done()
 		s.guard(ctx)
-	}()
-	go func() {
-		defer s.wg.Done()
-		defer close(served)
-		s.serve(ctx)
 	}()
 }
 

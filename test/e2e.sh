@@ -259,18 +259,37 @@ reach() { ip netns exec $P-c timeout 3 bash -c "exec 3<>/dev/tcp/$1/$PORT" 2>/de
 copy_secrets() {
 	cp -p "$tmp/d1/director.secret" "$tmp/d1/backend.secret" "$tmp/$1/"
 }
-# never_both <file> <seconds>: in the background, a line in file whenever d1 and
-# d2 hold the control VIP at once - a director must never take a VIP another
-# machine still answers for.
+# never_both <file> <seconds> [vip]: in the background, a line in file whenever
+# two directors hold the VIP - the control VIP unless another is named - at
+# once: a director must never take a VIP another machine still answers for.
 never_both() {
+	local vip=${3:-$VIP4}
 	(
 		end=$((SECONDS + $2))
 		while [ "$SECONDS" -lt "$end" ]; do
-			holds d1 $VIP4 && holds d2 $VIP4 && echo both >>"$1"
+			n=0
+			for d in d1 d2 d3; do holds $d "$vip" && n=$((n + 1)); done
+			[ $n -ge 2 ] && echo "$n hold $vip" >>"$1"
 			sleep 0.1
 		done
 	) &
 }
+# asking <file> <seconds>: in the background, the client asks the web service
+# every 0.2 s, writing "<seconds since start> ok|fail" per request.
+asking() {
+	(
+		start=$(date +%s.%N)
+		end=$((SECONDS + $2))
+		while [ "$SECONDS" -lt "$end" ]; do
+			if ip netns exec $P-c curl -s --max-time 1 -o /dev/null "http://$SVC/"; then r=ok; else r=fail; fi
+			echo "$(echo "$(date +%s.%N) - $start" | bc) $r" >>"$1"
+			sleep 0.2
+		done
+	) &
+}
+# longest_gap <file>: the longest time between two answered requests, in seconds.
+longest_gap() { awk '$2 == "ok" { if (last != "" && $1 - last > gap) gap = $1 - last; last = $1 } END { printf "%.1f\n", gap }' "$1"; }
+gap_under() { awk -v g="$(longest_gap "$1")" -v m="$2" 'BEGIN { exit !(g < m) }'; }
 
 echo "== bootstrap"
 start d1 "$tmp/d1.log" --vip $VIP4 --bootstrap
@@ -708,6 +727,7 @@ check "another director takes the service VIP" "within 20 held_not_by $SVC d1"
 new=$(holder $SVC)
 check "and programs IPVS the same way" "within 20 eval 'weight_is $new b1 1 && weight_is $new b2 1 && weight_is $new b3 1'"
 check "the client's neighbour entry follows, to $new" "within 5 neigh_is $SVC ${mac[$new]}"
+check "d1's service VIP, its lease no longer renewed, is removed by d1's kernel" "within 10 eval '! holds d1 $SVC'"
 check "the client is served by all three again" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
 check "the new leader, $new, runs the sync master now" "within 10 logged $tmp/$new.restore.log 'OK IPVS connection sync started role=master'"
 check "the six connections carried on through the failover, each to its backend" "sleep 3; touch $tmp/conns.stop; wait $conns; grep -q '^ok 6 connections' $tmp/conns.out"
@@ -718,8 +738,7 @@ kill $echos 2>/dev/null
 wait $echos 2>/dev/null
 link_up d1
 start d1 "$tmp/d1.svc2.log" --vip $VIP4 --bootstrap
-check "d1, back, removes the service VIP its crash left" "within 20 logged $tmp/d1.svc2.log 'WARN removed a VIP an earlier run left vip=$SVC'"
-check "and the IPVS service" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
+check "d1, back, finds the service VIP its crash left gone - its lease lapsed - and removes the IPVS service" "! logged $tmp/d1.svc2.log 'removed a VIP an earlier run left vip=$SVC' && within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
 check "so d1's kernel holds none of it" "! holds d1 $SVC && ! ipvs_on d1 | grep -q Route"
 check "and stops the sync master its crash left; keeps the backup" "within 20 logged $tmp/d1.svc2.log 'WARN removed an IPVS connection sync daemon an earlier run left role=master' && logged $tmp/d1.svc2.log 'role=backup'"
 
@@ -796,6 +815,56 @@ stop b4 HUP
 code=$?
 check "b4 stops cleanly on SIGHUP, as when its terminal closes" "[ $code = 0 ] && logged $tmp/b4.log 'OK stopped'"
 app b4 down
+
+# A leader killed while its machine stays up: its kernel keeps forwarding -
+# the VIP, IPVS - until the lease lapses; the new leader takes the VIP only
+# then, so it is never on two machines.
+echo "== the leader's theLB is killed, its machine up, while the client asks - its service VIP lapses, then the new leader takes it"
+dead=$(holder $SVC)
+never_both "$tmp/both.svc" 40 $SVC
+asking "$tmp/asking.three" 30
+sleep 3
+stop $dead KILL
+check "$dead's kernel still answers for the service VIP, until its lease lapses" "holds $dead $SVC && within 10 eval '! holds $dead $SVC'"
+check "another director takes it, once it is no more" "within 20 held_not_by $SVC $dead"
+new=$(holder $SVC)
+check "and programs IPVS the same way" "within 20 eval 'weight_is $new b1 1 && weight_is $new b2 1 && weight_is $new b3 1'"
+check "never on two machines at once" "sleep 5; [ ! -s $tmp/both.svc ]"
+check "the client is served again by all three" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+sleep 15
+check "the client's longest wait for an answer, through the failover, under 8 s" "gap_under $tmp/asking.three 8"
+echo "      longest wait: $(longest_gap "$tmp/asking.three") s; $(grep -c ' ok' "$tmp/asking.three") answered, $(grep -c ' fail' "$tmp/asking.three") not"
+start $dead "$tmp/$dead.svc3.log" --vip $VIP4 --bootstrap
+check "$dead starts again, rejoins without approval, and removes the IPVS service its crash left" "within 30 logged $tmp/$dead.svc3.log 'OK director ready' && ! logged $tmp/$dead.svc3.log 'waiting for approval' && within 20 logged $tmp/$dead.svc3.log 'WARN removed an IPVS service an earlier run left service=tcp/$SVC:80'"
+
+# The same with two directors: the takeover - after the lease is waited out -
+# carries the services on, the state replayed.
+echo "== two directors, with the services: the leader's theLB is killed - the other stands alone, and serves"
+lead=$(holder $SVC)
+rest=""
+for n in d1 d2 d3; do [ "$n" != "$lead" ] && rest="$rest $n"; done
+set -- $rest
+gone=$1 other=$2
+glog=$(ls -t $tmp/$gone.*log | head -1)
+stop $gone
+check "$gone stops by plan, out of the vote: two voters left, $lead and $other" "logged $glog 'OK out of the vote'"
+olog=$(ls -t $tmp/$other.*log | head -1)
+never_both "$tmp/both.two" 50 $SVC
+asking "$tmp/asking.two" 45
+sleep 3
+stop $lead KILL
+check "$other waits out the lease, finds $lead gone and the VIPs no more, and stands alone" "within 40 logged $olog 'WARN standing alone: .* node=$lead .*refuses connections'"
+check "it takes the service VIP, and programs IPVS the same way" "within 20 holds $other $SVC && within 20 eval 'weight_is $other b1 1 && weight_is $other b2 1 && weight_is $other b3 1'"
+check "the client is served by all three again" "within 10 eval '[ \"\$(answers 12)\" = \"b1=4 b2=4 b3=4\" ]'"
+sleep 20
+check "never on two machines at once, the control VIP or the service VIP" "[ ! -s $tmp/both.two ]"
+check "the client's longest wait for an answer, through the takeover, under 25 s" "gap_under $tmp/asking.two 25"
+echo "      longest wait: $(longest_gap "$tmp/asking.two") s; $(grep -c ' ok' "$tmp/asking.two") answered, $(grep -c ' fail' "$tmp/asking.two") not"
+start $lead "$tmp/$lead.svc4.log" --vip $VIP4 --bootstrap
+check "$lead, back, waits for approval; approved, it votes" "within 30 logged $tmp/$lead.svc4.log 'OK waiting for approval' && on $other $bin admin approve $lead >/dev/null && within 20 logged $tmp/$lead.svc4.log 'OK director ready'"
+start $gone "$tmp/$gone.svc4.log" --vip $VIP4
+check "$gone starts again, and rejoins without approval" "within 30 logged $tmp/$gone.svc4.log 'OK director ready' && ! logged $tmp/$gone.svc4.log 'waiting for approval'"
+new=$other
 
 echo "== a backend stops, one is removed, the service is taken down"
 stop b3

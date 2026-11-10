@@ -212,36 +212,113 @@ func AddAddr(index int, p netip.Prefix, label string, proto uint8, flags uint32)
 // called again first - a lease, renewed. Otherwise as AddAddr. IPv4 addresses
 // have had lifetimes since Linux 3.9.
 func PutAddr(index int, p netip.Prefix, label string, proto uint8, flags uint32, lifetime time.Duration) error {
+	body, err := putBody(Lease{Index: index, Prefix: p, Label: label, Proto: proto, Flags: flags}, lifetime)
+	if err != nil {
+		return err
+	}
+	_, err = do(syscall.RTM_NEWADDR, putFlags, body)
+	return err
+}
+
+// Lease is an address PutAddrs puts, with its label, protocol and flags.
+type Lease struct {
+	Index  int
+	Prefix netip.Prefix
+	Label  string
+	Proto  uint8
+	Flags  uint32
+}
+
+const putFlags = syscall.NLM_F_ACK | syscall.NLM_F_CREATE | syscall.NLM_F_REPLACE
+
+func putBody(l Lease, lifetime time.Duration) ([]byte, error) {
 	secs := uint32(lifetime / time.Second)
 	if secs == 0 {
-		return errors.New("netlink: an address's lifetime is a second or more")
+		return nil, errors.New("netlink: an address's lifetime is a second or more")
 	}
-	a := p.Addr().Unmap()
-	b := ifaddrmsg(netip.PrefixFrom(a, p.Bits()), index)
+	a := l.Prefix.Addr().Unmap()
+	b := ifaddrmsg(netip.PrefixFrom(a, l.Prefix.Bits()), l.Index)
 	if a.Is4() {
 		b = appendAttr(b, syscall.IFA_LOCAL, a.AsSlice())
-		if label != "" {
-			b = appendAttr(b, syscall.IFA_LABEL, append([]byte(label), 0))
+		if l.Label != "" {
+			b = appendAttr(b, syscall.IFA_LABEL, append([]byte(l.Label), 0))
 		}
 	}
 	b = appendAttr(b, syscall.IFA_ADDRESS, a.AsSlice())
-	if flags != 0 {
+	if l.Flags != 0 {
 		f := make([]byte, 4)
-		native.PutUint32(f, flags)
+		native.PutUint32(f, l.Flags)
 		b = appendAttr(b, ifaFlags, f)
-		b[2] = uint8(flags)
+		b[2] = uint8(l.Flags)
 	}
-	if proto != 0 {
-		b = appendAttr(b, ifaProto, []byte{proto})
+	if l.Proto != 0 {
+		b = appendAttr(b, ifaProto, []byte{l.Proto})
 	}
 	// struct ifa_cacheinfo: preferred and valid lifetimes, in seconds; the
 	// kernel fills in the timestamps.
 	ci := make([]byte, 16)
 	native.PutUint32(ci[0:4], secs)
 	native.PutUint32(ci[4:8], secs)
-	b = appendAttr(b, syscall.IFA_CACHEINFO, ci)
-	_, err := do(syscall.RTM_NEWADDR, syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_REPLACE, b)
-	return err
+	return appendAttr(b, syscall.IFA_CACHEINFO, ci), nil
+}
+
+// PutAddrs puts many addresses, each as PutAddr does, on one socket - a window
+// of requests sent, then their answers read: a leader renewing thousands of
+// leases every few seconds opens no socket for each. It returns the error of
+// each address that failed.
+func PutAddrs(leases []Lease, lifetime time.Duration) (map[netip.Addr]error, error) {
+	failed := map[netip.Addr]error{}
+	if len(leases) == 0 {
+		return failed, nil
+	}
+	fd, err := socket(syscall.NETLINK_ROUTE)
+	if err != nil {
+		return failed, err
+	}
+	defer func() { _ = syscall.Close(fd) }()
+	buf := make([]byte, 1<<16)
+	const window = 32
+	for start := 0; start < len(leases); start += window {
+		pending := map[uint32]netip.Addr{}
+		for _, l := range leases[start:min(start+window, len(leases))] {
+			body, err := putBody(l, lifetime)
+			if err != nil {
+				return failed, err
+			}
+			s := seq.Add(1)
+			msg := make([]byte, syscall.NLMSG_HDRLEN, syscall.NLMSG_HDRLEN+len(body))
+			msg = append(msg, body...)
+			native.PutUint32(msg[0:4], uint32(len(msg)))
+			native.PutUint16(msg[4:6], syscall.RTM_NEWADDR)
+			native.PutUint16(msg[6:8], putFlags|syscall.NLM_F_REQUEST)
+			native.PutUint32(msg[8:12], s)
+			if err := syscall.Sendto(fd, msg, 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+				return failed, fmt.Errorf("netlink: %w", err)
+			}
+			pending[s] = l.Prefix.Addr()
+		}
+		for len(pending) > 0 {
+			n, _, err := syscall.Recvfrom(fd, buf, 0)
+			if err != nil {
+				return failed, fmt.Errorf("netlink: %w", err)
+			}
+			msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+			if err != nil {
+				return failed, fmt.Errorf("netlink: %w", err)
+			}
+			for _, m := range msgs {
+				a, ok := pending[m.Header.Seq]
+				if !ok || m.Header.Type != syscall.NLMSG_ERROR || len(m.Data) < 4 {
+					continue
+				}
+				if e := int32(native.Uint32(m.Data[0:4])); e != 0 {
+					failed[a] = syscall.Errno(-e)
+				}
+				delete(pending, m.Header.Seq)
+			}
+		}
+	}
+	return failed, nil
 }
 
 // DelAddr removes an address.

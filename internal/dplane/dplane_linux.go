@@ -72,6 +72,13 @@ type Plane struct {
 	lastFull time.Time            // when the kernel was last compared whole
 	dirty    bool                 // the last apply failed: compare whole next time
 	fulls    int                  // whole comparisons made, for tests
+	lease    time.Duration        // the service VIPs' lease, as the plan says
+	renewed  time.Time            // when the service VIPs' leases were last renewed
+	renewErr string               // the last renewal's error, said once
+	slowSaid time.Time            // when a slow renewal was last said
+
+	statsMu   sync.Mutex
+	statsConn *ipvs.Conn // Stats's own
 }
 
 // fullEvery is how often Apply compares the whole kernel with the plan.
@@ -79,7 +86,24 @@ var fullEvery = 10 * time.Second
 
 // New is an empty data plane.
 func New(log *logx.Logger) *Plane {
-	return &Plane{log: log, vips: map[netip.Addr]heldVIP{}, services: map[string]ipvs.Service{}, pins: map[netip.Addr]pin{}, syncs: map[bool]ipvs.Daemon{}}
+	p := &Plane{log: log, vips: map[netip.Addr]heldVIP{}, services: map[string]ipvs.Service{}, pins: map[netip.Addr]pin{}, syncs: map[bool]ipvs.Daemon{}, lease: ctlnet.DefaultLease}
+	go p.keep()
+	return p
+}
+
+// keep renews the service VIPs' leases every third of the lease, in a loop of
+// its own: a leader slow to build its plan - thousands of services - must not
+// let its VIPs lapse.
+func (p *Plane) keep() {
+	for {
+		p.mu.Lock()
+		every := p.lease / 3
+		p.mu.Unlock()
+		time.Sleep(every)
+		p.mu.Lock()
+		p.renew()
+		p.mu.Unlock()
+	}
 }
 
 func label(ifname string, a netip.Addr) string {
@@ -94,6 +118,10 @@ func label(ifname string, a netip.Addr) string {
 func (p *Plane) Apply(plan director.Plan) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lease = plan.Lease
+	if p.lease < time.Second {
+		p.lease = ctlnet.DefaultLease
+	}
 	full := p.dirty || p.last == nil || time.Since(p.lastFull) >= fullEvery
 	if !full && samePlan(*p.last, plan) {
 		return nil
@@ -370,11 +398,7 @@ func (p *Plane) apply(plan director.Plan, full bool) error {
 			errs = append(errs, fmt.Errorf("the VIP %s's interface %s: %w", a, ifname, err))
 			continue
 		}
-		var flags uint32
-		if a.Is6() {
-			flags = netlink.IFANoDAD
-		}
-		if err := netlink.AddAddr(ifc.Index, netip.PrefixFrom(a, a.BitLen()), label(ifname, a), ctlnet.Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
+		if err := p.put(ifc.Index, ifname, a); err != nil {
 			errs = append(errs, fmt.Errorf("adding the VIP %s to %s: %w", a, ifname, err))
 			continue
 		}
@@ -385,6 +409,117 @@ func (p *Plane) apply(plan director.Plan, full bool) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// put adds a service VIP, or renews it, leased from the kernel: a leader that is
+// killed, or hangs, stops renewing, and its kernel removes the VIP when the
+// lease lapses - nothing is left answering for it.
+func (p *Plane) put(index int, ifname string, a netip.Addr) error {
+	var flags uint32
+	if a.Is6() {
+		flags = netlink.IFANoDAD
+	}
+	return netlink.PutAddr(index, netip.PrefixFrom(a, a.BitLen()), label(ifname, a), ctlnet.Proto, flags, p.lease)
+}
+
+// renew renews the lease of every service VIP held, every third of it - and
+// puts back, announced again, one someone removed. p.mu is held.
+func (p *Plane) renew() {
+	start := time.Now()
+	p.renewed = start
+	if len(p.vips) == 0 {
+		return
+	}
+	defer func() {
+		if took := time.Since(start); took > p.lease/3 && time.Since(p.slowSaid) > time.Minute {
+			p.slowSaid = time.Now()
+			p.log.Warn("renewing the service VIPs' leases took more than a third of the lease: they may lapse - lengthen it (thelb admin lease)", "vips", len(p.vips), "took", took.Round(time.Millisecond), "lease", p.lease)
+		}
+	}()
+	type on struct {
+		index int
+		addr  netip.Addr
+	}
+	present := map[on]bool{}
+	addrs, err := netlink.Addrs()
+	if err == nil {
+		for _, x := range addrs {
+			present[on{x.Index, x.Prefix.Addr()}] = true
+		}
+	}
+	var errs []error
+	leases := make([]netlink.Lease, 0, len(p.vips))
+	for a, h := range p.vips {
+		var flags uint32
+		if a.Is6() {
+			flags = netlink.IFANoDAD
+		}
+		leases = append(leases, netlink.Lease{Index: h.index, Prefix: netip.PrefixFrom(a, a.BitLen()), Label: label(h.name, a), Proto: ctlnet.Proto, Flags: flags})
+	}
+	failed, err := netlink.PutAddrs(leases, p.lease)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for a, h := range p.vips {
+		if ferr, ok := failed[a]; ok {
+			errs = append(errs, fmt.Errorf("%s: %w", a, ferr))
+			continue
+		}
+		if err != nil {
+			continue // the batch failed part way: none is known renewed
+		}
+		if addrs != nil && !present[on{h.index, a}] {
+			h.cancel()
+			ifc, ierr := net.InterfaceByIndex(h.index)
+			ctx, cancel := context.WithCancel(context.Background())
+			h.cancel = cancel
+			p.vips[a] = h
+			if ierr == nil {
+				go p.announce(ctx, ifc, a)
+			}
+			p.log.Warn("drift repaired: a service VIP was removed from its interface; adding it again", "vip", a, "interface", h.name)
+		}
+	}
+	msg := ""
+	if err := errors.Join(errs...); err != nil {
+		msg = err.Error()
+	}
+	if msg != "" && msg != p.renewErr {
+		p.log.Error("renewing service VIPs' leases failed: the kernel removes them when their leases lapse", "error", msg)
+	}
+	p.renewErr = msg
+}
+
+// ProbeAll asks the network, on each VIP's interface, who has it - all at
+// once: a MAC address for each VIP another machine answers for.
+func (p *Plane) ProbeAll(ctx context.Context, vips []director.PlanVIP) (map[netip.Addr]string, error) {
+	byIfc := map[string][]netip.Addr{}
+	for _, v := range vips {
+		byIfc[v.Interface] = append(byIfc[v.Interface], v.Addr)
+	}
+	wait := time.Second
+	if d, ok := ctx.Deadline(); ok && time.Until(d) < wait {
+		wait = time.Until(d)
+	}
+	out := map[netip.Addr]string{}
+	for ifname, addrs := range byIfc {
+		ifc, err := net.InterfaceByName(ifname)
+		if err != nil {
+			return out, err
+		}
+		var src netip.Addr
+		if local, err := hostnet.For(addrs[0], ifname); err == nil {
+			src = local.Prefix.Addr()
+		}
+		m, err := announce.ProbeAll(ifc.Index, ifc.HardwareAddr, src, addrs, wait)
+		if err != nil {
+			return out, err
+		}
+		for a, who := range m {
+			out[a] = who
+		}
+	}
+	return out, nil
 }
 
 func method(d ipvs.Dest) string {
@@ -420,15 +555,31 @@ func (p *Plane) dropVIP(a netip.Addr, h heldVIP) {
 }
 
 // Stats are IPVS's counters for theLB's services.
+// It reads them on a connection of its own, without the data plane's lock: a
+// thousand services are a thousand reads, and the data plane - and the VIPs'
+// leases - must not wait for them.
 func (p *Plane) Stats() map[string]ipvs.Stats {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	services := make([]ipvs.Service, 0, len(p.services))
+	for _, s := range p.services {
+		services = append(services, s)
+	}
+	p.mu.Unlock()
 	out := map[string]ipvs.Stats{}
-	if p.conn == nil {
+	if len(services) == 0 {
 		return out
 	}
-	for _, s := range p.services {
-		dests, err := p.conn.Dests(s)
+	p.statsMu.Lock()
+	defer p.statsMu.Unlock()
+	if p.statsConn == nil {
+		c, err := ipvs.Open()
+		if err != nil {
+			return out
+		}
+		p.statsConn = c
+	}
+	for _, s := range services {
+		dests, err := p.statsConn.Dests(s)
 		if err != nil {
 			continue
 		}

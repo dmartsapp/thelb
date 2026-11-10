@@ -143,3 +143,38 @@ func TestRootALeasedAddressLapses(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+// TestRootManyLeasesOnOneSocket: PutAddrs puts a hundred leased addresses - more
+// than one window of requests - each with its lifetime, and says which failed.
+func TestRootManyLeasesOnOneSocket(t *testing.T) {
+	rootns.Enter(t)
+	if err := AddDummy("thelbm"); err != nil {
+		t.Fatal(err)
+	}
+	ifc, _ := net.InterfaceByName("thelbm")
+	var leases []Lease
+	for i := range 100 {
+		leases = append(leases, Lease{Index: ifc.Index, Prefix: netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, 20, byte(i)}), 32), Label: "thelbm:thelb", Proto: 116})
+	}
+	leases = append(leases, Lease{Index: 9999, Prefix: netip.MustParsePrefix("198.18.21.1/32")})
+	failed, err := PutAddrs(leases, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed) != 1 || failed[netip.MustParseAddr("198.18.21.1")] == nil {
+		t.Errorf("failed: %v; want only the address on no interface", failed)
+	}
+	addrs, err := Addrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, a := range addrs {
+		if a.Index == ifc.Index && a.Lifetime > 0 && a.Lifetime <= 30*time.Second {
+			n++
+		}
+	}
+	if n != 100 {
+		t.Errorf("%d leased addresses on thelbm; want 100", n)
+	}
+}
