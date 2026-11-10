@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,7 +173,11 @@ func (fakeNode) Status() status.Status {
 var adminCalls []string
 
 func (fakeNode) Admin(c api.Change) (api.Result, error) {
-	adminCalls = append(adminCalls, c.Op+" "+strings.Join(c.Names, ","))
+	call := c.Op + " " + strings.Join(c.Names, ",")
+	if c.Seconds != 0 {
+		call += strconv.Itoa(c.Seconds) + "s"
+	}
+	adminCalls = append(adminCalls, call)
 	return api.Result{Names: c.Names}, nil
 }
 
@@ -348,11 +353,25 @@ func TestAdminChanges(t *testing.T) {
 		{[]string{"admin", "unassign", "nginx", "web-2"}, "unassign nginx,web-2"},
 		{[]string{"admin", "service", "remove", "nginx"}, "service.remove nginx"},
 		{[]string{"admin", "pool", "remove", "external"}, "pool.remove "},
+		{[]string{"admin", "lease", "10"}, "lease 10s"},
+		{[]string{"admin", "lease", "1m"}, "lease 60s"},
 	} {
 		adminCalls = nil
 		code, _, errOut := as(t, 0, c.args...)
 		if code != 0 || strings.Join(adminCalls, ";") != c.want {
 			t.Errorf("%v: exit %d %s, calls %v", c.args, code, errOut, adminCalls)
+		}
+	}
+}
+
+// TestALeaseIsWholeSecondsInBounds: admin lease takes seconds, or a duration in
+// whole seconds, from 3 s to an hour - and nothing else reaches the director.
+func TestALeaseIsWholeSecondsInBounds(t *testing.T) {
+	withRunningTheLB(t)
+	for _, arg := range []string{"2", "1.5s", "2h", "soon", "0"} {
+		adminCalls = nil
+		if code, _, _ := as(t, 0, "admin", "lease", arg); code != 2 || adminCalls != nil {
+			t.Errorf("admin lease %s: exit %d, calls %v", arg, code, adminCalls)
 		}
 	}
 }
@@ -419,7 +438,7 @@ func TestTheGeneratedCommandsAreCommands(t *testing.T) {
 	withRunningTheLB(t)
 	t0 := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
 	st := &cluster.State{
-		Cluster: &cluster.Info{Name: "prod"},
+		Cluster: &cluster.Info{Name: "prod", Lease: 10},
 		Nodes:   map[string]*cluster.Node{"lb-1": {}, "web-1": {}, "web-2": {}},
 		Pools: map[string]*cluster.Pool{
 			"main": {Name: "main", First: "10.0.0.20", Bits: 24, Count: 10, Default: true},
@@ -439,6 +458,7 @@ func TestTheGeneratedCommandsAreCommands(t *testing.T) {
 	for _, want := range []string{
 		"# cluster prod again, as they were at 2026-11-09T10:00:00Z, on lb-1.",
 		"#   thelb admin approve --match 'web-1|web-2'",
+		"thelb admin lease 10\n",
 		"thelb admin pool add dmz --vip 192.168.50.10/24 --vippool-count 5 --interface eth1\n",
 		"thelb admin pool add main --vip 10.0.0.20/24 --vippool-count 10 --default\n",
 		"thelb admin service add far --pool dmz --vip 192.168.50.10 --proto tcp --port 443 --scheduler mh --method tunnel\n",
@@ -462,7 +482,7 @@ func TestTheGeneratedCommandsAreCommands(t *testing.T) {
 		}
 		ops = append(ops, strings.Fields(adminCalls[0])[0])
 	}
-	if strings.Join(ops, " ") != "pool.add pool.add service.add service.add assign assign" {
+	if strings.Join(ops, " ") != "lease pool.add pool.add service.add service.add assign assign" {
 		t.Errorf("the changes, in order: %v", ops)
 	}
 }

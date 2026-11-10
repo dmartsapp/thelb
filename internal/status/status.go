@@ -37,6 +37,7 @@ type Cluster struct {
 	Leader      string    `json:"leader"`
 	Term        *uint64   `json:"term"`
 	LeaderSince time.Time `json:"leader_since"`
+	Lease       int       `json:"vip_lease_seconds,omitempty"` // the control VIP's lease
 }
 
 // Node is a director or a backend.
@@ -405,9 +406,13 @@ func (s Status) render(name string, now time.Time) string {
 	case "cluster":
 		var rows [][]string
 		if c := s.Cluster; c != nil {
-			rows = append(rows, []string{c.Name, dash(c.ID), stamp(c.Created), dash(c.Leader), term(c.Term), stamp(c.LeaderSince)})
+			lease := "-"
+			if c.Lease > 0 {
+				lease = strconv.Itoa(c.Lease) + "s"
+			}
+			rows = append(rows, []string{c.Name, dash(c.ID), stamp(c.Created), dash(c.Leader), term(c.Term), stamp(c.LeaderSince), lease})
 		}
-		return table.Render([]string{"cluster", "id", "created", "leader", "term", "leader since"}, rows, 4)
+		return table.Render([]string{"cluster", "id", "created", "leader", "term", "leader since", "vip lease"}, rows, 4, 6)
 	case "nodes":
 		rows := make([][]string, 0, len(s.Nodes))
 		for _, n := range s.Nodes {

@@ -66,10 +66,11 @@ type Own struct {
 // Change is an admin change: `thelb admin ...` on a director, done by the
 // leader.
 type Change struct {
-	Op        string         `json:"op"` // approve refuse remove pool.add pool.remove service.add service.remove assign unassign
+	Op        string         `json:"op"` // approve refuse remove pool.add pool.remove service.add service.remove assign unassign lease
 	Names     []string       `json:"names,omitempty"`
 	VIP       string         `json:"vip,omitempty"` // pool.add: the first address and prefix; service.add: an address
 	Count     int            `json:"count,omitempty"`
+	Seconds   int            `json:"seconds,omitempty"` // lease
 	Interface string         `json:"interface,omitempty"`
 	Default   bool           `json:"default,omitempty"`
 	Pool      string         `json:"pool,omitempty"`

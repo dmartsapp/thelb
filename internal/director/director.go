@@ -63,6 +63,9 @@ type Network interface {
 	Release()
 	// Announce announces the control VIP again while this director holds it.
 	Announce()
+	// SetLease sets how long the kernel keeps the control VIP after this
+	// director's last renewal: a theLB killed leaves nothing answering for long.
+	SetLease(time.Duration)
 	// Repair puts the control VIP back, while this director holds it, if
 	// someone removed it: true if it did.
 	Repair() (bool, error)

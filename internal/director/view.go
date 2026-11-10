@@ -38,7 +38,7 @@ func (s *session) status() status.Status {
 		if cs.Cluster == nil {
 			return
 		}
-		c := &status.Cluster{Name: cs.Cluster.Name, ID: cs.Cluster.ID, Created: cs.Cluster.Created, Term: &term}
+		c := &status.Cluster{Name: cs.Cluster.Name, ID: cs.Cluster.ID, Created: cs.Cluster.Created, Term: &term, Lease: int(cs.VIPLease() / time.Second)}
 		if n := cs.NodeByRaftID(string(leaderID)); n != nil {
 			c.Leader = n.Name
 		}

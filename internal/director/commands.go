@@ -41,6 +41,10 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 		fmt.Fprintf(&b, "#\n# The nodes that were members, to approve - after comparing fingerprints - once\n# they ask:\n#   thelb admin approve --match '%s'\n", strings.Join(others, "|"))
 	}
 
+	if st.Cluster != nil && st.Cluster.Lease != 0 {
+		fmt.Fprintf(&b, "\n# The control VIP's lease\nthelb admin lease %d\n", st.Cluster.Lease)
+	}
+
 	if len(st.Pools) > 0 {
 		b.WriteString("\n# Pools\n")
 	}

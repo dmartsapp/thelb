@@ -154,6 +154,7 @@ systemd, sysctl, modules and k8s come later.
   thelb admin service remove <name>
   thelb admin assign <service> <node>:<offer> ... [--weight <node>=<n>,...]
   thelb admin unassign <service> <node>
+  thelb admin lease <seconds>
   thelb admin secret show --role director|backend
 
 Changes the cluster, on a director; another director's change goes through the
@@ -184,6 +185,11 @@ leader, under this director's identity.
                   service's to it. The service's VIP comes up once a backend
                   serves it, after IPVS has it, and goes when none does
   unassign        takes an offer back
+  lease           how long the kernel keeps the control VIP after the leader's
+                  last renewal (6 s unless set; 3 s to 1 h): a leader killed, or
+                  hung, loses the VIP within it, and a director taking over
+                  waits it out. Kept in the cluster's state; thelb status
+                  cluster shows it
   secret show     prints a role's secret, for a node whose secret file is out of
                   date - the one way to see a secret
 

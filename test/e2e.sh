@@ -259,6 +259,18 @@ reach() { ip netns exec $P-c timeout 3 bash -c "exec 3<>/dev/tcp/$1/$PORT" 2>/de
 copy_secrets() {
 	cp -p "$tmp/d1/director.secret" "$tmp/d1/backend.secret" "$tmp/$1/"
 }
+# never_both <file> <seconds>: in the background, a line in file whenever d1 and
+# d2 hold the control VIP at once - a director must never take a VIP another
+# machine still answers for.
+never_both() {
+	(
+		end=$((SECONDS + $2))
+		while [ "$SECONDS" -lt "$end" ]; do
+			holds d1 $VIP4 && holds d2 $VIP4 && echo both >>"$1"
+			sleep 0.1
+		done
+	) &
+}
 
 echo "== bootstrap"
 start d1 "$tmp/d1.log" --vip $VIP4 --bootstrap
@@ -271,6 +283,9 @@ line=$(ip -n $P-d1 -o addr show dev eth0 | grep -F " $VIP4/32")
 check "the control VIP is on d1's eth0 as $VIP4/32" "[ -n \"\$line\" ]"
 check "with theLB's label, eth0:thelb" "echo \"\$line\" | grep -q 'eth0:thelb'"
 check "and theLB's address protocol, 116" "echo \"\$line\" | grep -q 'proto 0x74'"
+check "leased from the kernel - 6 s, renewed - not forever" "echo \"\$line\" | grep -qE 'valid_lft [1-6]sec preferred_lft [1-6]sec' && sleep 8 && ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE 'valid_lft [1-6]sec'"
+check "admin lease 9: in the cluster's state, and the kernel's lease follows" "on d1 $bin admin lease 9 | grep -q 'control VIP lease: 9s' && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 9 && within 10 eval 'ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE \"valid_lft [7-9]sec\"'"
+check "admin lease refuses less than 3 s" "! on d1 $bin admin lease 2 2>/dev/null && on d1 $bin admin lease 6 >/dev/null && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 6"
 check "/run/thelb and the director's directory in it are root's, mode 0700" "[ \"\$(on d1 stat -c '%U %a' /run/thelb /run/thelb/director | xargs)\" = 'root 700 root 700' ]"
 check "the socket is root's, mode 0600" "[ \"\$(on d1 stat -c '%U %a' /run/thelb/director/thelb.sock)\" = 'root 600' ]"
 on d1 "$bin" status all >"$tmp/status" 2>&1
@@ -324,12 +339,12 @@ check "its gratuitous ARP moved the client's neighbour entry to $new's MAC addre
 check "the client reaches the control VIP" "reach $VIP4"
 check "the survivors agree on $new as leader" "within 10 leader_is d2 $new && within 10 leader_is d3 $new"
 check "and show d1 down" "within 10 is $new '[n[\"state\"] for n in s[\"nodes\"] if n[\"node\"] == \"d1\"][0]' down"
+check "d1's control VIP, its lease no longer renewed, is removed by d1's kernel" "within 10 eval '! holds d1 $VIP4'"
 
 echo "== d1 comes back - with --bootstrap, as it was started - and rejoins without approval"
 link_up d1
 start d1 "$tmp/d1.rejoin.log" --vip $VIP4 --bootstrap
-check "it removes the control VIP its crash left" "within 10 logged $tmp/d1.rejoin.log 'WARN removed the control VIP an earlier run left vip=$VIP4 interface=eth0'"
-check "the VIP is no longer on d1's eth0" "! holds d1 $VIP4"
+check "the VIP is not on d1's eth0: nothing left to remove" "! holds d1 $VIP4 && ! logged $tmp/d1.rejoin.log 'removed the control VIP an earlier run left'"
 check "it finds the cluster and rejoins" "within 30 logged $tmp/d1.rejoin.log 'OK joined the cluster cluster=e2e id=$cluster1'"
 check "without waiting for approval" "! logged $tmp/d1.rejoin.log 'waiting for approval'"
 check "the leader says so" "within 10 eval \"grep -q 'OK director rejoined: approved before node=d1' $tmp/$new*.log\""
@@ -417,14 +432,16 @@ check "d1 starts again - with --bootstrap - and rejoins d2's cluster without app
 
 echo "== two directors: the leader's theLB is killed, its machine up - the other stands alone"
 cid=$(json d1 's["cluster"]["id"]')
+never_both "$tmp/both.kill" 40
 stop d2 KILL
 check "d2's crash leaves the control VIP on its interface, answering" "holds d2 $VIP4"
+check "until its lease lapses: d2's kernel removes it" "within 10 eval '! holds d2 $VIP4'"
 check "d1 finds d2's control port refusing - its theLB gone - and stands alone" "within 30 logged $tmp/d1.two.log 'WARN standing alone: .* node=d2 .*refuses connections'"
 check "d1 leads alone, and takes the control VIP" "within 20 holds d1 $VIP4 && within 10 leader_is d1 d1"
+check "never on both machines at once: d1 waited for d2's VIP to be no more" "[ ! -s $tmp/both.kill ]"
 check "the same cluster, its state kept" "is d1 's[\"cluster\"][\"id\"]' $cid"
 check "d2 is removed: it must be approved when it comes back" "within 10 logged $tmp/d1.two.log 'WARN the director left behind is removed: it waits for approval when it comes back node=d2' && is d1 '[n[\"node\"] for n in s[\"nodes\"]]' \"['d1']\""
 start d2 "$tmp/d2.crash.log" --vip $VIP4 --bootstrap
-check "d2, started again, removes the control VIP its crash left" "within 20 logged $tmp/d2.crash.log 'WARN removed the control VIP an earlier run left'"
 check "finds d1's cluster on it, and waits for approval" "within 20 logged $tmp/d2.crash.log 'OK waiting for approval'"
 check "approved, it is a voter again" "on d1 $bin admin approve d2 >/dev/null && within 20 logged $tmp/d2.crash.log 'OK director ready' && within 20 up_is d1 2"
 
@@ -462,7 +479,7 @@ table inet e2e_cut {
 }
 EOF
 	check "d1 finds d2's control port refusing, and stands alone, claiming the control VIP" "within 30 logged $tmp/d1.crash.log 'WARN standing alone: .* node=d2 .*refuses connections' && within 5 holds d1 $VIP4"
-	check "d2 saw the control VIP free, then taken by d1 - alive, deciding first - and stays" "within 30 logged $tmp/d2.crash.log 'not standing alone reason=.*d1 took the control VIP after this director saw it free' && count_is $tmp/d2.crash.log 'WARN standing alone:' 1"
+	check "d2 finds the control VIP held by d1's machine past its lease - d1 decided first - and stays" "within 40 logged $tmp/d2.crash.log 'not standing alone reason=.*d1.s machine still answers for the control VIP, past its 6s lease' && count_is $tmp/d2.crash.log 'WARN standing alone:' 1"
 	check "one leader: d1 holds the control VIP, d2 does not" "sleep 5; holds d1 $VIP4 && ! holds d2 $VIP4 && count_is $tmp/d2.crash.log 'WARN standing alone:' 1"
 	ip netns exec $P-d2 nft delete table inet e2e_cut
 	check "the firewall opened: d2, left behind, starts over and waits for approval; approved, it votes" "within 30 count_is $tmp/d2.crash.log 'OK waiting for approval' 2 && on d1 $bin admin approve d2 >/dev/null && within 20 up_is d1 2"
@@ -496,12 +513,11 @@ check "d3 joins, once approved: three voters" "within 20 logged $tmp/d3.gone.log
 stop d3 KILL
 check "d3's theLB is killed: the leader finds its port refusing, and takes it out of the vote" "within 30 logged $tmp/$lead.crash.log 'WARN director gone: out of the vote.* node=d3 .*voters=2 .*refuses connections'"
 check "status says d3 is down, not stopped" "is $lead '[n[\"state\"] for n in s[\"nodes\"] if n[\"node\"] == \"d3\"][0]' down"
+never_both "$tmp/both.three" 40
 stop $lead KILL
-check "the leader, $lead, is killed too: $other, the last of two voters, stands alone" "within 30 logged $tmp/$other.crash.log 'WARN standing alone: .* node=$lead .*refuses connections'"
+check "the leader, $lead, is killed too: $other, the last of two voters, stands alone" "within 40 logged $tmp/$other.crash.log 'WARN standing alone: .* node=$lead .*refuses connections'"
 check "$other leads alone, with the control VIP" "within 20 holds $other $VIP4 && within 10 leader_is $other $other"
-check "$lead's machine still answers for the control VIP, its theLB killed: $other announces it again" "within 15 logged $tmp/$other.crash.log 'WARN another machine answers for the control VIP .*what a theLB killed leaves'"
-# What $lead's theLB would remove at its next start: the lab goes on without it.
-ip -n $P-$lead addr del $VIP4/32 dev eth0 2>/dev/null
+check "$lead's kernel removed its control VIP when the lease lapsed; never on both machines at once" "! holds $lead $VIP4 && [ ! -s $tmp/both.three ]"
 for n in d1 d2; do [ -n "${pid[$n]:-}" ] && stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"

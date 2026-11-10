@@ -66,6 +66,13 @@ func (s *session) change(by string, c api.Change) (api.Result, error) {
 		}
 		s.log.OK("offer unassigned", "service", c.Names[0], "node", c.Names[1], "by", by)
 		return api.Result{Message: fmt.Sprintf("unassigned: %s from %s", c.Names[1], c.Names[0])}, nil
+	case "lease":
+		if err := s.apply(cluster.TypeLease, by, cluster.Lease{Seconds: c.Seconds}); err != nil {
+			return api.Result{}, err
+		}
+		lease := time.Duration(c.Seconds) * time.Second
+		s.log.OK("control VIP lease set", "lease", lease, "by", by)
+		return api.Result{Message: fmt.Sprintf("control VIP lease: %s - a leader that stops renewing it loses the VIP within that, and a director taking over waits it out", lease)}, nil
 	}
 	return api.Result{}, fmt.Errorf("no such change: %q", c.Op)
 }

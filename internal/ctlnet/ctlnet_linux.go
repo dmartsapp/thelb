@@ -48,7 +48,100 @@ type Net struct {
 
 	mu     sync.Mutex
 	ln     net.Listener
-	cancel context.CancelFunc
+	cancel context.CancelFunc // the announcements
+	renew  context.CancelFunc // the lease's renewal
+	lease  time.Duration
+}
+
+// DefaultLease is how long the kernel keeps the control VIP after its last
+// renewal, until the cluster says otherwise.
+const DefaultLease = 6 * time.Second
+
+// SetLease sets how long the kernel keeps the control VIP after its last
+// renewal - it is renewed every third of that - from the next renewal on.
+func (n *Net) SetLease(d time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.lease = d
+}
+
+func (n *Net) leaseLocked() time.Duration {
+	if n.lease < time.Second {
+		return DefaultLease
+	}
+	return n.lease
+}
+
+// put adds the control VIP, or renews it, leased from the kernel: a theLB that
+// is killed, or hangs, stops renewing, and the kernel removes the VIP by itself
+// when the lease lapses - nothing is left answering for it. n.mu is held.
+func (n *Net) put() error {
+	var flags uint32
+	if n.vip.Is6() {
+		flags = netlink.IFANoDAD // the cluster, not DAD, keeps the VIP unique
+	}
+	if err := netlink.PutAddr(n.ifc.Index, n.prefix(), n.label(), Proto, flags, n.leaseLocked()); err != nil {
+		return fmt.Errorf("adding the control VIP to %s: %w", n.ifc.Name, err)
+	}
+	return nil
+}
+
+// present is whether the control VIP is on its interface. n.mu is held.
+func (n *Net) present() (bool, error) {
+	addrs, err := netlink.Addrs()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrs {
+		if a.Index == n.ifc.Index && a.Prefix.Addr() == n.vip {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// keep renews the control VIP's lease every third of it while this director
+// holds it - and puts it back, announced again, if someone removed it.
+func (n *Net) keep(ctx context.Context) {
+	failed := ""
+	for {
+		n.mu.Lock()
+		every := n.leaseLocked() / 3
+		n.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+		n.mu.Lock()
+		if ctx.Err() != nil || n.ln == nil {
+			n.mu.Unlock()
+			return
+		}
+		here, err := n.present()
+		if err == nil {
+			err = n.put()
+		}
+		if err == nil && !here {
+			n.cancel()
+			actx, cancel := context.WithCancel(context.Background())
+			n.cancel = cancel
+			go n.announce(actx)
+		}
+		n.mu.Unlock()
+		switch {
+		case err != nil:
+			if err.Error() != failed {
+				n.log.Error("renewing the control VIP's lease failed: the kernel removes it when the lease lapses", "vip", n.vip, "interface", n.ifc.Name, "error", err)
+			}
+			failed = err.Error()
+		case !here:
+			failed = ""
+			n.log.Warn("drift repaired: the control VIP was removed from its interface; added and announced again", "vip", n.vip, "interface", n.ifc.Name)
+		default:
+			failed = ""
+		}
+	}
 }
 
 // New is the network of a director whose control VIP is vip, on the interface
@@ -234,17 +327,15 @@ func (n *Net) Take() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listening on the control VIP: %w", err)
 	}
-	var flags uint32
-	if n.vip.Is6() {
-		flags = netlink.IFANoDAD // the cluster, not DAD, keeps the VIP unique
-	}
-	if err := netlink.AddAddr(n.ifc.Index, n.prefix(), n.label(), Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
+	if err := n.put(); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("adding the control VIP to %s: %w", n.ifc.Name, err)
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	n.ln, n.cancel = ln, cancel
+	rctx, renew := context.WithCancel(context.Background())
+	n.ln, n.cancel, n.renew = ln, cancel, renew
 	go n.announce(ctx)
+	go n.keep(rctx)
 	return ln, nil
 }
 
@@ -271,21 +362,12 @@ func (n *Net) Repair() (bool, error) {
 	if n.ln == nil {
 		return false, nil
 	}
-	addrs, err := netlink.Addrs()
-	if err != nil {
+	here, err := n.present()
+	if err != nil || here {
 		return false, err
 	}
-	for _, a := range addrs {
-		if a.Index == n.ifc.Index && a.Prefix.Addr() == n.vip {
-			return false, nil
-		}
-	}
-	var flags uint32
-	if n.vip.Is6() {
-		flags = netlink.IFANoDAD
-	}
-	if err := netlink.AddAddr(n.ifc.Index, n.prefix(), n.label(), Proto, flags); err != nil && !errors.Is(err, syscall.EEXIST) {
-		return false, fmt.Errorf("adding the control VIP to %s again: %w", n.ifc.Name, err)
+	if err := n.put(); err != nil {
+		return false, err
 	}
 	n.cancel()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -317,11 +399,12 @@ func (n *Net) Release() {
 		return
 	}
 	n.cancel()
+	n.renew()
 	if err := netlink.DelAddr(n.ifc.Index, n.prefix()); err != nil && !errors.Is(err, syscall.EADDRNOTAVAIL) && !errors.Is(err, syscall.ENOENT) {
 		n.log.Error("removing the control VIP failed", "vip", n.vip, "interface", n.ifc.Name, "error", err)
 	}
 	_ = n.ln.Close()
-	n.ln, n.cancel = nil, nil
+	n.ln, n.cancel, n.renew = nil, nil, nil
 }
 
 // Cleanup removes what an earlier run of theLB left on this node's interfaces

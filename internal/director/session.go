@@ -64,6 +64,7 @@ type session struct {
 	member    bool       // the replicated state has this director as a member
 	evict     string     // after a takeover: the director left behind, to remove once leading
 	left      *peer      // after a takeover: the director left behind, which the guard knows by its MAC
+	claimed   bool       // after a takeover: the control VIP is held already, found no more when it was claimed
 	syncErr   string     // the IPVS sync daemons' last error, said once
 	syncMu    sync.Mutex // one change to the sync daemons at a time
 }
@@ -138,7 +139,7 @@ func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, c
 			return nil, err
 		}
 		left := standing.left
-		s.evict, s.left = left.name, &left
+		s.evict, s.left, s.claimed = left.name, &left, standing.claimed
 	}
 	s.store = store
 	r, err := raft.NewRaft(conf, s.fsm, store, store, snaps, s.trans)
@@ -375,6 +376,14 @@ func (s *session) lead() {
 		}
 	}
 	term := s.r.CurrentTerm()
+	s.n.net.SetLease(s.vipLease())
+	s.mu.Lock()
+	claimed := s.claimed
+	s.claimed = false
+	s.mu.Unlock()
+	if !claimed && !s.waitForVIP() {
+		return
+	}
 	ln, err := s.n.net.Take()
 	if err != nil {
 		s.log.Error("taking the control VIP failed", "vip", s.n.cfg.ControlVIP, "error", err)
@@ -511,14 +520,12 @@ func (s *session) sweep(ctx context.Context) {
 // monitor ends the session when Raft has shut down by itself - this member was
 // removed - and when the director has had no leader for a while and another
 // cluster answers on the control VIP: the cluster was created again without it.
-// One of two directors stands alone when the other is gone; it watches the
-// control VIP while it has no leader, for standAlone.
+// One of two directors stands alone when the other is gone.
 func (s *session) monitor() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	var noLeaderSince, lookAt time.Time
-	var notAlone, lastLeader string
-	vipFree := false // the control VIP seen free since this director lost its leader
+	var notAlone string
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -530,7 +537,7 @@ func (s *session) monitor() {
 			return
 		}
 		if _, id := s.r.LeaderWithID(); id != "" {
-			noLeaderSince, notAlone, lastLeader, vipFree = time.Time{}, "", string(id), false
+			noLeaderSince, notAlone = time.Time{}, ""
 			continue
 		}
 		if noLeaderSince.IsZero() {
@@ -538,20 +545,15 @@ func (s *session) monitor() {
 			lookAt = noLeaderSince.Add(orphanAfter)
 		}
 		// One of two directors, the other gone: stand alone.
-		if wait, two := s.takeoverWait(); two {
-			if !vipFree && s.vipFree() && !s.hasLeader() {
-				vipFree = true
+		if wait, two := s.takeoverWait(); two && time.Since(noLeaderSince) >= wait {
+			tk, why := s.tryTakeover(time.Since(noLeaderSince))
+			if tk != nil && !s.hasLeader() { // looking takes seconds: a leader may have come
+				s.finish(tk)
+				return
 			}
-			if time.Since(noLeaderSince) >= wait {
-				tk, why := s.tryTakeover(lastLeader, vipFree)
-				if tk != nil && !s.hasLeader() { // looking takes seconds: a leader may have come
-					s.finish(tk)
-					return
-				}
-				if tk == nil && why != notAlone && !s.hasLeader() {
-					notAlone = why
-					s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
-				}
+			if tk == nil && why != notAlone && !s.hasLeader() {
+				notAlone = why
+				s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
 			}
 		}
 		if time.Now().Before(lookAt) {
@@ -590,6 +592,49 @@ func (s *session) shutDown() error {
 		return fmt.Errorf("%w: this director was taken out of the vote", errRejoin)
 	}
 	return errRemoved
+}
+
+// waitForVIP waits, as a new leader, until the control VIP is no more - two
+// looks, a second apart (vipGone) - and reports whether it may take it: false
+// once it no longer leads, or the session ends. A director never claims an
+// address another machine still answers for: a theLB killed leaves its VIP on
+// its interface until the lease lapses; one answering after that is held by
+// hand, or by a theLB alive, and the leader goes on waiting, saying so.
+func (s *session) waitForVIP() bool {
+	start := time.Now()
+	said := ""
+	for {
+		if s.ctx.Err() != nil || s.r.State() != raft.Leader {
+			return false
+		}
+		gone, holder, err := s.vipGone()
+		if gone {
+			if said != "" {
+				s.log.OK("the control VIP is no more: taking it", "vip", s.n.cfg.ControlVIP)
+			}
+			return true
+		}
+		if s.ctx.Err() != nil {
+			return false
+		}
+		lease := s.vipLease()
+		why := fmt.Sprintf("%s still answers for it: this leader takes it once it is no more - within the %s lease, if a theLB that stopped left it", holder, lease)
+		switch {
+		case err != nil:
+			why = err.Error()
+		case time.Since(start) > lease+leaseSlack:
+			why = fmt.Sprintf("%s still answers for it, past the %s lease: set there by hand, or by a theLB alive - remove it there (ip address del)", holder, lease)
+		}
+		if why != said {
+			said = why
+			s.log.Warn("another machine answers for the control VIP: this leader waits", "vip", s.n.cfg.ControlVIP, "reason", why)
+		}
+		select {
+		case <-s.ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // hasLeader is whether Raft knows a leader - this director or another.

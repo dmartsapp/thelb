@@ -14,33 +14,34 @@ import (
 )
 
 // TestStandAloneOnlyWhenTheOtherIsGone: the last of two directors stands alone
-// when the other's theLB is not running, or its machine does not answer - and
-// never while a theLB answers on the control VIP, another machine holds it, the
-// other took it after this director saw it free (it decided first, alive), this
-// director is cut off itself, or the other answers on the network while its
+// only once it has waited out the control VIP's lease, the other is gone - its
+// theLB not running, or its machine not answering - its own network answers,
+// and the VIP is no more. It never takes a VIP another machine still answers
+// for: after the lease, one held by the other's machine is held by a theLB
+// alive, or by hand; and never when the other answers on the network while its
 // port drops connections (a partition: it may be leading).
 func TestStandAloneOnlyWhenTheOtherIsGone(t *testing.T) {
 	refused := fmt.Errorf("dial tcp 192.168.1.92:8080: %w", syscall.ECONNREFUSED)
 	timeout := errors.New("dial tcp 192.168.1.92:8080: i/o timeout")
-	gone := takeoverFacts{other: "linux", otherMAC: "02:11:32:24:ac:11", otherLed: true, uplink: true, portErr: refused}
+	gone := takeoverFacts{other: "linux", otherMAC: "02:11:32:24:ac:11", waited: 9 * time.Second, lease: 6 * time.Second, uplink: true, portErr: refused}
 	for _, c := range []struct {
 		name string
 		edit func(*takeoverFacts)
 		want bool
 		why  string
 	}{
-		{"its theLB was killed: the port refuses, the VIP is still on its interface", func(f *takeoverFacts) { f.vipHolder = "02:11:32:24:AC:11" }, true, "refuses connections"},
+		{"its theLB was killed, and its VIP has lapsed: the port refuses", func(*takeoverFacts) {}, true, "refuses connections"},
 		{"its machine is down: nothing answers", func(f *takeoverFacts) { f.portErr = timeout }, true, "does not answer on the network"},
+		{"the lease not yet waited out", func(f *takeoverFacts) { f.waited = 7 * time.Second }, false, "waiting out the control VIP's 6s lease"},
+		{"a longer lease, set by the cluster", func(f *takeoverFacts) { f.lease = 30 * time.Second }, false, "waiting out the control VIP's 30s lease"},
+		{"its machine still answers for the VIP past the lease: alive behind a firewall, or by hand", func(f *takeoverFacts) {
+			f.vipHolder = "02:11:32:24:AC:11"
+		}, false, "linux's machine still answers for the control VIP, past its 6s lease"},
+		{"another machine holds the VIP", func(f *takeoverFacts) { f.vipHolder = "52:54:00:aa:bb:cc" }, false, "52:54:00:aa:bb:cc holds the control VIP"},
+		{"only the VIP's port answers", func(f *takeoverFacts) { f.vipHolder = tcpServer }, false, "something accepts connections on the control VIP"},
 		{"a firewall drops its port: a partition", func(f *takeoverFacts) { f.portErr, f.answers = timeout, "02:11:32:24:ac:11" }, false, "a partition, not a crash"},
 		{"its port accepts", func(f *takeoverFacts) { f.portErr = nil }, false, "accepts connections"},
-		{"a theLB answers on the VIP", func(f *takeoverFacts) { f.vipTheLB = true }, false, "a theLB answers on the control VIP"},
-		{"another machine holds the VIP", func(f *takeoverFacts) { f.vipHolder = "52:54:00:aa:bb:cc" }, false, "52:54:00:aa:bb:cc holds the control VIP"},
 		{"this director is cut off", func(f *takeoverFacts) { f.uplink, f.uplinkWhy = false, "its gateway 192.168.1.1 does not answer" }, false, "does not reach its network: its gateway"},
-		{"its machine is down, the VIP free since", func(f *takeoverFacts) { f.portErr, f.vipWasFree = timeout, true }, true, "does not answer on the network"},
-		{"a firewall rejects its port, and it took the VIP this director saw free: it decided first", func(f *takeoverFacts) {
-			f.vipHolder, f.vipWasFree = "02:11:32:24:ac:11", true
-		}, false, "took the control VIP after this director saw it free"},
-		{"it holds the VIP, but this director led last", func(f *takeoverFacts) { f.vipHolder, f.otherLed = "02:11:32:24:ac:11", false }, false, "was not the leader this director saw last"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := gone

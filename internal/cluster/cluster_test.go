@@ -348,3 +348,35 @@ func TestOffersAddedOneByOne(t *testing.T) {
 		}
 	})
 }
+
+// TestTheControlVIPsLease: the default until set, set within its bounds, and
+// in the snapshot - every director knows how long to wait for a VIP to lapse.
+func TestTheControlVIPsLease(t *testing.T) {
+	a := created(t)
+	a.f.Read(func(s *State) {
+		if s.VIPLease() != DefaultLease {
+			t.Errorf("default lease %s", s.VIPLease())
+		}
+	})
+	for _, bad := range []int{0, 2, 3601} {
+		if err := a.apply(TypeLease, "lb-1", t0, Lease{Seconds: bad}); err == nil {
+			t.Errorf("a lease of %ds was set", bad)
+		}
+	}
+	if err := a.apply(TypeLease, "lb-1", t0, Lease{Seconds: 15}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := a.f.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := New()
+	if err := g.Restore(io.NopCloser(bytes.NewReader(b))); err != nil {
+		t.Fatal(err)
+	}
+	g.Read(func(s *State) {
+		if s.VIPLease() != 15*time.Second || s.Applied != a.index {
+			t.Errorf("restored lease %s, applied %d; want 15s, %d", s.VIPLease(), s.Applied, a.index)
+		}
+	})
+}

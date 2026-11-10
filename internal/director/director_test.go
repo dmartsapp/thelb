@@ -100,6 +100,7 @@ func (l *loopNet) Uplink(context.Context) (bool, string)                   { ret
 func (l *loopNet) Cleanup() error                                          { return nil }
 func (l *loopNet) Repair() (bool, error)                                   { return false, nil }
 func (l *loopNet) Announce()                                               {}
+func (l *loopNet) SetLease(time.Duration)                                  {}
 
 func (l *loopNet) MACOf(ip netip.Addr) string {
 	if v, ok := l.macs.Load(ip.String()); ok {

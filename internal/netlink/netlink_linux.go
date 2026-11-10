@@ -53,6 +53,7 @@ type Addr struct {
 	Proto    uint8
 	HasProto bool // the kernel reported IFA_PROTO: it has the field
 	Flags    uint32
+	Lifetime time.Duration // the valid lifetime left; 0: forever
 }
 
 // Neigh is a neighbour table entry.
@@ -206,6 +207,43 @@ func AddAddr(index int, p netip.Prefix, label string, proto uint8, flags uint32)
 	return err
 }
 
+// PutAddr adds an address, or replaces the one there, with a lifetime: the
+// kernel removes it by itself once the lifetime has passed, unless PutAddr is
+// called again first - a lease, renewed. Otherwise as AddAddr. IPv4 addresses
+// have had lifetimes since Linux 3.9.
+func PutAddr(index int, p netip.Prefix, label string, proto uint8, flags uint32, lifetime time.Duration) error {
+	secs := uint32(lifetime / time.Second)
+	if secs == 0 {
+		return errors.New("netlink: an address's lifetime is a second or more")
+	}
+	a := p.Addr().Unmap()
+	b := ifaddrmsg(netip.PrefixFrom(a, p.Bits()), index)
+	if a.Is4() {
+		b = appendAttr(b, syscall.IFA_LOCAL, a.AsSlice())
+		if label != "" {
+			b = appendAttr(b, syscall.IFA_LABEL, append([]byte(label), 0))
+		}
+	}
+	b = appendAttr(b, syscall.IFA_ADDRESS, a.AsSlice())
+	if flags != 0 {
+		f := make([]byte, 4)
+		native.PutUint32(f, flags)
+		b = appendAttr(b, ifaFlags, f)
+		b[2] = uint8(flags)
+	}
+	if proto != 0 {
+		b = appendAttr(b, ifaProto, []byte{proto})
+	}
+	// struct ifa_cacheinfo: preferred and valid lifetimes, in seconds; the
+	// kernel fills in the timestamps.
+	ci := make([]byte, 16)
+	native.PutUint32(ci[0:4], secs)
+	native.PutUint32(ci[4:8], secs)
+	b = appendAttr(b, syscall.IFA_CACHEINFO, ci)
+	_, err := do(syscall.RTM_NEWADDR, syscall.NLM_F_ACK|syscall.NLM_F_CREATE|syscall.NLM_F_REPLACE, b)
+	return err
+}
+
 // DelAddr removes an address.
 func DelAddr(index int, p netip.Prefix) error {
 	a := p.Addr().Unmap()
@@ -247,6 +285,12 @@ func Addrs() ([]Addr, error) {
 			case ifaProto:
 				if len(at.data) >= 1 {
 					a.Proto, a.HasProto = at.data[0], true
+				}
+			case syscall.IFA_CACHEINFO:
+				if len(at.data) >= 8 {
+					if v := native.Uint32(at.data[4:8]); v != 0xffffffff {
+						a.Lifetime = time.Duration(v) * time.Second
+					}
 				}
 			}
 		}

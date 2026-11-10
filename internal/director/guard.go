@@ -38,6 +38,7 @@ func (s *session) guard(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		s.n.net.SetLease(s.vipLease()) // as the cluster's state has it now
 		if time.Since(looked) >= conflictEvery {
 			looked = time.Now()
 			if s.watchVIP(ctx, said) {

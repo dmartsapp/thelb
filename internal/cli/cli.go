@@ -580,7 +580,7 @@ func change(stdout io.Writer, c api.Change) error {
 
 func adminCmd(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usagef("thelb admin: say what to change: approve, refuse, remove, pool, service, assign, unassign, secret show")
+		return usagef("thelb admin: say what to change: approve, refuse, remove, pool, service, assign, unassign, lease, secret show")
 	}
 	switch args[0] {
 	case "approve":
@@ -636,6 +636,22 @@ func adminCmd(args []string, stdout io.Writer) error {
 			return usagef("thelb admin unassign <service> <node>")
 		}
 		return change(stdout, api.Change{Op: "unassign", Names: args[1:]})
+	case "lease":
+		if len(args) != 2 {
+			return usagef("thelb admin lease <seconds>: how long the kernel keeps the control VIP after the leader's last renewal")
+		}
+		d, err := time.ParseDuration(args[1])
+		if err != nil {
+			n, aerr := strconv.Atoi(args[1])
+			if aerr != nil {
+				return usagef("thelb admin lease: %q is not a number of seconds", args[1])
+			}
+			d = time.Duration(n) * time.Second
+		}
+		if d%time.Second != 0 || d < cluster.MinLease || d > cluster.MaxLease {
+			return usagef("thelb admin lease: whole seconds, %s to %s, not %s", cluster.MinLease, cluster.MaxLease, args[1])
+		}
+		return change(stdout, api.Change{Op: "lease", Seconds: int(d / time.Second)})
 	case "secret":
 		if len(args) < 2 {
 			return usagef("thelb admin secret: show (rotate and retire come later)")

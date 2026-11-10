@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/logx"
@@ -27,6 +28,7 @@ func (*Net) VIPHolder(context.Context) (string, error)      { return "", errors.
 func (*Net) Take() (net.Listener, error)                    { return nil, errors.ErrUnsupported }
 func (*Net) Release()                                       {}
 func (*Net) Announce()                                      {}
+func (*Net) SetLease(time.Duration)                         {}
 func (*Net) Repair() (bool, error)                          { return false, errors.ErrUnsupported }
 func (*Net) Cleanup() error                                 { return errors.ErrUnsupported }
 func (*Net) MACOf(netip.Addr) string                        { return "" }

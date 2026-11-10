@@ -52,6 +52,17 @@ const (
 	TypeAssign        = "assign"         // a director assigned offers to a service
 	TypeUnassign      = "unassign"       // a director took one back
 	TypeHealth        = "health"         // an assignment became ready to serve, or stopped being
+	TypeLease         = "lease"          // a director set how long the kernel keeps the control VIP without its leader
+)
+
+// The control VIP's lease: the leader adds the VIP with this lifetime, and
+// renews it every third of it, so the kernel removes the VIP of a leader that
+// was killed or hangs by itself; a director taking over waits it out. In the
+// replicated state, so every director knows how long to wait.
+const (
+	DefaultLease = 6 * time.Second
+	MinLease     = 3 * time.Second
+	MaxLease     = time.Hour
 )
 
 // Entry is one change to the state.
@@ -79,6 +90,16 @@ type Info struct {
 	Created time.Time `json:"created"`
 	CACert  []byte    `json:"ca_cert"`
 	CAKey   []byte    `json:"ca_key"` // replicated to directors only, never shown
+	// Lease is the control VIP's lease, in seconds; 0: DefaultLease.
+	Lease int `json:"lease,omitempty"`
+}
+
+// VIPLease is the control VIP's lease.
+func (s *State) VIPLease() time.Duration {
+	if s.Cluster == nil || s.Cluster.Lease == 0 {
+		return DefaultLease
+	}
+	return time.Duration(s.Cluster.Lease) * time.Second
 }
 
 // Leader is the director that leads, since when, in which term.
@@ -188,6 +209,10 @@ type (
 		Service string `json:"service"`
 		Node    string `json:"node"`
 		Healthy bool   `json:"healthy"`
+	}
+	// Lease is TypeLease's: in seconds.
+	Lease struct {
+		Seconds int `json:"seconds"`
 	}
 	// Admit is TypeAdmit's.
 	Admit struct {
@@ -788,6 +813,19 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 			return fmt.Errorf("%s is not assigned to %s", d.Node, d.Service)
 		}
 		delete(s.Assignments, k)
+		return nil
+	case TypeLease:
+		var d Lease
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if s.Cluster == nil {
+			return errors.New("there is no cluster yet")
+		}
+		if l := time.Duration(d.Seconds) * time.Second; l < MinLease || l > MaxLease {
+			return fmt.Errorf("the control VIP's lease is %s to %s, not %ds", MinLease, MaxLease, d.Seconds)
+		}
+		s.Cluster.Lease = d.Seconds
 		return nil
 	case TypeHealth:
 		var d Health
