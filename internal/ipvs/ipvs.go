@@ -68,9 +68,11 @@ type Dest struct {
 // there, and the packets and bytes it forwarded. Direct routing never sees the
 // replies, so there is no outbound count.
 type Stats struct {
-	Conns   uint64
-	Packets uint64
-	Bytes   uint64
+	Conns    uint64
+	Packets  uint64
+	Bytes    uint64
+	Active   uint32 // connections established now
+	Inactive uint32 // the others it still tracks: closing, or not yet established
 }
 
 // Daemon is one of IPVS's connection-synchronisation daemons, kernel threads in a

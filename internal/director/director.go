@@ -48,6 +48,7 @@ type Config struct {
 	Name              string
 	Interface         string
 	Metrics           string // where to serve metrics, address:port; "" for nowhere
+	Debug             bool   // DEBUG lines: on the leader, each connection forwarded
 }
 
 // Network is how a director reaches the control VIP and the other directors.

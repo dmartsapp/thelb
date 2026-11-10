@@ -54,6 +54,8 @@ Flags:
   --interface <name>             the control VIP's interface (default: the one in its network)
   --metrics <address:port>       serve Prometheus metrics there, at /metrics - an address only your
                                  monitoring reaches; not 0.0.0.0, which would include the VIPs
+  --debug                        DEBUG lines too: while it leads, each connection forwarded -
+                                 the client, the service, the backend, when
 `,
 	"backend": `Usage:
   thelb backend --join <control VIP:port> --secret-file <file> [--offer <offer> ...] [flags]

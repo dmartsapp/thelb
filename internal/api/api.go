@@ -131,6 +131,8 @@ type Live struct {
 	Conns    uint64 `json:"conns"`
 	Packets  uint64 `json:"packets"`
 	Bytes    uint64 `json:"bytes"`
+	Active   uint32 `json:"active,omitempty"`   // connections established now
+	Inactive uint32 `json:"inactive,omitempty"` // the others IPVS tracks
 }
 
 // Beat is a backend's heartbeat: how its own checks of its offers go, and the

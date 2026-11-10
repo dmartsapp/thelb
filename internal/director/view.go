@@ -204,7 +204,7 @@ func (s *session) status(brief bool) status.Status {
 					row.BackendsUp++
 				}
 				b := status.Backend{Service: v.Name, VIP: v.VIP, Port: v.Port, Backend: a.Node, AppPort: a.Port, OwnCheck: l.Own, DirectorCheck: l.Director, CheckedBy: l.By,
-					Weight: l.Weight, Connections: l.Conns, Packets: l.Packets, Bytes: l.Bytes, LastCheckInSeconds: -1}
+					Weight: l.Weight, Connections: l.Conns, Packets: l.Packets, Bytes: l.Bytes, ActiveConnections: l.Active, InactiveConns: l.Inactive, LastCheckInSeconds: -1}
 				if n != nil {
 					b.Address = n.Address
 				}

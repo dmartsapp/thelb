@@ -558,7 +558,7 @@ for n in d1 d2; do [ -n "${pid[$n]:-}" ] && stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"
 SVC=$NET4.20
-start d1 "$tmp/d1.svc.log" --vip $VIP4 --bootstrap --metrics 127.0.0.1:9732
+start d1 "$tmp/d1.svc.log" --vip $VIP4 --bootstrap --metrics 127.0.0.1:9732 --debug
 check "d1 creates a cluster" "within 30 logged $tmp/d1.svc.log 'OK control VIP taken'"
 for n in d2 d3; do start $n "$tmp/$n.svc.log" --vip $VIP4; done
 check "d2 and d3 join, once approved" "within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK waiting for approval' && on d1 $bin admin approve --match 'd[23]' --yes >/dev/null && within 20 both_logged $tmp/d2.svc.log $tmp/d3.svc.log 'OK director ready'"
@@ -596,6 +596,8 @@ check "the backends' checks are spread across the directors - more than one make
 ip netns exec $P-d1 curl -s --max-time 5 http://127.0.0.1:9732/metrics >"$tmp/metrics.d1"
 ip netns exec $P-b1 curl -s --max-time 5 http://127.0.0.1:9733/metrics >"$tmp/metrics.b1"
 check "--metrics: the leader serves Prometheus's text - it leads, its backends' weights, the VIP it holds" "grep -qx 'thelb_leader 1' $tmp/metrics.d1 && grep -qx 'thelb_backend_weight{service=\"web\",backend=\"b1\"} 1' $tmp/metrics.d1 && grep -q '^thelb_vip_held{vip=\"$SVC\",purpose=\"service\"' $tmp/metrics.d1 && grep -q '^# TYPE thelb_backend_connections_total counter' $tmp/metrics.d1"
+check "--metrics: the traffic through it, by service, and each backend's connections now" "grep -qE '^thelb_service_connections_total\{service=\"web\",vip=\"$SVC\"\} [1-9]' $tmp/metrics.d1 && grep -qE '^thelb_service_bytes_total\{service=\"web\",vip=\"$SVC\"\} [1-9]' $tmp/metrics.d1 && grep -q '^thelb_backend_connections_active{service=\"web\",backend=\"b1\"}' $tmp/metrics.d1"
+check "--debug: the leader logs each connection it forwards - the client, the service, the backend - and a director without it nothing" "logged $tmp/d1.svc.log 'DEBUG connection forwarded client=${NET4}.100:[0-9]+ service=web vip=$SVC:80 backend=b[123] to=${NET4}.3[123]:80 proto=tcp' && ! grep -q ' DEBUG ' $tmp/d2.svc.log"
 check "and a backend its own: a member, its offers' checks" "grep -qx 'thelb_member 1' $tmp/metrics.b1 && grep -qx 'thelb_offer_check_up{offer=\"web\",port=\"tcp/80\"} 1' $tmp/metrics.b1"
 check "status: the service up, 3 of 3" "on d2 $bin status vips | grep -qE '^ web +\| $SVC +\| tcp/80 +\| wrr +\| direct +\| 3 of 3'"
 check "status backends: both checks ok" "[ \$(on d1 $bin status backends | grep -c '| ok / ok |') = 3 ]"

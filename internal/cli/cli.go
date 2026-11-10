@@ -173,6 +173,7 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 		out = stderr
 	}
 	log := logx.New(out, "thelb")
+	log.SetDebug(cfg.Debug)
 	return runDirector(ctx, cfg, director.Deps{
 		RunDir: roleDir("director"),
 		Log:    log,
@@ -206,6 +207,7 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 	name := fs.String("name", "", "")
 	iface := fs.String("interface", "", "")
 	metricsAt := fs.String("metrics", "", "")
+	debug := fs.Bool("debug", false, "")
 	var cfg director.Config
 	if err := parse(fs, args); err != nil {
 		return cfg, err
@@ -262,6 +264,7 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 	}
 	cfg.Bootstrap = *bootstrap
 	cfg.Interface = *iface
+	cfg.Debug = *debug
 	if *metricsAt != "" {
 		if ap, err := netip.ParseAddrPort(*metricsAt); err != nil || ap.Addr().IsUnspecified() {
 			return cfg, usagef("thelb director: --metrics is an address and port to serve metrics on, as 127.0.0.1:9732 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)

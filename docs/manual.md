@@ -402,6 +402,16 @@ One line per event, on standard error - in the journal, under systemd:
 2026-11-09T05:03:40.120Z [watchdog] ERROR a loop has stopped: systemd's watchdog is told no more, and restarts theLB loop="data plane" late=31s
 ```
 
+### Each connection, with --debug
+
+`--debug` on a director adds DEBUG lines to its log - none without it. While it leads, it reads IPVS's connection table every second, and logs each new connection once, when it is first seen: the client's address and port, the service and its VIP, the backend it was sent to:
+
+```text
+2026-11-10T22:31:04.118Z [director] DEBUG connection forwarded client=203.0.113.7:51618 service=web vip=10.0.0.20:80 backend=web-1 to=10.0.0.31:80 proto=tcp state=ESTABLISHED
+```
+
+A busy service writes many such lines: turn it on to look, not for good. Connections in progress when the director began to lead are counted, not logged - another director forwarded them first.
+
 ### Metrics
 
 `--metrics <address:port>` on a director or a backend serves Prometheus's text format at `http://<address:port>/metrics` - plain HTTP, so give it an address only your monitoring reaches (`127.0.0.1`, or the machine's own management address; never `0.0.0.0`, which would include the VIPs). Every director says how it stands, and the leader alone what the cluster serves, so scrape them all and nothing is counted twice:
@@ -418,6 +428,8 @@ One line per event, on standard error - in the journal, under systemd:
 | `thelb_backend_weight{service,backend}` | the leader's: what IPVS has - 0 while it does not serve |
 | `thelb_backend_check_up{service,backend,check}` | the leader's: `check="own"` or `"director"`, 1 when it passes |
 | `thelb_backend_connections_total`, `_packets_total`, `_bytes_total` | the leader's: what IPVS sent each backend of each service |
+| `thelb_backend_connections_active`, `_inactive` | the leader's: each backend's connections now - established, and the others IPVS still tracks |
+| `thelb_service_connections_total`, `_packets_total`, `_bytes_total`, `thelb_service_connections_active` | the leader's: **the traffic through it**, by service and VIP - what came in; direct routing and IP-in-IP send the replies past the director |
 | `thelb_offer_check_up{offer,port}`, `thelb_offer_assigned{offer,service}` | a backend's: its own checks, and its offers' services |
 
 ## 16. When things fail
@@ -506,7 +518,7 @@ Every command but `--help` and `--version` runs only as root. Exit status: `0` d
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
-               [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>] [--metrics <address:port>]
+               [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>] [--metrics <address:port>] [--debug]
 thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name>=]<proto>/<port>[,check=tcp|none|http:<path>] ...]
                [--name <name>] [--interface <name>] [--metrics <address:port>]
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)

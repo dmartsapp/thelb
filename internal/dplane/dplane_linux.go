@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -488,6 +489,15 @@ func (p *Plane) renew() {
 		p.log.Error("renewing service VIPs' leases failed: the kernel removes them when their leases lapse", "error", msg)
 	}
 	p.renewErr = msg
+}
+
+// Conns are the connections IPVS forwards now, from its table.
+func (p *Plane) Conns() ([]director.Conn, error) {
+	b, err := os.ReadFile("/proc/net/ip_vs_conn")
+	if err != nil {
+		return nil, err
+	}
+	return director.ParseConns(string(b)), nil
 }
 
 // ProbeAll asks the network, on each VIP's interface, who has it - all at

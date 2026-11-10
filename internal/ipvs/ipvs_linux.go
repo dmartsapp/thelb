@@ -52,6 +52,8 @@ const (
 	destWeight     = 4
 	destUThresh    = 5
 	destLThresh    = 6
+	destActive     = 7 // IPVS_DEST_ATTR_ACTIVE_CONNS
+	destInactive   = 8 // IPVS_DEST_ATTR_INACT_CONNS
 	destAddrFamily = 11
 	destStats64    = 12
 	destTunType    = 13
@@ -259,6 +261,14 @@ func (c *Conn) Dests(s Service) ([]Dest, error) {
 					d.Tunnel = native.Uint32(f.Data)&fwdMask == fwdTunnel
 				case destAddrFamily:
 					fam = native.Uint16(f.Data)
+				case destActive:
+					if len(f.Data) >= 4 {
+						d.Stats.Active = native.Uint32(f.Data)
+					}
+				case destInactive:
+					if len(f.Data) >= 4 {
+						d.Stats.Inactive = native.Uint32(f.Data)
+					}
 				case destStats64:
 					for _, st := range netlink.ParseAttrs(f.Data) {
 						if len(st.Data) < 8 {

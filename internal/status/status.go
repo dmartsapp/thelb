@@ -133,6 +133,8 @@ type Backend struct {
 	Connections        uint64  `json:"connections"`
 	Packets            uint64  `json:"packets"`
 	Bytes              uint64  `json:"bytes"`
+	ActiveConnections  uint32  `json:"active_connections"`   // established now
+	InactiveConns      uint32  `json:"inactive_connections"` // the others IPVS tracks: closing, or not yet established
 	LastCheckInSeconds float64 `json:"last_check_in_seconds"`
 }
 

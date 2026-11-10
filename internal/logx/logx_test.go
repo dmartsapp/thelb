@@ -48,3 +48,20 @@ func TestLoggerWritesWholeLinesForEveryModule(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", buf.String(), strings.Join(want, "\n"))
 	}
 }
+
+// TestDebugLinesOnlyWhenOn: DEBUG lines are written only while debugging is on,
+// for every logger made from the one it was turned on for.
+func TestDebugLinesOnlyWhenOn(t *testing.T) {
+	var b strings.Builder
+	l := New(&b, "thelb")
+	m := l.Module("director")
+	m.Debug("connection forwarded", "client", "198.18.0.100:51618")
+	if b.Len() != 0 || m.Debugging() {
+		t.Fatalf("a DEBUG line with debugging off: %q", b.String())
+	}
+	l.SetDebug(true)
+	m.Debug("connection forwarded", "client", "198.18.0.100:51618")
+	if !strings.Contains(b.String(), "[director] DEBUG connection forwarded client=198.18.0.100:51618") {
+		t.Errorf("with debugging on: %q", b.String())
+	}
+}

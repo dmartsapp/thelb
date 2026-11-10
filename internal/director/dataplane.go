@@ -44,6 +44,8 @@ type Dataplane interface {
 	// on every member, a master on the leader - and stops those it does not say,
 	// a master an earlier run left among them. SyncState{} stops both.
 	Sync(s SyncState) error
+	// Conns are the connections IPVS forwards now.
+	Conns() ([]Conn, error)
 }
 
 // SyncState is the IPVS connection synchronisation a director runs: the leader
@@ -263,6 +265,9 @@ func (s *session) serve(ctx context.Context) {
 	var slowSaid time.Time
 	repaired := time.Now()
 	s.syncDaemons(false) // the master too, now that it leads
+	if s.log.Debugging() {
+		go s.watchConns(ctx)
+	}
 	defer func() {
 		s.mu.Lock()
 		closing := s.closing
@@ -765,7 +770,7 @@ func (s *session) liveNow(brief bool) ([]api.CheckIn, []api.Live, []api.Own) {
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		addr, _ := netip.ParseAddr(nodes[a.Node].Address)
 		st := stats[DestKey(ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port)}, netip.AddrPortFrom(addr, uint16(v.Port)))]
-		l.Conns, l.Packets, l.Bytes = st.Conns, st.Packets, st.Bytes
+		l.Conns, l.Packets, l.Bytes, l.Active, l.Inactive = st.Conns, st.Packets, st.Bytes, st.Active, st.Inactive
 		live = append(live, l)
 	}
 	return cis, live, own
@@ -854,6 +859,7 @@ func (nothing) Clear()                                            {}
 func (nothing) Probe(context.Context, netip.Addr) (string, error) { return "", nil }
 func (nothing) Leftovers(Plan) error                              { return nil }
 func (nothing) Sync(SyncState) error                              { return nil }
+func (nothing) Conns() ([]Conn, error)                            { return nil, nil }
 func (nothing) ProbeAll(context.Context, []PlanVIP) (map[netip.Addr]string, error) {
 	return nil, nil
 }

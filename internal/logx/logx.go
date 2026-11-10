@@ -1,6 +1,6 @@
 // Package logx writes theLB's log lines, one per event:
 //
-//	<time, RFC 3339 in UTC> [<module>] <OK|WARN|ERROR> <what happened> key=value ...
+//	<time, RFC 3339 in UTC> [<module>] <OK|WARN|ERROR|DEBUG> <what happened> key=value ...
 //
 // - the grammar of shint's log lines, with a timestamp a machine can sort. Values
 // with spaces or quotes are quoted, and a value that knows it must not be logged
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,7 @@ const (
 	OK    Level = "OK"
 	Warn  Level = "WARN"
 	Error Level = "ERROR"
+	Debug Level = "DEBUG" // written only when debugging is on
 )
 
 // Redactor is implemented by values that must never be logged as they are; the
@@ -38,13 +40,29 @@ type Logger struct {
 	mu     *sync.Mutex
 	w      io.Writer
 	module string
+	debug  *atomic.Bool // shared by the loggers made with Module
 	// Now is the clock; tests replace it.
 	Now func() time.Time
 }
 
 // New returns a logger writing to w, for module.
 func New(w io.Writer, module string) *Logger {
-	return &Logger{mu: &sync.Mutex{}, w: w, module: module, Now: time.Now}
+	return &Logger{mu: &sync.Mutex{}, w: w, module: module, Now: time.Now, debug: &atomic.Bool{}}
+}
+
+// SetDebug turns DEBUG lines on or off, for this logger and every one made from
+// it with Module.
+func (l *Logger) SetDebug(on bool) { l.debug.Store(on) }
+
+// Debugging is whether DEBUG lines are written: a caller with costly lines to
+// make asks first.
+func (l *Logger) Debugging() bool { return l.debug != nil && l.debug.Load() }
+
+// Debug logs a detail, only while debugging is on.
+func (l *Logger) Debug(msg string, kv ...any) {
+	if l.Debugging() {
+		l.log(Debug, msg, kv)
+	}
 }
 
 // Module returns a logger for another module, writing to the same place.

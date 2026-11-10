@@ -132,6 +132,11 @@ func Director(st status.Status, self string, takeovers int64) string {
 	conns := s.add("thelb_backend_connections_total", "counter", "Connections IPVS sent a backend of a service.")
 	pkts := s.add("thelb_backend_packets_total", "counter", "Packets IPVS sent a backend of a service.")
 	bytes := s.add("thelb_backend_bytes_total", "counter", "Bytes IPVS sent a backend of a service.")
+	active := s.add("thelb_backend_connections_active", "gauge", "A backend's connections of a service established now, as IPVS tracks them.")
+	inactive := s.add("thelb_backend_connections_inactive", "gauge", "A backend's other connections of a service IPVS still tracks: closing, or not yet established.")
+	type sum struct{ conns, pkts, bytes, active float64 }
+	traffic := map[[2]string]*sum{}
+	var order [][2]string
 	for _, x := range st.Backends {
 		weight.put(float64(x.Weight), "service", x.Service, "backend", x.Backend)
 		check.put(b(x.OwnCheck == "ok"), "service", x.Service, "backend", x.Backend, "check", "own")
@@ -139,6 +144,28 @@ func Director(st status.Status, self string, takeovers int64) string {
 		conns.put(float64(x.Connections), "service", x.Service, "backend", x.Backend)
 		pkts.put(float64(x.Packets), "service", x.Service, "backend", x.Backend)
 		bytes.put(float64(x.Bytes), "service", x.Service, "backend", x.Backend)
+		active.put(float64(x.ActiveConnections), "service", x.Service, "backend", x.Backend)
+		inactive.put(float64(x.InactiveConns), "service", x.Service, "backend", x.Backend)
+		k := [2]string{x.Service, x.VIP}
+		if traffic[k] == nil {
+			traffic[k] = &sum{}
+			order = append(order, k)
+		}
+		t := traffic[k]
+		t.conns, t.pkts, t.bytes, t.active = t.conns+float64(x.Connections), t.pkts+float64(x.Packets), t.bytes+float64(x.Bytes), t.active+float64(x.ActiveConnections)
+	}
+	// The traffic through the director, by service: what came in for its VIP -
+	// direct routing and IP-in-IP send the replies past it.
+	sc := s.add("thelb_service_connections_total", "counter", "Connections the director forwarded for a service.")
+	sp := s.add("thelb_service_packets_total", "counter", "Packets the director forwarded for a service: what came in; the replies go past it.")
+	sb := s.add("thelb_service_bytes_total", "counter", "Bytes the director forwarded for a service: what came in; the replies go past it.")
+	sa := s.add("thelb_service_connections_active", "gauge", "A service's connections established now.")
+	for _, k := range order {
+		t := traffic[k]
+		sc.put(t.conns, "service", k[0], "vip", k[1])
+		sp.put(t.pkts, "service", k[0], "vip", k[1])
+		sb.put(t.bytes, "service", k[0], "vip", k[1])
+		sa.put(t.active, "service", k[0], "vip", k[1])
 	}
 	return s.text()
 }

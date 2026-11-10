@@ -18,8 +18,8 @@ func cluster() status.Status {
 		VIPs:     []status.VIP{{VIP: "10.0.0.10", Purpose: "control", Interface: "eth0", HeldBy: "lb-1"}, {VIP: "10.0.0.20", Purpose: "service", Interface: "eth0", HeldBy: "lb-1"}},
 		Services: []status.Service{{Service: "web", VIP: "10.0.0.20", BackendsUp: 1, Backends: 2}},
 		Backends: []status.Backend{
-			{Service: "web", Backend: "web-1", OwnCheck: "ok", DirectorCheck: "ok", Weight: 1, Connections: 42, Packets: 420, Bytes: 4200},
-			{Service: "web", Backend: "web-2", OwnCheck: "fail", DirectorCheck: "ok", Weight: 0},
+			{Service: "web", VIP: "10.0.0.20", Backend: "web-1", OwnCheck: "ok", DirectorCheck: "ok", Weight: 1, Connections: 42, Packets: 420, Bytes: 4200, ActiveConnections: 3, InactiveConns: 1},
+			{Service: "web", VIP: "10.0.0.20", Backend: "web-2", OwnCheck: "fail", DirectorCheck: "ok", Weight: 0, Connections: 8, Packets: 80, Bytes: 800},
 		},
 	}
 }
@@ -37,6 +37,9 @@ func TestTheLeaderSaysWhatTheClusterServes(t *testing.T) {
 		`thelb_backend_weight{service="web",backend="web-2"} 0`,
 		`thelb_backend_check_up{service="web",backend="web-2",check="own"} 0`,
 		"# TYPE thelb_backend_connections_total counter\n", `thelb_backend_connections_total{service="web",backend="web-1"} 42`,
+		`thelb_backend_connections_active{service="web",backend="web-1"} 3`, `thelb_backend_connections_inactive{service="web",backend="web-1"} 1`,
+		`thelb_service_connections_total{service="web",vip="10.0.0.20"} 50`, `thelb_service_bytes_total{service="web",vip="10.0.0.20"} 5000`,
+		`thelb_service_connections_active{service="web",vip="10.0.0.20"} 3`,
 	} {
 		if !strings.Contains(leader, want) {
 			t.Errorf("the leader's metrics lack %q:\n%s", want, leader)

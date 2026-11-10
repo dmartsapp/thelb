@@ -50,8 +50,9 @@ func (f *fakePlane) Probe(context.Context, netip.Addr) (string, error) { return 
 func (f *fakePlane) ProbeAll(context.Context, []PlanVIP) (map[netip.Addr]string, error) {
 	return nil, nil
 }
-func (f *fakePlane) Leftovers(Plan) error { return nil }
-func (f *fakePlane) Sync(SyncState) error { return nil }
+func (f *fakePlane) Leftovers(Plan) error   { return nil }
+func (f *fakePlane) Sync(SyncState) error   { return nil }
+func (f *fakePlane) Conns() ([]Conn, error) { return nil, nil }
 
 // weight is the weight the plan gives a backend in a service, or -1.
 func (f *fakePlane) weight(vip string, port int, backend netip.AddrPort) int {
