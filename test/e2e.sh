@@ -105,6 +105,11 @@ for n in d1 d2 d3 d4 b1 b2 b3 c; do
 	mac[$n]=$(ip netns exec $P-$n cat /sys/class/net/eth0/address)
 	install -d -m 0700 "$tmp/$n"
 done
+# Backends filter by reverse path, strictly, as Ubuntu's and RHEL's do: a
+# tunnelled service must work there.
+for n in b1 b2 b3; do
+	ip netns exec $P-$n sh -c 'echo 1 >/proc/sys/net/ipv4/conf/all/rp_filter; echo 1 >/proc/sys/net/ipv4/conf/default/rp_filter'
+done
 # A second network behind a router - 198.19.0.0/24, RFC 2544's other half -
 # with a backend, b4, that only a tunnelled service can reach. The router lets
 # replies from the VIP through: a network that checks source addresses would
@@ -134,6 +139,7 @@ ip -n $P-b4 link set lo up
 ip -n $P-b4 link set eth0 up
 ip -n $P-b4 addr add ${addr4[b4]}/24 dev eth0
 ip -n $P-b4 route add default via $NET4B.1
+ip netns exec $P-b4 sh -c 'echo 1 >/proc/sys/net/ipv4/conf/all/rp_filter; echo 1 >/proc/sys/net/ipv4/conf/default/rp_filter'
 mac[b4]=$(ip netns exec $P-b4 cat /sys/class/net/eth0/address)
 install -d -m 0700 "$tmp/b4"
 # link_up <director>: its link up again - and its route to the second network,
@@ -596,6 +602,7 @@ check "the backends' checks are spread across the directors - more than one make
 ip netns exec $P-d1 curl -s --max-time 5 http://127.0.0.1:9732/metrics >"$tmp/metrics.d1"
 ip netns exec $P-b1 curl -s --max-time 5 http://127.0.0.1:9733/metrics >"$tmp/metrics.b1"
 check "--metrics: the leader serves Prometheus's text - it leads, its backends' weights, the VIP it holds" "grep -qx 'thelb_leader 1' $tmp/metrics.d1 && grep -qx 'thelb_backend_weight{service=\"web\",backend=\"b1\"} 1' $tmp/metrics.d1 && grep -q '^thelb_vip_held{vip=\"$SVC\",purpose=\"service\"' $tmp/metrics.d1 && grep -q '^# TYPE thelb_backend_connections_total counter' $tmp/metrics.d1"
+grep -E '^thelb_(service|backend_connections_active)' "$tmp/metrics.d1" | head -6 | sed 's/^/      /'
 check "--metrics: the traffic through it, by service, and each backend's connections now" "grep -qE '^thelb_service_connections_total\{service=\"web\",vip=\"$SVC\"\} [1-9]' $tmp/metrics.d1 && grep -qE '^thelb_service_bytes_total\{service=\"web\",vip=\"$SVC\"\} [1-9]' $tmp/metrics.d1 && grep -q '^thelb_backend_connections_active{service=\"web\",backend=\"b1\"}' $tmp/metrics.d1"
 check "--debug: the leader logs each connection it forwards - the client, the service, the backend - and a director without it nothing" "logged $tmp/d1.svc.log 'DEBUG connection forwarded client=${NET4}.100:[0-9]+ service=web vip=$SVC:80 backend=b[123] to=${NET4}.3[123]:80 proto=tcp' && ! grep -q ' DEBUG ' $tmp/d2.svc.log"
 check "and a backend its own: a member, its offers' checks" "grep -qx 'thelb_member 1' $tmp/metrics.b1 && grep -qx 'thelb_offer_check_up{offer=\"web\",port=\"tcp/80\"} 1' $tmp/metrics.b1"
@@ -833,7 +840,7 @@ if command -v ipvsadm >/dev/null; then
 	check "IPVS sends both by tunnel" "within 20 eval 'ipvs_on $new | grep -A3 \"TCP  $FAR:80\" | grep -cE -- \"(${addr4[b4]}|${addr4[b1]}):80 +Tunnel +1 \" | grep -qx 2'"
 	ipvs_on $new | sed -n "/TCP  $FAR:80/,/^TCP/p" | sed 's/^/      /'
 fi
-check "b4 unwraps them on thelbt0, and holds the VIP on thelb0" "within 10 eval 'ip -n $P-b4 -o link show thelbt0 | grep -q ipip && ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/32\"'"
+check "b4 unwraps them on thelbt0 - which has RFC 7600's dummy address, or strict reverse-path filtering drops them - and holds the VIP on thelb0" "within 10 eval 'ip -n $P-b4 -o link show thelbt0 | grep -q ipip && ip -n $P-b4 -o addr show dev thelbt0 | grep -q \" 192.0.0.8/32\" && ip -n $P-b4 -o addr show dev thelb0 | grep -q \" $FAR/32\"'"
 if command -v nft >/dev/null; then
 	check "and clamps its handshakes' MSS, so wrapped packets fit" "nft_on b4 | grep -q \"ip saddr $FAR tcp flags syn tcp option maxseg size > 1440 tcp option maxseg size set 1440\""
 fi

@@ -23,12 +23,12 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build dist notes check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
+.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
 
 build:
-	@for arch in amd64 arm64; do \
+	@for arch in amd64 arm arm64; do \
 		echo "==> bin/thelb.linux.$$arch"; \
-		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb.linux.$$arch ./cmd/thelb || exit 1; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch GOARM=7 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb.linux.$$arch ./cmd/thelb || exit 1; \
 	done
 
 # dist: a release's files - the binaries, named for the version, and their
@@ -36,11 +36,18 @@ build:
 dist:
 	@[ "$(VERSION)" != "0.1.0-dev" ] || { echo "say which: make dist VERSION=<x.y.z>"; exit 1; }
 	@rm -rf dist && mkdir -p dist
-	@for arch in amd64 arm64; do \
-		echo "==> dist/thelb-$(VERSION)-linux-$$arch"; \
-		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/thelb-$(VERSION)-linux-$$arch ./cmd/thelb || exit 1; \
-	done
+	@for arch in amd64 arm arm64; do $(MAKE) -s dist-one ARCH=$$arch || exit 1; done
 	@cd dist && sha256sum thelb-* > SHA256SUMS && cat SHA256SUMS
+
+# dist-one: one release binary, for ARCH (amd64, arm - GOARM from the
+# environment, 7 by default - or arm64): what the release workflow's build job
+# runs for each.
+ARCH ?= amd64
+dist-one:
+	@[ "$(VERSION)" != "0.1.0-dev" ] || { echo "say which: make dist-one VERSION=<x.y.z> ARCH=<arch>"; exit 1; }
+	@mkdir -p dist
+	@echo "==> dist/thelb-$(VERSION)-linux-$(ARCH)"
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) GOARM=$${GOARM:-7} $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/thelb-$(VERSION)-linux-$(ARCH) ./cmd/thelb
 
 # notes: the changelog's section for VERSION, for the release's page.
 notes:

@@ -429,7 +429,7 @@ func (n *Net) Cleanup() error {
 		if ifc != nil {
 			name = ifc.Name
 		}
-		if ifc != nil && ifc.Name == "thelb0" {
+		if ifc != nil && (ifc.Name == "thelb0" || ifc.Name == "thelbt0") {
 			continue // a backend's, on a node that runs both: the backend's to clear
 		}
 		marked := (a.HasProto && a.Proto == Proto) || (a.Prefix.Addr().Is4() && a.Label == name+":thelb")

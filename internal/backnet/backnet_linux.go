@@ -166,11 +166,20 @@ func (h *Host) Map(maps []nft.Map, clamps []nft.Clamp) error {
 	return nil
 }
 
+// tunnelAddr is thelbt0's address: RFC 7600's IPv4 dummy address, for an
+// interface that has no address of its own. Loose reverse-path filtering drops
+// every packet that arrives on an interface without an IPv4 address - the
+// kernel's no-address rule, whatever the route back - so thelbt0 needs one, or
+// the packets it unwraps are dropped wherever filtering is on (Ubuntu's and
+// RHEL's defaults). Nothing is sent from it: the replies go out the way the
+// route to the client says.
+var tunnelAddr = netip.MustParsePrefix("192.0.0.8/32")
+
 // Tunnel creates or removes thelbt0: an IP-in-IP interface that takes packets
 // from any director, and unwraps them for the VIPs on thelb0. Reverse-path
 // filtering would drop them - their sources are clients, reached through
-// another interface - so it is off on thelbt0, and loose rather than strict
-// for all interfaces if it was strict.
+// another interface - so it is off on thelbt0, loose rather than strict for all
+// interfaces if it was strict, and thelbt0 has an address (tunnelAddr).
 func (h *Host) Tunnel(on bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -200,9 +209,42 @@ func (h *Host) Tunnel(on bool) error {
 	} else if changed {
 		h.log.OK("kernel parameter set", "name", "net/ipv4/conf/all/rp_filter", "value", "2", "was", old)
 	}
+	if err := addTunnelAddr(); err != nil {
+		return err
+	}
 	h.tunnel = true
 	h.log.OK("interface created", "interface", TunnelInterface, "kind", "ipip, from any director")
 	return nil
+}
+
+// addTunnelAddr gives thelbt0 its address, if it lacks it.
+func addTunnelAddr() error {
+	ifc, err := net.InterfaceByName(TunnelInterface)
+	if err != nil {
+		return err
+	}
+	if err := netlink.AddAddr(ifc.Index, tunnelAddr, TunnelInterface+":thelb", ctlnet.Proto, 0); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("adding %s to %s: %w", tunnelAddr.Addr(), TunnelInterface, err)
+	}
+	return nil
+}
+
+// hasTunnelAddr is whether thelbt0 has its address.
+func hasTunnelAddr() bool {
+	ifc, err := net.InterfaceByName(TunnelInterface)
+	if err != nil {
+		return false
+	}
+	addrs, err := netlink.Addrs()
+	if err != nil {
+		return true // cannot tell: nothing to repair
+	}
+	for _, a := range addrs {
+		if a.Index == ifc.Index && a.Prefix == tunnelAddr {
+			return true
+		}
+	}
+	return false
 }
 
 // Repair puts back what someone removed or changed of the backend's kernel
@@ -266,6 +308,8 @@ func (h *Host) Repair() ([]string, error) {
 				errs = append(errs, fmt.Errorf("creating %s again: %w", TunnelInterface, err))
 			} else if err := sysctl.Write(rp, "0"); err != nil {
 				errs = append(errs, err)
+			} else if err := addTunnelAddr(); err != nil {
+				errs = append(errs, err)
 			} else {
 				fixed = append(fixed, TunnelInterface+" was removed: created again")
 			}
@@ -274,6 +318,13 @@ func (h *Host) Repair() ([]string, error) {
 				errs = append(errs, err)
 			} else {
 				fixed = append(fixed, rp+" was "+v+": set to 0 again")
+			}
+		}
+		if _, err := net.InterfaceByName(TunnelInterface); err == nil && !hasTunnelAddr() {
+			if err := addTunnelAddr(); err != nil {
+				errs = append(errs, err)
+			} else {
+				fixed = append(fixed, TunnelInterface+"'s address "+tunnelAddr.Addr().String()+" was removed: added again")
 			}
 		}
 	}

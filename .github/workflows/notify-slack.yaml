@@ -1,0 +1,42 @@
+name: Notify Slack
+
+# The last word on a release: waits for the Release workflow the same tag push
+# started, then posts one message to Slack - released, with its files; or
+# failed, with the job and step that failed and the last lines of its log, to
+# say why. It publishes nothing and changes nothing: if it fails, the release
+# is unaffected. Started by the tag like the release, never by anything else
+# (a workflow_run trigger would break the rule that only a version tag runs
+# workflows, so it polls instead).
+#
+# The webhook is the repository secret SLACK_WEBHOOK_URL. Without it (a fork, or
+# the secret not set) the job says so and succeeds.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  notify:
+    name: Post the release's outcome to Slack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read   # the release and the commit message
+      actions: read    # the release's run, its jobs, steps and logs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait for the release, then post its outcome
+        # Everything reaches the script through env, never interpolated into the
+        # shell: the webhook is a credential, and the tag and actor are text
+        # somebody chose.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: python3 -B -u .github/scripts/notify-slack.py
