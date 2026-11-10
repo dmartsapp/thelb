@@ -844,6 +844,8 @@ if [ "$(answers 8 $FAR)" != "b1=4 b4=4" ]; then
 	ip netns exec $P-b4 nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpInHdrErrors|TcpInErrs|IpExtInCsumErrors' | sed 's/^/      b4 /'
 	ip netns exec $P-r nstat -az 2>/dev/null | grep -E 'IpInAddrErrors|IpInDiscards|IpExtInNoRoutes|IpForwDatagrams|IpOutNoRoutes' | sed 's/^/      router /'
 	ip netns exec $P-b4 nft list ruleset 2>/dev/null | sed 's/^/      b4 nft /'
+	echo "      who holds $FAR: $(holder $FAR | xargs); the client's entry: $(ip -n $P-c neigh show $FAR)"
+	grep -h "$FAR" $tmp/d*.log | tail -12 | sed 's/^/      /'
 	if command -v tcpdump >/dev/null; then
 		ip netns exec $P-b4 timeout 4 tcpdump -lni any -c 12 'tcp port 80 or ip proto 4' >"$tmp/far.b4.pcap.txt" 2>&1 &
 		ip netns exec $P-c timeout 4 tcpdump -lni eth0 -c 12 "host $FAR" >"$tmp/far.c.pcap.txt" 2>&1 &
@@ -934,7 +936,7 @@ if [ $have6 = 1 ]; then
 	check "d2 and d3 wait for approval" "within 20 both_logged $tmp/d2.v6.log $tmp/d3.v6.log 'OK waiting for approval'"
 	check "and join once approved" "on d1 $bin admin approve d2 d3 >/dev/null && within 20 both_logged $tmp/d2.v6.log $tmp/d3.v6.log 'OK director ready'"
 	check "three up" "within 20 up_is d1 3"
-	check "the client reaches the control VIP" "reach [$VIP6]"
+	check "the client reaches the control VIP" "reach $VIP6"
 	stop d1 KILL
 	ip -n $P-d1 link set eth0 down
 	check "the leader crashes: another takes the VIP" "within 20 held_not_by $VIP6 d1"
@@ -972,6 +974,10 @@ sed '/^\[Service\]/a NetworkNamespacePath=/run/netns/'$P'-d1\nTemporaryFileSyste
 systemctl daemon-reload
 check "systemctl start: started, as Type=notify says - once its socket is up" "timeout 60 systemctl start thelb-e2e-d1 && [ \"\$(systemctl is-active thelb-e2e-d1)\" = active ]"
 mainpid=$(systemctl show -p MainPID --value thelb-e2e-d1)
+if [ "$(systemctl is-active thelb-e2e-d1)" != active ]; then
+	systemctl status --no-pager thelb-e2e-d1 2>&1 | head -20 | sed 's/^/      /'
+	journalctl -u thelb-e2e-d1 --no-pager -n 20 2>&1 | sed 's/^/      /'
+fi
 check "it runs with only the capabilities the unit bounds: CAP_NET_ADMIN, CAP_NET_RAW, CAP_NET_BIND_SERVICE" "[ \"\$(awk '/^CapEff/ {print \$2}' /proc/$mainpid/status)\" = 0000000000003400 ]"
 check "and works: preflight passed, the bootstrap wrote its secret files, it holds the control VIP" "journalctl -u thelb-e2e-d1 --no-pager | grep -q 'OK preflight: this node has all theLB needs' && within 30 eval '[ -s $tmp/sd/director.secret ] && holds d1 $VIP4'"
 check "status, asked in its own namespaces" "within 10 eval 'nsenter -t $mainpid -m -n $bin status | grep -qE \"^ e2e +\\|\"'"
