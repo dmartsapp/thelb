@@ -310,7 +310,8 @@ done
 line=$(ip -n $P-d1 -o addr show dev eth0 | grep -F " $VIP4/32")
 check "the control VIP is on d1's eth0 as $VIP4/32" "[ -n \"\$line\" ]"
 check "with theLB's label, eth0:thelb" "echo \"\$line\" | grep -q 'eth0:thelb'"
-check "and theLB's address protocol, 116" "echo \"\$line\" | grep -q 'proto 0x74'"
+check "and theLB's address protocol, 116" "echo \"\$line\" | grep -qE 'proto (0x74|116) '"
+echo "      $line"
 check "leased from the kernel - 6 s, renewed - not forever" "echo \"\$line\" | grep -qE 'valid_lft [1-6]sec preferred_lft [1-6]sec' && sleep 8 && ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE 'valid_lft [1-6]sec'"
 check "admin lease 9: in the cluster's state, and the kernel's lease follows" "on d1 $bin admin lease 9 | grep -q 'control VIP lease: 9s' && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 9 && within 10 eval 'ip -n $P-d1 -o addr show dev eth0 | grep -F \" $VIP4/32\" | grep -qE \"valid_lft [7-9]sec\"'"
 check "admin lease refuses less than 3 s" "! on d1 $bin admin lease 2 2>/dev/null && on d1 $bin admin lease 6 >/dev/null && is d1 's[\"cluster\"][\"vip_lease_seconds\"]' 6"

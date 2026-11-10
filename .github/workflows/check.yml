@@ -43,5 +43,5 @@ jobs:
       - name: the logs of a failed run
         if: failure()
         run: |
-          d=$(ls -d /tmp/thelb-e2e.* 2>/dev/null | head -1)
-          [ -n "$d" ] && sudo tail -n 60 "$d"/*.log
+          sudo sh -c 'for f in /tmp/thelb-e2e.*/*.log; do echo "==> $f"; tail -n 40 "$f"; done'
+          ip -V
