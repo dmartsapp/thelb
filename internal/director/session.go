@@ -32,6 +32,7 @@ type session struct {
 	id     *wire.Identity
 	fsm    *cluster.FSM
 	r      *raft.Raft
+	store  *raft.InmemStore // Raft's log: a takeover replays its tail
 	trans  *raft.NetworkTransport
 	stream *streamLayer
 	nodeLn net.Listener
@@ -62,6 +63,7 @@ type session struct {
 	closing   bool
 	member    bool       // the replicated state has this director as a member
 	evict     string     // after a takeover: the director left behind, to remove once leading
+	left      *peer      // after a takeover: the director left behind, which the guard knows by its MAC
 	syncErr   string     // the IPVS sync daemons' last error, said once
 	syncMu    sync.Mutex // one change to the sync daemons at a time
 }
@@ -135,8 +137,10 @@ func newSession(n *node, raftID string, key *ecdsa.PrivateKey, certDER []byte, c
 			s.cancel()
 			return nil, err
 		}
-		s.evict = standing.evict
+		left := standing.left
+		s.evict, s.left = left.name, &left
 	}
+	s.store = store
 	r, err := raft.NewRaft(conf, s.fsm, store, store, snaps, s.trans)
 	if err != nil {
 		_ = s.trans.Close()
@@ -421,10 +425,14 @@ func (s *session) lead() {
 	if evict != "" {
 		s.evictLeftBehind(evict)
 	}
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go func() {
 		defer s.wg.Done()
 		s.sweep(ctx)
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.guard(ctx)
 	}()
 	go func() {
 		defer s.wg.Done()
@@ -503,11 +511,14 @@ func (s *session) sweep(ctx context.Context) {
 // monitor ends the session when Raft has shut down by itself - this member was
 // removed - and when the director has had no leader for a while and another
 // cluster answers on the control VIP: the cluster was created again without it.
+// One of two directors stands alone when the other is gone; it watches the
+// control VIP while it has no leader, for standAlone.
 func (s *session) monitor() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	var noLeaderSince, lookAt time.Time
-	var notAlone string
+	var notAlone, lastLeader string
+	vipFree := false // the control VIP seen free since this director lost its leader
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -515,28 +526,32 @@ func (s *session) monitor() {
 		case <-t.C:
 		}
 		if s.r.State() == raft.Shutdown {
-			s.finish(errRemoved)
+			s.finish(s.shutDown())
 			return
 		}
 		if _, id := s.r.LeaderWithID(); id != "" {
-			noLeaderSince, notAlone = time.Time{}, ""
+			noLeaderSince, notAlone, lastLeader, vipFree = time.Time{}, "", string(id), false
 			continue
 		}
 		if noLeaderSince.IsZero() {
 			noLeaderSince = time.Now()
 			lookAt = noLeaderSince.Add(orphanAfter)
-			continue
 		}
 		// One of two directors, the other gone: stand alone.
-		if wait, two := s.takeoverWait(); two && time.Since(noLeaderSince) >= wait {
-			tk, why := s.tryTakeover()
-			if tk != nil && !s.hasLeader() { // looking takes seconds: a leader may have come
-				s.finish(tk)
-				return
+		if wait, two := s.takeoverWait(); two {
+			if !vipFree && s.vipFree() && !s.hasLeader() {
+				vipFree = true
 			}
-			if tk == nil && why != notAlone && !s.hasLeader() {
-				notAlone = why
-				s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
+			if time.Since(noLeaderSince) >= wait {
+				tk, why := s.tryTakeover(lastLeader, vipFree)
+				if tk != nil && !s.hasLeader() { // looking takes seconds: a leader may have come
+					s.finish(tk)
+					return
+				}
+				if tk == nil && why != notAlone && !s.hasLeader() {
+					notAlone = why
+					s.log.Warn("no leader, and the other director may be alive: not standing alone", "reason", why)
+				}
 			}
 		}
 		if time.Now().Before(lookAt) {
@@ -560,6 +575,21 @@ func (s *session) monitor() {
 			return
 		}
 	}
+}
+
+// shutDown is why Raft shut down by itself: this member was taken out of it.
+// A director the cluster still has as a member - the leader found it gone,
+// and took it out of the vote only - starts over, and rejoins.
+func (s *session) shutDown() error {
+	approved := false
+	s.fsm.Read(func(st *cluster.State) {
+		n := st.Nodes[s.n.cfg.Name]
+		approved = n != nil && n.Role == "director" && n.RaftID == s.raftID
+	})
+	if approved {
+		return fmt.Errorf("%w: this director was taken out of the vote", errRejoin)
+	}
+	return errRemoved
 }
 
 // hasLeader is whether Raft knows a leader - this director or another.

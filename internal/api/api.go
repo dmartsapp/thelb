@@ -95,6 +95,8 @@ type CheckIn struct {
 	At      time.Time `json:"at"`
 	Applied uint64    `json:"applied"`
 	Version string    `json:"version"`
+	// Gone: the leader found this director gone, and took it out of the vote.
+	Gone bool `json:"gone,omitempty"`
 }
 
 // Live is an assignment as the leader sees it now.

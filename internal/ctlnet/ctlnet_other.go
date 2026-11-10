@@ -26,6 +26,7 @@ func (*Net) Dial(context.Context, string) (net.Conn, error) { return nil, errors
 func (*Net) VIPHolder(context.Context) (string, error)      { return "", errors.ErrUnsupported }
 func (*Net) Take() (net.Listener, error)                    { return nil, errors.ErrUnsupported }
 func (*Net) Release()                                       {}
+func (*Net) Announce()                                      {}
 func (*Net) Repair() (bool, error)                          { return false, errors.ErrUnsupported }
 func (*Net) Cleanup() error                                 { return errors.ErrUnsupported }
 func (*Net) MACOf(netip.Addr) string                        { return "" }

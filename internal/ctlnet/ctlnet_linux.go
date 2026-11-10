@@ -294,6 +294,21 @@ func (n *Net) Repair() (bool, error) {
 	return true, nil
 }
 
+// Announce announces the control VIP again, while this director holds it: the
+// network's caches pointed back here, away from another machine answering for
+// it.
+func (n *Net) Announce() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.ln == nil {
+		return
+	}
+	n.cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	n.cancel = cancel
+	go n.announce(ctx)
+}
+
 // Release removes the control VIP, then closes its listener.
 func (n *Net) Release() {
 	n.mu.Lock()

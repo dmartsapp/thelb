@@ -14,8 +14,11 @@
 # client's neighbour table - and the crashed director coming back, rejoining
 # without approval; a planned stop handing leadership over; remove, after which
 # a director waits for approval again; refuse; a wrong secret; a full stop,
-# after which every director is approved again; and IPv6, where the kernel has
-# it. Nothing is left behind.
+# after which every director is approved again; two directors surviving either
+# one's planned stop and crash, a firewall rejecting their port (one stands
+# alone), and a cut no gateway shows (both do; one stands down when they see
+# each other again); three directors losing two, one after the other; and IPv6,
+# where the kernel has it. Nothing is left behind.
 
 set -u
 bin="$(readlink -f "${1:?usage: test/e2e.sh <thelb binary>}")"
@@ -226,6 +229,8 @@ within() {
 	"$@"
 }
 logged() { grep -qE -- "$2" "$1" 2>/dev/null; }
+# count_is <log> <pattern> <n>: the log has n lines matching.
+count_is() { [ "$(grep -cE -- "$2" "$1" 2>/dev/null)" = "$3" ]; }
 json() { on "$1" "$bin" status --json 2>/dev/null | python3 -c "import json, sys; s = json.load(sys.stdin); print($2)" 2>/dev/null; }
 leader_of() { json "$1" "s['cluster']['leader'] if s['cluster'] else ''"; }
 up() { json "$1" "sum(1 for n in s['nodes'] if n['state'] == 'up')"; }
@@ -328,7 +333,7 @@ check "the VIP is no longer on d1's eth0" "! holds d1 $VIP4"
 check "it finds the cluster and rejoins" "within 30 logged $tmp/d1.rejoin.log 'OK joined the cluster cluster=e2e id=$cluster1'"
 check "without waiting for approval" "! logged $tmp/d1.rejoin.log 'waiting for approval'"
 check "the leader says so" "within 10 eval \"grep -q 'OK director rejoined: approved before node=d1' $tmp/$new*.log\""
-check "and removes its old member identity" "within 20 eval \"grep -q 'OK old member identity removed node=d1' $tmp/$new*.log\""
+check "and its old member identity is out of the vote: the leader found d1 gone, or removed it as d1 rejoined" "within 20 eval \"grep -qE 'OK old member identity removed node=d1|WARN director gone: out of the vote.* node=d1 ' $tmp/$new*.log\""
 check "three directors up" "within 20 up_is $new 3"
 
 echo "== a planned stop: the leader hands leadership over"
@@ -445,8 +450,59 @@ EOF
 	ip netns exec $P-d2 nft delete table inet e2e_cut
 	check "the partition heals: one of them leads again, with both voting" "within 30 held $VIP4 && within 20 holder_up $VIP4 2"
 	check "and neither started over: the one that leads stays the same cluster's" "sleep 3; holder_up $VIP4 2 && ! grep -q 'starting over' $tmp/d1.crash.log $tmp/d2.crash.log"
+
+	# Each finds the other's port refusing - as if its theLB were not running -
+	# while both machines answer: only the order of their member identities
+	# (d1's sorts first) and the control VIP, seen free, then taken, tell them.
+	echo "== two directors: a firewall rejects the control port between them - the first to decide stands alone, the other stays"
+	ip netns exec $P-d2 nft -f - <<EOF
+table inet e2e_cut {
+	chain in { type filter hook input priority 0; iifname "eth0" ip saddr ${addr4[d1]} tcp dport $PORT reject with tcp reset; }
+	chain out { type filter hook output priority 0; oifname "eth0" tcp dport $PORT reject with tcp reset; }
+}
+EOF
+	check "d1 finds d2's control port refusing, and stands alone, claiming the control VIP" "within 30 logged $tmp/d1.crash.log 'WARN standing alone: .* node=d2 .*refuses connections' && within 5 holds d1 $VIP4"
+	check "d2 saw the control VIP free, then taken by d1 - alive, deciding first - and stays" "within 30 logged $tmp/d2.crash.log 'not standing alone reason=.*d1 took the control VIP after this director saw it free' && count_is $tmp/d2.crash.log 'WARN standing alone:' 1"
+	check "one leader: d1 holds the control VIP, d2 does not" "sleep 5; holds d1 $VIP4 && ! holds d2 $VIP4 && count_is $tmp/d2.crash.log 'WARN standing alone:' 1"
+	ip netns exec $P-d2 nft delete table inet e2e_cut
+	check "the firewall opened: d2, left behind, starts over and waits for approval; approved, it votes" "within 30 count_is $tmp/d2.crash.log 'OK waiting for approval' 2 && on d1 $bin admin approve d2 >/dev/null && within 20 up_is d1 2"
+
+	# A cut between the two only - the router, their gateway, still answers
+	# both: a partition neither can tell from the other's crash.
+	if ip netns exec $SW nft add table bridge e2e_l2 2>/dev/null; then
+		echo "== two directors: a cut no gateway shows - both stand alone; seeing each other again, one stands down"
+		ip netns exec $SW nft -f - <<EOF
+table bridge e2e_l2 {
+	chain cut { type filter hook forward priority 0; iifname "d1" oifname "d2" drop; iifname "d2" oifname "d1" drop; }
+}
+EOF
+		check "each finds the other not answering at all, and stands alone" "within 40 eval 'count_is $tmp/d1.crash.log \"WARN standing alone: .* node=d2 .*does not answer on the network\" 1 && count_is $tmp/d2.crash.log \"WARN standing alone: .* node=d1 .*does not answer on the network\" 1'"
+		check "two leaders, each holding the control VIP on its side of the cut" "within 20 eval 'holds d1 $VIP4 && holds d2 $VIP4'"
+		ip netns exec $SW nft delete table bridge e2e_l2
+		check "seeing each other again, d2 - its member identity sorts later - stands down" "within 30 logged $tmp/d2.crash.log 'WARN standing down .*two leaders: d1 leads too'"
+		# Whichever looks first settles it: d1 may find d2 already gone from the VIP.
+		check "d1 keeps leading, with the control VIP" "holds d1 $VIP4 && within 10 leader_is d1 d1 && ! logged $tmp/d1.crash.log 'WARN standing down'"
+		check "d2 gives the control VIP up, starts over, and waits for approval; approved, it votes" "within 20 eval '! holds d2 $VIP4' && within 30 count_is $tmp/d2.crash.log 'OK waiting for approval' 3 && on d1 $bin admin approve d2 >/dev/null && within 20 up_is d1 2"
+	fi
 fi
-for n in d1 d2; do stop $n; done
+
+echo "== three directors: two crash, one after the other - the leader takes the first out of the vote; the last of two stands alone"
+lead=$(holder $VIP4)
+other=d1
+[ "$lead" = d1 ] && other=d2
+copy_secrets d3
+start d3 "$tmp/d3.gone.log" --vip $VIP4
+check "d3 joins, once approved: three voters" "within 20 logged $tmp/d3.gone.log 'OK waiting for approval' && on $lead $bin admin approve d3 >/dev/null && within 20 logged $tmp/d3.gone.log 'OK director ready' && within 20 up_is $lead 3"
+stop d3 KILL
+check "d3's theLB is killed: the leader finds its port refusing, and takes it out of the vote" "within 30 logged $tmp/$lead.crash.log 'WARN director gone: out of the vote.* node=d3 .*voters=2 .*refuses connections'"
+check "status says d3 is down, not stopped" "is $lead '[n[\"state\"] for n in s[\"nodes\"] if n[\"node\"] == \"d3\"][0]' down"
+stop $lead KILL
+check "the leader, $lead, is killed too: $other, the last of two voters, stands alone" "within 30 logged $tmp/$other.crash.log 'WARN standing alone: .* node=$lead .*refuses connections'"
+check "$other leads alone, with the control VIP" "within 20 holds $other $VIP4 && within 10 leader_is $other $other"
+check "$lead's machine still answers for the control VIP, its theLB killed: $other announces it again" "within 15 logged $tmp/$other.crash.log 'WARN another machine answers for the control VIP .*what a theLB killed leaves'"
+# What $lead's theLB would remove at its next start: the lab goes on without it.
+ip -n $P-$lead addr del $VIP4/32 dev eth0 2>/dev/null
+for n in d1 d2; do [ -n "${pid[$n]:-}" ] && stop $n; done
 
 echo "== services: three backends, a pool, a service, and traffic through IPVS"
 SVC=$NET4.20

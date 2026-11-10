@@ -337,6 +337,9 @@ type State struct {
 	Services    map[string]*Service    `json:"services"`
 	Offers      map[string]*Offers     `json:"offers"`      // by backend
 	Assignments map[string]*Assignment `json:"assignments"` // by AssignmentKey
+	// Applied is the index of the last entry applied: a director that stands
+	// alone replays its log past it.
+	Applied uint64 `json:"applied,omitempty"`
 }
 
 func newState() *State {
@@ -427,6 +430,7 @@ func (f *FSM) applyLocked(e Entry, index uint64) error {
 	if errors.Is(err, ErrUnknownEntry) {
 		return err
 	}
+	f.s.Applied = index
 	// Forget what has expired, by the entry's clock: the same on every director.
 	for name, r := range f.s.Refused {
 		if e.At.Sub(r.At) > RefusalMemory {

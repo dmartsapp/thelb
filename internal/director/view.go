@@ -64,6 +64,8 @@ func (s *session) status() status.Status {
 				row.Role, row.State = "leader", "up"
 			case !known:
 				row.State = "unknown"
+			case configured && n.Role == "director" && n.RaftID != "" && !member && checked && ci.Gone:
+				row.State = "down" // found gone by the leader, out of the vote
 			case configured && n.Role == "director" && n.RaftID != "" && !member:
 				row.State = "stopped" // stopped by plan, out of the vote
 			case checked && now.Sub(ci.At) < lease && (member || n.Role == "backend"):

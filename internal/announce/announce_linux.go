@@ -73,8 +73,9 @@ func Announce(index int, mac net.HardwareAddr, vip netip.Addr) error {
 
 // Probe asks the link who has vip, from src (this node's address on the
 // interface, for IPv6; IPv4 probes come from 0.0.0.0), and waits up to wait for
-// an answer. It returns the MAC address of a host that has vip, or "" if none
-// answered.
+// an answer - asking again a third of the way through, as one question or its
+// answer can be lost, and "no one has it" decides things. It returns the MAC
+// address of a host that has vip, or "" if none answered.
 func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Duration) (string, error) {
 	vip = vip.Unmap()
 	deadline := time.Now().Add(wait)
@@ -84,11 +85,19 @@ func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Durat
 			return "", err
 		}
 		defer func() { _ = syscall.Close(fd) }()
-		if err := sendARP(fd, index, 1, mac, netip.IPv4Unspecified(), make([]byte, 6), vip); err != nil {
+		ask := func() error { return sendARP(fd, index, 1, mac, netip.IPv4Unspecified(), make([]byte, 6), vip) }
+		if err := ask(); err != nil {
 			return "", err
 		}
+		again := time.Now().Add(wait / 3)
 		buf := make([]byte, 1500)
 		for time.Now().Before(deadline) {
+			if !again.IsZero() && time.Now().After(again) {
+				again = time.Time{}
+				if err := ask(); err != nil {
+					return "", err
+				}
+			}
 			n, _, err := syscall.Recvfrom(fd, buf, 0)
 			if err != nil {
 				if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {
@@ -119,11 +128,24 @@ func Probe(index int, mac net.HardwareAddr, src, vip netip.Addr, wait time.Durat
 	msg = append(msg, mac...)
 	v := vip.As16()
 	solicited := [16]byte{0xff, 0x02, 10: 0, 11: 0x01, 12: 0xff, 13: v[13], 14: v[14], 15: v[15]}
-	if err := syscall.Sendto(fd, msg, 0, &syscall.SockaddrInet6{Addr: solicited, ZoneId: uint32(index)}); err != nil {
-		return "", fmt.Errorf("sending a neighbor solicitation: %w", err)
+	ask := func() error {
+		if err := syscall.Sendto(fd, msg, 0, &syscall.SockaddrInet6{Addr: solicited, ZoneId: uint32(index)}); err != nil {
+			return fmt.Errorf("sending a neighbor solicitation: %w", err)
+		}
+		return nil
 	}
+	if err := ask(); err != nil {
+		return "", err
+	}
+	again := time.Now().Add(wait / 3)
 	buf := make([]byte, 1500)
 	for time.Now().Before(deadline) {
+		if !again.IsZero() && time.Now().After(again) {
+			again = time.Time{}
+			if err := ask(); err != nil {
+				return "", err
+			}
+		}
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
 		if err != nil {
 			if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR) {

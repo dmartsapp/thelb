@@ -61,6 +61,8 @@ type Network interface {
 	Take() (net.Listener, error)
 	// Release removes the control VIP and closes its listener.
 	Release()
+	// Announce announces the control VIP again while this director holds it.
+	Announce()
 	// Repair puts the control VIP back, while this director holds it, if
 	// someone removed it: true if it did.
 	Repair() (bool, error)

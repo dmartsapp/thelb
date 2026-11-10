@@ -99,6 +99,7 @@ func (l *loopNet) Holder(context.Context, netip.Addr) (string, error)      { ret
 func (l *loopNet) Uplink(context.Context) (bool, string)                   { return true, "" }
 func (l *loopNet) Cleanup() error                                          { return nil }
 func (l *loopNet) Repair() (bool, error)                                   { return false, nil }
+func (l *loopNet) Announce()                                               {}
 
 func (l *loopNet) MACOf(ip netip.Addr) string {
 	if v, ok := l.macs.Load(ip.String()); ok {
