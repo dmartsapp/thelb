@@ -848,6 +848,18 @@ if [ "$(answers 8 $FAR)" != "b1=4 b4=4" ]; then
 	ip netns exec $P-b4 nft list ruleset 2>/dev/null | sed 's/^/      b4 nft /'
 	echo "      who holds $FAR: $(holder $FAR | xargs); the client's entry: $(ip -n $P-c neigh show $FAR)"
 	grep -h "$FAR" $tmp/d*.log | tail -12 | sed 's/^/      /'
+	# Where the kernel drops it, and why: its own drop tracepoint, around one
+	# request.
+	tr=/sys/kernel/tracing
+	[ -d $tr/events/skb/kfree_skb ] || tr=/sys/kernel/debug/tracing
+	if [ -d $tr/events/skb/kfree_skb ]; then
+		echo >$tr/trace
+		echo 1 >$tr/events/skb/kfree_skb/enable
+		ip netns exec $P-c curl -s --max-time 2 "http://$FAR/" >/dev/null
+		echo 0 >$tr/events/skb/kfree_skb/enable
+		echo "      the kernel's drops around one request, by place and reason:"
+		grep -o 'location=[^ ]* .*reason: [A-Z_0-9]*' $tr/trace | sed 's/protocol=[^ ]* //; s/ \(skbaddr\|rx_sk\)=[^ ]*//g' | sort | uniq -c | sort -rn | head -12 | sed 's/^/        /'
+	fi
 	if command -v tcpdump >/dev/null; then
 		ip netns exec $P-b4 timeout 4 tcpdump -lni any -c 12 'tcp port 80 or ip proto 4' >"$tmp/far.b4.pcap.txt" 2>&1 &
 		ip netns exec $P-c timeout 4 tcpdump -lni eth0 -c 12 "host $FAR" >"$tmp/far.c.pcap.txt" 2>&1 &
@@ -945,6 +957,7 @@ if [ $have6 = 1 ]; then
 	new=$(holder $VIP6)
 	check "its neighbor advertisement moved the client's entry to $new's MAC address" "[ -n \"$new\" ] && within 5 neigh_is $VIP6 \${mac[$new]:-none}"
 	for n in d2 d3; do stop $n; done
+	link_up d1
 else
 	echo "== IPv6: skipped - this kernel has no IPv6 (booted with ipv6.disable=1?)"
 fi
