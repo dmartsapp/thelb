@@ -1,0 +1,8 @@
+b2
+$ sudo nft list table inet thelb
+table inet thelb {
+	chain portmap {
+		type nat hook prerouting priority dstnat; policy accept;
+		ip daddr 198.18.0.21 tcp dport 80 dnat ip to :9090
+	}
+}

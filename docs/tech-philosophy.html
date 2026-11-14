@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Philosophy · theLB</title>
+<meta name="description" content="The principles behind theLB - one binary and nothing left behind, the kernel as the truth, full authority or nothing, fail closed, and more.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html" class="active" aria-current="page">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Technical</p>
+<h1>Philosophy</h1>
+<p class="lead">Ten rules that decide every design question in theLB. When a choice is unclear, the one that keeps them wins.</p>
+<h2 id="1-one-binary-and-nothing-left-behind">1. One binary, and nothing left behind<a class="anchor" href="#1-one-binary-and-nothing-left-behind" aria-label="Link to this section">#</a></h2>
+<p>theLB is one static binary. There is no package, no helper script, nothing else to install.</p>
+<p><strong>It never makes a change that outlives it.</strong> It writes no unit files, no <code>/etc/sysctl.d</code> or <code>/etc/modules-load.d</code> entries, no firewall rules, no cron jobs. Everything it changes - kernel settings, addresses, the IPVS table - is runtime state, which a reboot clears.</p>
+<p><strong>Making things permanent is your decision.</strong> What theLB would need to survive a reboot, it <em>prints</em> - a systemd unit, kernel settings - for you to read, change and install your own way. <code>thelb generate</code> prints; it never writes a file.</p>
+<p><strong>One exception: the secret files.</strong> The first time a cluster is created, theLB writes its two secrets to the files you named - only if they do not exist, readable by root only, never overwritten - because every node needs them from its very first start.</p>
+<h2 id="2-the-running-kernel-is-the-truth">2. The running kernel is the truth<a class="anchor" href="#2-the-running-kernel-is-the-truth" aria-label="Link to this section">#</a></h2>
+<p>theLB decides what to do from the running kernel - the current settings, the addresses on each interface, the IPVS table - not from configuration files.</p>
+<ul><li><strong>What is already right is left alone.</strong> A setting that already has the right value was set by someone, probably on purpose. theLB does not touch it, and never reverts it.</li><li><strong>What it changes, it owns, and puts back.</strong> A setting theLB changes is recorded with its old value and restored when theLB stops. Addresses and IPVS entries it creates are marked as its own, and removed when it stops. It never removes or rewrites what it did not create.</li></ul>
+<h2 id="3-full-authority-or-it-does-not-start">3. Full authority, or it does not start<a class="anchor" href="#3-full-authority-or-it-does-not-start" aria-label="Link to this section">#</a></h2>
+<p>A load balancer that half works is worse than one that refuses to start. Before it changes anything, theLB checks that it can do <strong>all</strong> of its job: its Linux capabilities, that it can write the kernel settings it needs, that the kernel has IPVS (and IPv6 for an IPv6 VIP). If anything is missing, it stops, says exactly what is missing, and how to fix it.</p>
+<h2 id="4-fail-closed">4. Fail closed<a class="anchor" href="#4-fail-closed" aria-label="Link to this section">#</a></h2>
+<p>Two machines answering for the same VIP is worse than a VIP that is briefly down: clients flip between them, and connections break in ways that are hard to see. So a director holds a VIP only while the cluster agrees it should. A leader that loses the majority gives its VIPs up, even if it feels healthy. And the VIPs are leased from the kernel: a theLB that is killed loses them by itself, a few seconds later.</p>
+<h2 id="5-the-kernel-forwards-thelb-decides">5. The kernel forwards; theLB decides<a class="anchor" href="#5-the-kernel-forwards-thelb-decides" aria-label="Link to this section">#</a></h2>
+<p>The kernel's IPVS forwards the traffic, with direct return: the director only changes the destination MAC address (or wraps the packet in a tunnel), and the backend answers the client directly. There is no proxy in the path and <strong>no address translation on the director</strong>. theLB is the control plane: it decides what the kernel should do, and checks that it still does.</p>
+<h2 id="6-one-component-everywhere">6. One component everywhere<a class="anchor" href="#6-one-component-everywhere" aria-label="Link to this section">#</a></h2>
+<p>The same binary runs on every machine: directors and backends. On each, it watches its own work: it checks that the kernel still matches what it needs, puts back what drifted - someone ran <code>ipvsadm -C</code>, an address was removed - and says so.</p>
+<h2 id="7-show-everything">7. Show everything<a class="anchor" href="#7-show-everything" aria-label="Link to this section">#</a></h2>
+<p>Nothing theLB does should be a surprise. <code>thelb doctor</code> checks a machine and shows every change theLB would make, before it makes any. <code>thelb status</code> shows the whole cluster in one place. Every change is logged: what, from what, and why.</p>
+<h2 id="8-plain-linux-first-kubernetes-on-top">8. Plain Linux first, Kubernetes on top<a class="anchor" href="#8-plain-linux-first-kubernetes-on-top" aria-label="Link to this section">#</a></h2>
+<p>theLB works on plain Linux machines with no Kubernetes anywhere. Kubernetes support is built on the same core: Kubernetes becomes one more source of "what to balance", not a requirement.</p>
+<h2 id="9-ipv4-and-ipv6-alike">9. IPv4 and IPv6 alike<a class="anchor" href="#9-ipv4-and-ipv6-alike" aria-label="Link to this section">#</a></h2>
+<p>IPv6 is not a later feature. VIPs, announcements, health checks and the cluster handle both from the first release.</p>
+<h2 id="10-a-small-honest-scope">10. A small, honest scope<a class="anchor" href="#10-a-small-honest-scope" aria-label="Link to this section">#</a></h2>
+<p>theLB does one thing - layer-4 load balancing with direct return - and says plainly where that does not work: for example, on cloud platforms that do not let an address move between machines. <code>thelb doctor</code> detects those cases.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="security.html"><span>Previous</span>Security</a><a class="next" href="tech-design.html"><span>Next</span>How it works</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-philosophy.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#1-one-binary-and-nothing-left-behind">1. One binary, and nothing left behind</a></li><li class="toc2"><a href="#2-the-running-kernel-is-the-truth">2. The running kernel is the truth</a></li><li class="toc2"><a href="#3-full-authority-or-it-does-not-start">3. Full authority, or it does not start</a></li><li class="toc2"><a href="#4-fail-closed">4. Fail closed</a></li><li class="toc2"><a href="#5-the-kernel-forwards-thelb-decides">5. The kernel forwards; theLB decides</a></li><li class="toc2"><a href="#6-one-component-everywhere">6. One component everywhere</a></li><li class="toc2"><a href="#7-show-everything">7. Show everything</a></li><li class="toc2"><a href="#8-plain-linux-first-kubernetes-on-top">8. Plain Linux first, Kubernetes on top</a></li><li class="toc2"><a href="#9-ipv4-and-ipv6-alike">9. IPv4 and IPv6 alike</a></li><li class="toc2"><a href="#10-a-small-honest-scope">10. A small, honest scope</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Diagrams
 
-The [philosophy](philosophy.md) and the [design](design.md) in pictures. Each diagram is a summary; where it and the text disagree, the text is right.
+The [philosophy](https://dmartsapp.github.io/thelb/docs/tech-philosophy.html) and the [design](design.md) in pictures. Each diagram is a summary; where it and the text disagree, the text is right.
 
 ## 1. How theLB treats a machine
 

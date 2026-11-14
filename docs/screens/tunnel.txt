@@ -1,0 +1,5 @@
+d1
+$ sudo thelb admin service add far --pool lab --proto tcp --port 80 --method tunnel
+service far: 198.18.0.22 tcp/80, by IP-in-IP
+$ sudo thelb admin assign far b4:tcp/80 b1:tcp/80
+assigned to far: b4, b1

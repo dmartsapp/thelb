@@ -16,7 +16,7 @@ Before 1.0, only the latest minor line gets fixes.
 
 ## Verifying a release
 
-Every release carries the Linux binaries, `SHA256SUMS`, and build-provenance attestations made by GitHub Actions from the tagged source:
+Every release carries the Linux binaries (amd64, arm, arm64), each with its SHA-256 sum and SBOMs (CycloneDX and SPDX), `SHA256SUMS`, and attestations made by GitHub Actions from the tagged source - of each binary's build provenance and of its SBOMs:
 
 ```text
 sha256sum -c SHA256SUMS --ignore-missing
@@ -25,7 +25,7 @@ gh attestation verify thelb-0.1.0-linux-amd64 --repo dmartsapp/thelb
 
 ## What theLB trusts, by design
 
-These are not vulnerabilities; the [manual](docs/manual.md) and the [design](docs/design.md) say how to run theLB with them in mind.
+These are not vulnerabilities; the [documentation](https://dmartsapp.github.io/thelb/docs/security.html) and the [design](docs/design.md) say how to run theLB with them in mind.
 
 - **The directors' network.** VIPs move by ARP and neighbour discovery, which anyone on the link can answer. IPVS's connection synchronisation - multicast to `224.0.0.81`, UDP `8848` - is not authenticated by the kernel: a host on that link can inject connection entries. Keep the directors on a network only they and their backends share.
 - **The secret files.** A role's secret lets a node ask to join; it never admits one by itself - every new node waits for an approval. Keep the files root-owned, mode `0600` (theLB refuses others). After a leak, rotate the secret (not built yet in 0.1: start the cluster again with new secret files) and remove any member that should not be there.

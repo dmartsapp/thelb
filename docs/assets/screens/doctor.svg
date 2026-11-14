@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 991 1366" width="991" height="1366" role="img" aria-label="d2" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="991" height="1366" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h975A8 8 0 0 1 991 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="495" y="19.5" text-anchor="middle">d2</text>
+<text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb doctor</tspan></text>
+<text x="16" y="73">theLB doctor, for a director and a backend on this node - it changes nothing:</text>
+<text x="16" y="109"><tspan class="h"> area       | check                                 | state | detail</tspan></text>
+<text x="16" y="127"><tspan class="d">------------+---------------------------------------+-------+----------------------------------------------------------</tspan></text>
+<text x="16" y="145"> kernel     <tspan class="d">|</tspan> version                               <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> 6.12.116+deb13-amd64</text>
+<text x="16" y="163"> kernel     <tspan class="d">|</tspan> address protocol (IFA_PROTO)          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> Linux 6.1 or later: theLB marks its addresses by their</text>
+<text x="16" y="181"><tspan class="d">            |                                       |       | </tspan>protocol, 116, and IPv4 ones by their label too</text>
+<text x="16" y="199"> kernel     <tspan class="d">|</tspan> IPv6                                  <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> disabled (ipv6.disable=1?): IPv6 VIPs cannot be used</text>
+<text x="16" y="217"> kernel     <tspan class="d">|</tspan> SCTP in IPVS                          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> built in: SCTP services can be served</text>
+<text x="16" y="235"> kernel     <tspan class="d">|</tspan> module ip_vs                          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> loaded - IPVS, the data plane</text>
+<text x="16" y="253"> kernel     <tspan class="d">|</tspan> module ip_vs_wrr                      <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> loaded - the wrr scheduler, the default</text>
+<text x="16" y="271"> kernel     <tspan class="d">|</tspan> module ip_vs_mh                       <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> not loaded yet; the kernel loads it on first use - the mh</text>
+<text x="16" y="289"><tspan class="d">            |                                       |       | </tspan>(Maglev) scheduler, if a service uses it</text>
+<text x="16" y="307"> kernel     <tspan class="d">|</tspan> module dummy                          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> loaded - thelb0, where a backend holds its VIPs</text>
+<text x="16" y="325"> kernel     <tspan class="d">|</tspan> module ipip                           <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> loaded - thelbt0, for tunnelled services</text>
+<text x="16" y="343"> kernel     <tspan class="d">|</tspan> module nf_tables                      <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> loaded - port mapping</text>
+<text x="16" y="361"> authority  <tspan class="d">|</tspan> capabilities                          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> CAP_NET_ADMIN and CAP_NET_RAW</text>
+<text x="16" y="379"> parameters <tspan class="d">|</tspan> net.ipv4.vs.sloppy_tcp                <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 0; from boot: not set</text>
+<text x="16" y="397"> parameters <tspan class="d">|</tspan> net.ipv4.vs.expire_nodest_conn        <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 0; from boot: not set</text>
+<text x="16" y="415"> parameters <tspan class="d">|</tspan> net.ipv4.vs.expire_quiescent_template <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 0; from boot: not set</text>
+<text x="16" y="433"> parameters <tspan class="d">|</tspan> net.ipv4.conf.all.arp_ignore          <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 1; from boot: not set</text>
+<text x="16" y="451"> parameters <tspan class="d">|</tspan> net.ipv4.conf.all.arp_announce        <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 2 while it runs; now 2; from boot: not set</text>
+<text x="16" y="469"> theLB      <tspan class="d">|</tspan> the director                          <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 11140, started by hand: a crash, a reboot or a</text>
+<text x="16" y="487"><tspan class="d">            |                                       |       | </tspan>closed terminal stops it</text>
+<text x="16" y="505"> theLB      <tspan class="d">|</tspan> the backend                           <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 12090, started by hand: a crash, a reboot or a</text>
+<text x="16" y="523"><tspan class="d">            |                                       |       | </tspan>closed terminal stops it</text>
+<text x="16" y="541"> firewall   <tspan class="d">|</tspan> firewall                              <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> none found dropping by default (ufw, firewalld, nftables)</text>
+<text x="16" y="559"> in the way <tspan class="d">|</tspan> others                                <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> no keepalived, kube-proxy, Cilium or kube-router here</text>
+<text x="16" y="577"> network    <tspan class="d">|</tspan> listeners on every address            <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> TCP 80: they answer on every VIP this director holds</text>
+<text x="16" y="595"> platform   <tspan class="d">|</tspan> hypervisor                            <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> KVM/QEMU</text>
+<text x="16" y="613"> cluster    <tspan class="d">|</tspan> cluster                               <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> lab, led by d1</text>
+<text x="16" y="631"> cluster    <tspan class="d">|</tspan> directors up                          <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> 3</text>
+<text x="16" y="649"> cluster    <tspan class="d">|</tspan> control VIP lease                     <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> 6s: a stopped leader's VIPs answer up to this long</text>
+<text x="16" y="667"> link       <tspan class="d">|</tspan> the gateway answers ARP               <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> 198.18.0.1 answers: a director cut off from it knows it,</text>
+<text x="16" y="685"><tspan class="d">            |                                       |       | </tspan>and does not take over</text>
+<text x="16" y="703"> link       <tspan class="d">|</tspan> director d1 answers ARP               <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> 198.18.0.11 answers probes: its silence would mean its</text>
+<text x="16" y="721"><tspan class="d">            |                                       |       | </tspan>machine is down</text>
+<text x="16" y="739"> link       <tspan class="d">|</tspan> director d3 answers ARP               <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> 198.18.0.13 answers probes: its silence would mean its</text>
+<text x="16" y="757"><tspan class="d">            |                                       |       | </tspan>machine is down</text>
+<text x="16" y="775"> link       <tspan class="d">|</tspan> connection sync                       <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> backup on eth0; 29 connection entries here</text>
+<text x="16" y="793"> link       <tspan class="d">|</tspan> gratuitous ARP                        <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> this node's cache points the control VIP at the leader</text>
+<text x="16" y="811"><tspan class="d">            |                                       |       | </tspan>(1a:45:77:7a:8f:bf): its announcements arrive</text>
+<text x="16" y="829"> plan       <tspan class="d">|</tspan> control VIP                           <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> while it leads: 198.18.0.10 on eth0 - label eth0:thelb,</text>
+<text x="16" y="847"><tspan class="d">            |                                       |       | </tspan>protocol 116, leased 6s, renewed every third of it -</text>
+<text x="16" y="865"><tspan class="d">            |                                       |       | </tspan>announced by gratuitous ARP</text>
+<text x="16" y="883"> plan       <tspan class="d">|</tspan> service VIPs                          <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> while it leads: the VIPs of 3 services on their pools'</text>
+<text x="16" y="901"><tspan class="d">            |                                       |       | </tspan>interfaces, leased the same, once a backend serves them</text>
+<text x="16" y="919"> plan       <tspan class="d">|</tspan> IPVS                                  <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> while it leads: the cluster's services and their</text>
+<text x="16" y="937"><tspan class="d">            |                                       |       | </tspan>backends, over netlink</text>
+<text x="16" y="955"> plan       <tspan class="d">|</tspan> neighbour entries                     <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> while it leads: each directly reached backend's address</text>
+<text x="16" y="973"><tspan class="d">            |                                       |       | </tspan>pinned to its MAC address</text>
+<text x="16" y="991"> plan       <tspan class="d">|</tspan> connection sync                       <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> IPVS's sync daemons on eth0: a backup while a member, a</text>
+<text x="16" y="1009"><tspan class="d">            |                                       |       | </tspan>master too while it leads</text>
+<text x="16" y="1027"> plan       <tspan class="d">|</tspan> /run/thelb/director                   <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> its socket and lock, root only</text>
+<text x="16" y="1045"> plan       <tspan class="d">|</tspan> net.ipv4.vs.sloppy_tcp                <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> sets 1, restored when theLB stops (now 0)</text>
+<text x="16" y="1063"> plan       <tspan class="d">|</tspan> net.ipv4.vs.expire_nodest_conn        <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> sets 1, restored when theLB stops (now 0)</text>
+<text x="16" y="1081"> plan       <tspan class="d">|</tspan> net.ipv4.vs.expire_quiescent_template <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> sets 1, restored when theLB stops (now 0)</text>
+<text x="16" y="1099"> plan       <tspan class="d">|</tspan> thelb0                                <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> a dummy interface, holding the VIPs of the services its</text>
+<text x="16" y="1117"><tspan class="d">            |                                       |       | </tspan>offers are assigned to</text>
+<text x="16" y="1135"> plan       <tspan class="d">|</tspan> nftables                              <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> the table inet thelb, only while a port mapping or a</text>
+<text x="16" y="1153"><tspan class="d">            |                                       |       | </tspan>tunnelled service needs it</text>
+<text x="16" y="1171"> plan       <tspan class="d">|</tspan> thelbt0                               <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> an IPIP interface, only while a tunnelled service is</text>
+<text x="16" y="1189"><tspan class="d">            |                                       |       | </tspan>assigned; rp_filter 0 on it, and 2 for all if it was 1</text>
+<text x="16" y="1207"> plan       <tspan class="d">|</tspan> /run/thelb/backend                    <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> its socket and lock, root only</text>
+<text x="16" y="1225"> plan       <tspan class="d">|</tspan> net.ipv4.conf.all.arp_ignore          <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> leaves it: already 1</text>
+<text x="16" y="1243"> plan       <tspan class="d">|</tspan> net.ipv4.conf.all.arp_announce        <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> leaves it: already 2</text>
+<text x="16" y="1279">What to do:</text>
+<text x="16" y="1297">  <tspan class="wa">warn</tspan> - the director: run it under systemd: thelb generate systemd director &lt;its flags&gt; prints the unit</text>
+<text x="16" y="1315">  <tspan class="wa">warn</tspan> - the backend: run it under systemd: thelb generate systemd backend &lt;its flags&gt; prints the unit</text>
+<text x="16" y="1333">  <tspan class="wa">warn</tspan> - listeners on every address: bind them to this machine's own address (ListenAddress for sshd), or</text>
+<text x="16" y="1351">    filter them on the VIPs</text>
+</svg>

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backends and offers · theLB</title>
+<meta name="description" content="Run theLB on a backend - offers, health checks from both sides, what a backend changes on its machine, and stopping it cleanly.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html" class="active" aria-current="page">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Backends and offers</h1>
+<p class="lead">A backend runs your applications and offers them to the cluster. It never picks a service itself - a director decides.</p>
+<h2 id="start-a-backend">Start a backend<a class="anchor" href="#start-a-backend" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb backend <span class="tok-flag">--join</span> 10.0.0.10:7443 <span class="tok-flag">--secret-file</span> /etc/thelb/backend.secret \
+  <span class="tok-flag">--offer</span> shop=tcp/8080,check=http:/healthz <span class="tok-flag">--offer</span> dns=udp/53</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--join</code></td><td>the control VIP (an address or a name) and the control port</td></tr><tr><td><code>--secret-file</code></td><td>the backend secret, copied from a director</td></tr><tr><td><code>--offer</code></td><td>an application to offer; give it as many times as you like, or not at all</td></tr><tr><td><code>--name</code></td><td>this node's name; the hostname by default</td></tr><tr><td><code>--interface</code></td><td>the network interface to use, if theLB cannot tell</td></tr><tr><td><code>--metrics</code></td><td>serve <a href="monitoring.html#metrics">metrics</a> on this address</td></tr></tbody></table></div>
+<p>The first time, a director must <a href="approval.html">approve</a> the backend. After that it rejoins by itself when it restarts.</p>
+<h2 id="offers">Offers<a class="anchor" href="#offers" aria-label="Link to this section">#</a></h2>
+<p>An <strong>offer</strong> is one of your applications: a name you choose, a protocol, a port and a health check.</p>
+<div class="codeblock lang-text"><div class="codebar"><span class="codelabel">Output</span></div><pre><code><span class="tok-key">shop</span>=tcp/8080,<span class="tok-key">check</span>=http:/healthz
+^    ^   ^    ^
+name |   port the check: an HTTP GET for /healthz
+     protocol: tcp, udp or sctp</code></pre></div>
+<ul><li>The <strong>name</strong> is letters, digits, <code>.</code>, <code>-</code> and <code>_</code>, up to 63. Without <code>name=</code>, theLB names it for you: <code>tcp-8080</code>.</li><li>The <strong>check</strong> is one of: <code>check=tcp</code> (can it connect? the default for TCP), <code>check=http:/path</code> (a GET; any 2xx or 3xx answer passes), or <code>check=none</code> (the default for UDP and SCTP).</li><li>Each name, and each protocol and port, can be offered once per backend.</li></ul>
+<p>You can offer an application while the backend runs - for example, once the application is up:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb offer add shop tcp/8080,check=http:/healthz
+<span class="tok-cmd">sudo</span> thelb offer remove shop      <span class="tok-com"># withdraw it: its assignments end</span></code></pre></div>
+<p>Before the cluster records an offer, the leader runs its check against the application. If the check fails, theLB tells you why:</p>
+<figure class="screen"><img src="assets/screens/offer.svg" width="886" height="178" alt="Offering an application: refused while nothing listens on the port, accepted once something does, then withdrawn." loading="lazy"><figcaption>Offering an application: refused while nothing listens on the port, accepted once something does, then withdrawn.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb offer add shop tcp/5001,check=http:/
+thelb: the leader's check of shop (http /) at 198.18.0.31:5001 fails: Get "http://198.18.0.31:5001/": dial tcp 198.18.0.31:5001: connect: connection refused - offer it once it answers
+$ sudo thelb offer add shop tcp/5000,check=http:/
+offer shop: tcp/5000 at 198.18.0.31:5000, unassigned; it answers the leader's check (http /)
+$ sudo thelb offer remove shop
+withdrawn: shop (tcp/5000)</code></pre></details></figure>
+<p>More about offers:</p>
+<ul><li>An offer starts <strong>unassigned</strong>. A director assigns it to a service - see <a href="services.html">Pools, services and assignments</a>.</li><li>An <code>--offer</code> flag is offered once the backend's own check of it passes. So you can start the backend before your application.</li><li>The cluster remembers offers. A backend that restarts takes back what the cluster holds for it, with or without the flags.</li><li><code>thelb offer add</code> with an existing name and a new port replaces it. Its assignments move to the new port.</li></ul>
+<div class="callout callout-tip"><p class="callout-title">Your application must listen on all addresses</p><p>The VIP is added to a special interface on the backend, <code>thelb0</code>, not to <code>eth0</code>. So your application must listen on all addresses (<code>0.0.0.0</code> or <code>::</code>), or on the VIP itself.</p></div>
+<h2 id="health-when-a-backend-gets-traffic">Health: when a backend gets traffic<a class="anchor" href="#health-when-a-backend-gets-traffic" aria-label="Link to this section">#</a></h2>
+<p>A backend gets traffic only while <strong>all</strong> of these are true:</p>
+<ol><li>its <strong>heartbeat</strong> reached the leader in the last 10 seconds (it sends one every 2 seconds);</li><li>its <strong>own check</strong> of the application passes;</li><li>it <strong>holds the service's VIP</strong> on <code>thelb0</code>;</li><li>the <strong>directors' check</strong> of the application passes.</li></ol>
+<p>If any of them fails, the backend's weight becomes 0: no new connections go to it, and open ones finish. It stays assigned, and gets traffic back by itself when the checks pass again.</p>
+<p>Checks run every 2 seconds, with a 1-second timeout. A backend is healthy after 2 passes in a row, and unhealthy after 3 failures in a row - about 6 seconds.</p>
+<p>The directors share the work of checking. The leader gives each application to one director, and the same one each time. If that director stops reporting, the leader does the check itself.</p>
+<h2 id="a-backend-s-own-view">A backend's own view<a class="anchor" href="#a-backend-s-own-view" aria-label="Link to this section">#</a></h2>
+<p><code>thelb status</code> on a backend shows only that backend: its offers, their checks, and what they are assigned to.</p>
+<figure class="screen"><img src="assets/screens/status-b1.svg" width="1120" height="142" alt="A backend&#x27;s own status." loading="lazy"><figcaption>A backend's own status.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
+ role    | cluster | state                   | offer    | port     | check  | own check | offered | service          | node fingerprint
+---------+---------+-------------------------+----------+----------+--------+-----------+---------+------------------+------------------
+ backend | lab     | a member of the cluster | tcp-80   | tcp/80   | http / | ok        | yes     | far, web         | 13fb773a2f1602be
+ backend | lab     | a member of the cluster | tcp-8080 | tcp/8080 | http / | ok        | yes     | mapped (port 80) | 13fb773a2f1602be</code></pre></details></figure>
+<h2 id="what-a-backend-changes-on-its-machine">What a backend changes on its machine<a class="anchor" href="#what-a-backend-changes-on-its-machine" aria-label="Link to this section">#</a></h2>
+<ul><li>It creates <code>thelb0</code>, a dummy interface that does not answer ARP, and puts its services' VIPs on it.</li><li>It sets <code>net.ipv4.conf.all.arp_ignore=1</code> and <code>arp_announce=2</code> (unless they are already stricter), so the machine never answers ARP for a VIP.</li><li>For port mapping or tunnelled services, it adds an nftables table, <code>inet thelb</code>, and for tunnels an interface, <code>thelbt0</code>. See <a href="forwarding.html">Direct routing and tunnels</a>.</li></ul>
+<figure class="screen"><img src="assets/screens/thelb0.svg" width="846" height="214" alt="`thelb0` on a backend, with the VIPs of the services it serves." loading="lazy"><figcaption><code>thelb0</code> on a backend, with the VIPs of the services it serves.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ ip address show thelb0
+4: thelb0: &lt;BROADCAST,NOARP,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/ether d2:20:74:b8:88:0a brd ff:ff:ff:ff:ff:ff
+    inet 198.18.0.20/32 scope global proto 0x74 thelb0
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.22/32 scope global proto 0x74 thelb0
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.21/32 scope global proto 0x74 thelb0
+       valid_lft forever preferred_lft forever</code></pre></details></figure>
+<p>Everything is removed, and the settings put back, when it stops. See <a href="kernel.html">What theLB changes</a> for the full list.</p>
+<h2 id="stopping-a-backend">Stopping a backend<a class="anchor" href="#stopping-a-backend" aria-label="Link to this section">#</a></h2>
+<p>Stop it with <code>SIGTERM</code>, <code>systemctl stop</code>, <code>Ctrl+C</code>, or by closing its terminal. It asks the leader to stop sending it traffic, keeps its VIPs a moment longer so that connections already on their way are not lost, then removes everything.</p>
+<p>If a director <strong>removes</strong> a backend (<code>thelb admin remove</code>), the backend stops. If it starts again, it must be approved again.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="directors.html"><span>Previous</span>Directors and failover</a><a class="next" href="services.html"><span>Next</span>Pools, services and assignments</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/backends.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#start-a-backend">Start a backend</a></li><li class="toc2"><a href="#offers">Offers</a></li><li class="toc2"><a href="#health-when-a-backend-gets-traffic">Health: when a backend gets traffic</a></li><li class="toc2"><a href="#a-backend-s-own-view">A backend's own view</a></li><li class="toc2"><a href="#what-a-backend-changes-on-its-machine">What a backend changes on its machine</a></li><li class="toc2"><a href="#stopping-a-backend">Stopping a backend</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

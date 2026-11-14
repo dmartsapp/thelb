@@ -1,0 +1,39 @@
+d1
+$ sudo thelb status backends
+ node | role    | address     | state | version | node fingerprint | last check-in
+------+---------+-------------+-------+---------+------------------+---------------
+ b1   | backend | 198.18.0.31 | up    | 0.1.0   | 13fb773a2f1602be | 1.8 s ago
+ b2   | backend | 198.18.0.32 | up    | 0.1.0   | 47e299ae51b988ce | 1.8 s ago
+ b3   | backend | 198.18.0.33 | up    | 0.1.0   | fbc7b527309b076e | 1.8 s ago
+ b4   | backend | 198.19.0.41 | up    | 0.1.0   | 138d4b1de80a58a0 | 1.5 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ node | offer    | address     | port     | check  | own check | service  | since
+------+----------+-------------+----------+--------+-----------+----------+--------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.7 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.7 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.7 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s
+
+ service | vip            | backend | at               | checks  | weight | connections | packets | bytes  | last check-in
+---------+----------------+---------+------------------+---------+--------+-------------+---------+--------+---------------
+ web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      19 | 1.2 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.5 s ago
+
+ certificate | kind    | fingerprint      | not after
+-------------+---------+------------------+---------------------
+ b1          | backend | fb7a6dccf0b61793 | 2026-11-15 21:35:54
+ b2          | backend | 3f79e6b05f968c20 | 2026-11-15 21:35:54
+ b3          | backend | f1c3a00db0a7c495 | 2026-11-15 21:35:54
+ b4          | backend | 4f2240e08f2c1741 | 2026-11-15 21:35:54

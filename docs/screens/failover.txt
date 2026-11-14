@@ -1,0 +1,11 @@
+d2 - the new leader's log, after d1 was killed
+2026-11-14T21:36:34.468Z [raft] WARN rejecting pre-vote request since we have a leader from=198.18.0.13:7443 leader=198.18.0.11:7443 leader-id=d1-74a7b4d5
+2026-11-14T21:36:36.040Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr=198.18.0.11:7443 last-leader-id=d1-74a7b4d5
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.22 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.21 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.20 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.071Z [director] WARN another machine answers for the control VIP: this leader waits vip=198.18.0.10 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:42.217Z [director] OK the control VIP is no more: taking it vip=198.18.0.10
+2026-11-14T21:36:42.219Z [director] OK leader node=d2 term=3 member=d2-3ac448fb
+2026-11-14T21:36:42.219Z [director] OK control VIP taken vip=198.18.0.10 port=7443 interface=eth0
+2026-11-14T21:36:46.219Z [director] WARN director gone: out of the vote, so the others keep their majority; it rejoins without approval when it starts again node=d1 member=d1-74a7b4d5 voters=2 reason="d1's control port refuses connections: its theLB is not running"

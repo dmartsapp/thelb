@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pools, services and assignments · theLB</title>
+<meta name="description" content="Create pools, services and assignments on a theLB director - schedulers, weights, port mapping, and saving them with thelb generate commands.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html" class="active" aria-current="page">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Pools, services and assignments</h1>
+<p class="lead">A pool holds VIP addresses. A service is a VIP, a protocol and a port. An assignment connects a backend's offer to a service.</p>
+<p>All of these commands run on a director. On a director that is not the leader, the change is passed to the leader.</p>
+<h2 id="pools">Pools<a class="anchor" href="#pools" aria-label="Link to this section">#</a></h2>
+<p>A pool is a range of addresses for services' VIPs:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin pool add main <span class="tok-flag">--vip</span> 10.0.0.20/24 <span class="tok-flag">--vippool-count</span> 10    <span class="tok-com"># 10.0.0.20 to 10.0.0.29</span>
+<span class="tok-cmd">sudo</span> thelb admin pool add dmz <span class="tok-flag">--vip</span> 192.168.50.10/24 <span class="tok-flag">--vippool-count</span> 5 <span class="tok-flag">--interface</span> eth1
+<span class="tok-cmd">sudo</span> thelb admin pool remove dmz     <span class="tok-com"># only when no service uses it</span></code></pre></div>
+<ul><li><code>--vip</code> is the first address, with its network's prefix. <code>--vippool-count</code> is how many addresses.</li><li>The range must be inside the network, must not include the network or broadcast address, and must not overlap another pool, the control VIP or any node's address.</li><li>The leader puts the pool's VIPs on its interface in that network, or on the one <code>--interface</code> names.</li><li><code>--default</code> makes this the pool a service uses when it names none.</li></ul>
+<h2 id="services">Services<a class="anchor" href="#services" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin service add web <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80
+<span class="tok-cmd">sudo</span> thelb admin service add dns <span class="tok-flag">--pool</span> main <span class="tok-flag">--vip</span> 10.0.0.20 <span class="tok-flag">--proto</span> udp <span class="tok-flag">--port</span> 53   <span class="tok-com"># same VIP, another port</span>
+<span class="tok-cmd">sudo</span> thelb admin service add far <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80 <span class="tok-flag">--method</span> tunnel
+<span class="tok-cmd">sudo</span> thelb admin service remove dns</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--proto</code>, <code>--port</code></td><td>the protocol (<code>tcp</code>, <code>udp</code> or <code>sctp</code>) and port clients use</td></tr><tr><td><code>--pool</code></td><td>the pool to take the VIP from</td></tr><tr><td><code>--vip</code></td><td>a particular VIP from the pool - to put several services on one address</td></tr><tr><td><code>--scheduler</code></td><td>how to spread connections: <code>wrr</code> (weighted round robin, the default), <code>rr</code>, <code>wlc</code>, <code>lc</code>, <code>sh</code> or <code>mh</code></td></tr><tr><td><code>--method</code></td><td><code>direct</code> (the default) or <code>tunnel</code> - see <a href="forwarding.html">Direct routing and tunnels</a></td></tr></tbody></table></div>
+<p>Without <code>--vip</code>, a service takes the pool's lowest free address - after checking on the network (with ARP) that nothing uses it.</p>
+<p>A service's VIP is on the network <strong>only while at least one backend serves it</strong>. theLB programs IPVS first, then brings the VIP up. When the last backend stops serving, the VIP goes first, then IPVS changes.</p>
+<h2 id="assignments">Assignments<a class="anchor" href="#assignments" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status offers                                  <span class="tok-com"># every offer; "-" under service: not assigned</span>
+<span class="tok-cmd">sudo</span> thelb admin assign web web-1:shop web-2:shop <span class="tok-flag">--weight</span> web-1=3
+<span class="tok-cmd">sudo</span> thelb admin unassign web web-2</code></pre></div>
+<p>You name an offer as <code>node:name</code> - <code>web-1:shop</code> - or as <code>node:protocol/port</code> - <code>web-1:tcp/8080</code>.</p>
+<p>Before it records an assignment, the leader checks that the backend really offers it, that the protocol matches the service's, and - for a direct service - that the director has an interface in the backend's network.</p>
+<p><strong>Weights</strong> go from 0 to 65535; the default is 1. A backend with weight 3 gets three times the connections of one with weight 1. Weight 0 sends no new connections.</p>
+<figure class="screen"><img src="assets/screens/status-offers.svg" width="692" height="232" alt="Every backend&#x27;s offers, their own checks, and the services they are assigned to." loading="lazy"><figcaption>Every backend's offers, their own checks, and the services they are assigned to.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status offers
+ node | offer    | address     | port     | check  | own check | service  | since
+------+----------+-------------+----------+--------+-----------+----------+--------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.8 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.8 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s</code></pre></details></figure>
+<h2 id="port-mapping">Port mapping<a class="anchor" href="#port-mapping" aria-label="Link to this section">#</a></h2>
+<p>A backend's application can listen on a different port than the service's. Assign <code>web-1:tcp/8080</code> to a service on port 80, and the backend maps port 80 to 8080 itself, in its own nftables table. The director never changes the port. Each backend can use a port of its own:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin service add mapped <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80
+<span class="tok-cmd">sudo</span> thelb admin assign mapped web-1:tcp/8080 web-2:tcp/9090</code></pre></div>
+<figure class="screen"><img src="assets/screens/port-mapping.svg" width="596" height="124" alt="A service on port 80, served from three different ports - one per backend." loading="lazy"><figcaption>A service on port 80, served from three different ports - one per backend.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb admin service add mapped --pool lab --proto tcp --port 80
+service mapped: 198.18.0.21 tcp/80
+$ sudo thelb admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070
+assigned to mapped: b1, b2, b3</code></pre></details></figure>
+<p>On the backend, the mapping is one nftables rule:</p>
+<figure class="screen"><img src="assets/screens/nft.svg" width="612" height="178" alt="`b2` maps the service&#x27;s port 80 to its application&#x27;s port 9090." loading="lazy"><figcaption><code>b2</code> maps the service's port 80 to its application's port 9090.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo nft list table inet thelb
+table inet thelb {
+	chain portmap {
+		type nat hook prerouting priority dstnat; policy accept;
+		ip daddr 198.18.0.21 tcp dport 80 dnat ip to :9090
+	}
+}</code></pre></details></figure>
+<h2 id="keeping-them-thelb-generate-commands">Keeping them: <code>thelb generate commands</code><a class="anchor" href="#keeping-them-thelb-generate-commands" aria-label="Link to this section">#</a></h2>
+<p>The cluster keeps its state in the directors' memory, not on disk. If <strong>every</strong> director stops at once, pools, services and assignments are gone. Save them as a script:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate commands &gt; /root/thelb-restore.sh     <span class="tok-com"># again after each change you want to keep</span></code></pre></div>
+<figure class="screen"><img src="assets/screens/generate-commands.svg" width="918" height="538" alt="The `thelb admin` commands that create the cluster&#x27;s pools, services and assignments again." loading="lazy"><figcaption>The <code>thelb admin</code> commands that create the cluster's pools, services and assignments again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb generate commands
+#!/bin/sh
+# theLB: the commands that create the pools, services and assignments of the
+# cluster lab again, as they were at 2026-11-14T21:36:33Z, on d1.
+#
+# For a cluster created again after every director stopped: run them, as root,
+# on one of its directors - once its nodes are approved, and the backends'
+# offers are listed by "thelb status backends": an assignment needs its
+# backend's offer. theLB prints this; it never reads it.
+#
+# The nodes that were members, to approve - after comparing fingerprints - once
+# they ask:
+#   thelb admin approve --match 'b1|b2|b3|b4|d2|d2-web|d3'
+
+# Pools
+thelb admin pool add lab --vip 198.18.0.20/24 --vippool-count 10
+
+# Services, on the addresses they had
+thelb admin service add far --pool lab --vip 198.18.0.22 --proto tcp --port 80 --scheduler wrr --method tunnel
+thelb admin service add mapped --pool lab --vip 198.18.0.21 --proto tcp --port 80 --scheduler wrr --method direct
+thelb admin service add web --pool lab --vip 198.18.0.20 --proto tcp --port 80 --scheduler wrr --method direct
+
+# Assignments
+thelb admin assign far b1:tcp/80 b4:tcp/80
+thelb admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070
+thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 d2-web:tcp/80</code></pre></details></figure>
+<p>The script holds the commands that create everything again - each service on the VIP it has now - and, as a comment, the command to approve the nodes. It holds no secret.</p>
+<p>After a full stop, once a director has created the cluster again:</p>
+<ol><li>approve the directors and backends as they ask - the script's comment has the command (compare fingerprints first);</li><li>wait until <code>sudo thelb status offers</code> lists the backends' offers - each backend offers again, by itself, what it offered before;</li><li>run the script on a director: <code>sudo sh /root/thelb-restore.sh</code>.</li></ol>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="backends.html"><span>Previous</span>Backends and offers</a><a class="next" href="forwarding.html"><span>Next</span>Direct routing and tunnels</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/services.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#pools">Pools</a></li><li class="toc2"><a href="#services">Services</a></li><li class="toc2"><a href="#assignments">Assignments</a></li><li class="toc2"><a href="#port-mapping">Port mapping</a></li><li class="toc2"><a href="#keeping-them-thelb-generate-commands">Keeping them: <code>thelb generate commands</code></a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

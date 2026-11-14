@@ -1,0 +1,13 @@
+d1
+$ ip -4 address show dev eth0
+3: eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netnsid 0
+    inet 198.18.0.11/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.10/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 5sec preferred_lft 5sec
+    inet 198.18.0.20/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec
+    inet 198.18.0.22/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec
+    inet 198.18.0.21/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec

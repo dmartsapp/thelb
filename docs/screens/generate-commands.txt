@@ -1,0 +1,27 @@
+d1
+$ sudo thelb generate commands
+#!/bin/sh
+# theLB: the commands that create the pools, services and assignments of the
+# cluster lab again, as they were at 2026-11-14T21:36:33Z, on d1.
+#
+# For a cluster created again after every director stopped: run them, as root,
+# on one of its directors - once its nodes are approved, and the backends'
+# offers are listed by "thelb status backends": an assignment needs its
+# backend's offer. theLB prints this; it never reads it.
+#
+# The nodes that were members, to approve - after comparing fingerprints - once
+# they ask:
+#   thelb admin approve --match 'b1|b2|b3|b4|d2|d2-web|d3'
+
+# Pools
+thelb admin pool add lab --vip 198.18.0.20/24 --vippool-count 10
+
+# Services, on the addresses they had
+thelb admin service add far --pool lab --vip 198.18.0.22 --proto tcp --port 80 --scheduler wrr --method tunnel
+thelb admin service add mapped --pool lab --vip 198.18.0.21 --proto tcp --port 80 --scheduler wrr --method direct
+thelb admin service add web --pool lab --vip 198.18.0.20 --proto tcp --port 80 --scheduler wrr --method direct
+
+# Assignments
+thelb admin assign far b1:tcp/80 b4:tcp/80
+thelb admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070
+thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 d2-web:tcp/80

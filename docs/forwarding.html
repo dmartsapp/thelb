@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Direct routing and tunnels · theLB</title>
+<meta name="description" content="theLB&#x27;s two forwarding methods - direct routing and IP-in-IP - what each needs from the network, and running a backend on a director&#x27;s machine.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html" class="active" aria-current="page">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Direct routing and tunnels</h1>
+<p class="lead">A director hands packets to backends in one of two ways. Direct routing is the simplest; IP-in-IP tunnels reach backends in other networks.</p>
+<h2 id="the-two-methods">The two methods<a class="anchor" href="#the-two-methods" aria-label="Link to this section">#</a></h2>
+<p>A service's <code>--method</code> decides how the director passes packets to the backends. Either way, the backend answers the client directly, from the VIP's address, and your application sees the client's real address.</p>
+<div class="tablewrap"><table><thead><tr><th></th><th><code>direct</code> (the default)</th><th><code>tunnel</code></th></tr></thead><tbody><tr><td>What the director does</td><td>sends the packet to the backend's MAC address, unchanged</td><td>wraps the packet in an extra IPv4 header addressed to the backend (IP-in-IP)</td></tr><tr><td>Where backends can be</td><td>on the directors' network (the same L2 segment)</td><td>anywhere the directors can route to</td></tr><tr><td>Extra bytes per packet</td><td>none</td><td>20</td></tr><tr><td>On the backend</td><td>the VIP on <code>thelb0</code></td><td>also <code>thelbt0</code>, which unwraps the packets, and a smaller TCP segment size</td></tr><tr><td>IPv6</td><td>yes</td><td>not yet: IPv4 only</td></tr></tbody></table></div>
+<p>Choose <code>direct</code> when the backends are on the directors' network. Choose <code>tunnel</code> when they are not:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin service add far <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80 <span class="tok-flag">--method</span> tunnel
+<span class="tok-cmd">sudo</span> thelb admin assign far remote-1:tcp/80</code></pre></div>
+<figure class="screen"><img src="assets/screens/tunnel.svg" width="700" height="124" alt="In the lab: a tunnelled service, served by `b4` behind a router, and by `b1`." loading="lazy"><figcaption>In the lab: a tunnelled service, served by <code>b4</code> behind a router, and by <code>b1</code>.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb admin service add far --pool lab --proto tcp --port 80 --method tunnel
+service far: 198.18.0.22 tcp/80, by IP-in-IP
+$ sudo thelb admin assign far b4:tcp/80 b1:tcp/80
+assigned to far: b4, b1</code></pre></details></figure>
+<h2 id="what-a-tunnelled-backend-needs">What a tunnelled backend needs<a class="anchor" href="#what-a-tunnelled-backend-needs" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>The <code>ipip</code> module</strong>, and IP protocol 4 let through from the directors.</li><li><strong>Replies sent from the VIP's address.</strong> The backend sends replies through its own router, with the VIP as the source address. A router or firewall that drops packets from "foreign" source addresses will drop them, and the service will not work. This is often called <em>source address validation</em>, <em>uRPF</em>, or a cloud's <em>source/destination check</em>. Allow the VIPs as source addresses on the backends' networks.</li></ul>
+<p>On the backend, theLB:</p>
+<ul><li>creates <code>thelbt0</code>, an IP-in-IP interface that accepts packets from any director, and gives it the address <code>192.0.0.8</code> (a special address for exactly this, from RFC 7600; nothing is sent from it);</li><li>turns reverse-path filtering off on <code>thelbt0</code> - the unwrapped packets come from clients that the backend reaches through another interface - and makes it <em>loose</em> instead of <em>strict</em> for all interfaces if it was strict;</li><li>lowers the TCP segment size (MSS) it announces - the interface's MTU minus 60, so 1440 on a normal network - so that clients' packets still fit once wrapped.</li></ul>
+<p>All of it is removed when the backend stops.</p>
+<figure class="screen"><img src="assets/screens/thelbt0.svg" width="813" height="142" alt="`thelbt0` on `b4`: the tunnel interface, with its `192.0.0.8` address." loading="lazy"><figcaption><code>thelbt0</code> on <code>b4</code>: the tunnel interface, with its <code>192.0.0.8</code> address.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ ip address show thelbt0
+5: thelbt0@NONE: &lt;NOARP,UP,LOWER_UP&gt; mtu 1480 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/ipip 0.0.0.0 brd 0.0.0.0
+    inet 192.0.0.8/32 scope global proto 0x74 thelbt0:thelb
+       valid_lft forever preferred_lft forever</code></pre></details></figure>
+<p>A backend whose control VIP is behind a router can still join - through the router. Its log says it can serve only tunnelled services, and a director refuses to assign it to a direct one.</p>
+<h2 id="a-director-s-machine-as-a-backend">A director's machine as a backend<a class="anchor" href="#a-director-s-machine-as-a-backend" aria-label="Link to this section">#</a></h2>
+<p>In small setups, a director's machine can also run your application. Start the director first. Then start a backend on the same machine - as a second systemd unit, with <code>After=thelb-director.service</code> - with <strong>a name of its own</strong>:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb backend <span class="tok-flag">--join</span> 10.0.0.10:7443 <span class="tok-flag">--secret-file</span> /etc/thelb/backend.secret \
+  <span class="tok-flag">--name</span> lb-1-web <span class="tok-flag">--offer</span> web=tcp/80,check=http:/
+<span class="tok-cmd">sudo</span> thelb admin approve lb-1-web
+<span class="tok-cmd">sudo</span> thelb admin assign web lb-1-web:web</code></pre></div>
+<ul><li>The director and the backend are separate programs. <code>thelb status</code> on that machine asks the director; <code>thelb status --role backend</code> asks the backend.</li><li>A backend with its director's name is refused.</li><li>Its offers must use the service's own port: no port mapping on a director's machine.</li><li>While that director leads, IPVS hands the machine's share to its own stack. While another director leads, it is sent there like to any backend.</li></ul>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="services.html"><span>Previous</span>Pools, services and assignments</a><a class="next" href="approval.html"><span>Next</span>Secrets and approval</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/forwarding.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-two-methods">The two methods</a></li><li class="toc2"><a href="#what-a-tunnelled-backend-needs">What a tunnelled backend needs</a></li><li class="toc2"><a href="#a-director-s-machine-as-a-backend">A director's machine as a backend</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

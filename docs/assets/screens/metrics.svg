@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 733 484" width="733" height="484" role="img" aria-label="lab" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="733" height="484" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h717A8 8 0 0 1 733 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="366" y="19.5" text-anchor="middle">lab</text>
+<text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">curl -s http://198.18.0.11:9100/metrics | grep -E '^thelb_(leader|vip_held|service_)'</tspan></text>
+<text x="16" y="73">thelb_leader 1</text>
+<text x="16" y="91">thelb_vip_held{vip="198.18.0.10",purpose="control",interface="eth0"} 1</text>
+<text x="16" y="109">thelb_vip_held{vip="198.18.0.20",purpose="service",interface="eth0"} 1</text>
+<text x="16" y="127">thelb_vip_held{vip="198.18.0.21",purpose="service",interface="eth0"} 1</text>
+<text x="16" y="145">thelb_vip_held{vip="198.18.0.22",purpose="service",interface="eth0"} 1</text>
+<text x="16" y="163">thelb_service_backends{service="web",vip="198.18.0.20"} 3</text>
+<text x="16" y="181">thelb_service_backends{service="mapped",vip="198.18.0.21"} 3</text>
+<text x="16" y="199">thelb_service_backends{service="far",vip="198.18.0.22"} 2</text>
+<text x="16" y="217">thelb_service_backends_up{service="web",vip="198.18.0.20"} 3</text>
+<text x="16" y="235">thelb_service_backends_up{service="mapped",vip="198.18.0.21"} 3</text>
+<text x="16" y="253">thelb_service_backends_up{service="far",vip="198.18.0.22"} 2</text>
+<text x="16" y="271">thelb_service_connections_total{service="web",vip="198.18.0.20"} 12</text>
+<text x="16" y="289">thelb_service_connections_total{service="mapped",vip="198.18.0.21"} 9</text>
+<text x="16" y="307">thelb_service_connections_total{service="far",vip="198.18.0.22"} 8</text>
+<text x="16" y="325">thelb_service_packets_total{service="web",vip="198.18.0.20"} 80</text>
+<text x="16" y="343">thelb_service_packets_total{service="mapped",vip="198.18.0.21"} 59</text>
+<text x="16" y="361">thelb_service_packets_total{service="far",vip="198.18.0.22"} 51</text>
+<text x="16" y="379">thelb_service_bytes_total{service="web",vip="198.18.0.20"} 5156</text>
+<text x="16" y="397">thelb_service_bytes_total{service="mapped",vip="198.18.0.21"} 3815</text>
+<text x="16" y="415">thelb_service_bytes_total{service="far",vip="198.18.0.22"} 3316</text>
+<text x="16" y="433">thelb_service_connections_active{service="web",vip="198.18.0.20"} 0</text>
+<text x="16" y="451">thelb_service_connections_active{service="mapped",vip="198.18.0.21"} 0</text>
+<text x="16" y="469">thelb_service_connections_active{service="far",vip="198.18.0.22"} 0</text>
+</svg>

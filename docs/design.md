@@ -1,6 +1,6 @@
 # Design
 
-How theLB works, and why. The principles behind every choice here are in [Philosophy](philosophy.md); where this document and the philosophy disagree, the philosophy wins and this document is wrong.
+How theLB works, and why. The principles behind every choice here are in [Philosophy](https://dmartsapp.github.io/thelb/docs/tech-philosophy.html); where this document and the philosophy disagree, the philosophy wins and this document is wrong.
 
 Status: **design**, before any code. Decisions still open are listed at the end, in [Open questions](#open-questions). The [diagrams](diagrams.md) show the pieces, starting a director, joining and approval, a backend's path to traffic, and a packet's.
 
@@ -161,7 +161,7 @@ It works the same for TCP, UDP and SCTP. Kubernetes Services already map ports, 
 
 ## Kernel state theLB manages
 
-Everything here is **runtime state**. theLB sets it at runtime - kernel parameters by writing `/proc/sys`, which is what the `sysctl` command does (the old `sysctl(2)` system call was removed from Linux in 5.5) - and never writes a configuration file. What is already right is left alone and never reverted; what theLB changes is recorded and restored when it stops cleanly ([Philosophy](philosophy.md#2-the-running-kernel-is-the-truth)).
+Everything here is **runtime state**. theLB sets it at runtime - kernel parameters by writing `/proc/sys`, which is what the `sysctl` command does (the old `sysctl(2)` system call was removed from Linux in 5.5) - and never writes a configuration file. What is already right is left alone and never reverted; what theLB changes is recorded and restored when it stops cleanly ([Philosophy](https://dmartsapp.github.io/thelb/docs/tech-philosophy.html#2-the-running-kernel-is-the-truth)).
 
 ### Director
 
@@ -256,7 +256,7 @@ A director decides what to do from its secret file and from what answers on the 
 | missing | anything else | stops: it has no secret, and says where to get one |
 | either | something that is not theLB answers | refuses: the VIP or port is taken |
 
-**Writing a secret file** is the one thing theLB writes to disk ([Philosophy](philosophy.md#1-one-binary-and-nothing-left-behind)), and it does so only then: the first time a cluster is bootstrapped, only to the files the user named, only when they do not exist, created readable by root only (mode `0600`), with an exclusive create, and never overwritten. The secrets go nowhere else - not to the log, not to standard output. A user who wants to create them beforehand can: `thelb generate secret` prints one.
+**Writing a secret file** is the one thing theLB writes to disk ([Philosophy](https://dmartsapp.github.io/thelb/docs/tech-philosophy.html#1-one-binary-and-nothing-left-behind)), and it does so only then: the first time a cluster is bootstrapped, only to the files the user named, only when they do not exist, created readable by root only (mode `0600`), with an exclusive create, and never overwritten. The secrets go nowhere else - not to the log, not to standard output. A user who wants to create them beforehand can: `thelb generate secret` prints one.
 
 **A secret the cluster does not accept** means the file is out of date - the cluster's secret was rotated, or recreated - or belongs to another cluster; from outside, the two look the same, and theLB says nothing more about the cluster:
 

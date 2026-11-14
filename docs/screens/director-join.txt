@@ -1,0 +1,7 @@
+d2 - a second director's log
+2026-11-14T21:35:53.168Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:53.169Z [director] OK node fingerprint node=d2 fingerprint=0ecf672c4027c77f hostname=linux interface=eth0 address=198.18.0.12
+2026-11-14T21:35:53.182Z [director] OK waiting for approval cluster=lab node=d2 fingerprint=0ecf672c4027c77f address=198.18.0.12 mac=b6:df:e6:99:04:4e
+2026-11-14T21:35:53.393Z [director] OK approved cluster=lab by=d1
+2026-11-14T21:35:53.419Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d2-3ac448fb leader=d1
+2026-11-14T21:35:53.429Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d2-3ac448fb

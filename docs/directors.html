@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Directors and failover · theLB</title>
+<meta name="description" content="How theLB directors form a cluster, how the leader holds the VIPs with a kernel lease, and what happens when a director stops, crashes or is cut off.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html" class="active" aria-current="page">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Directors and failover</h1>
+<p class="lead">Add directors so that the VIPs survive a failed machine. Three is the right number for most setups.</p>
+<h2 id="add-a-director">Add a director<a class="anchor" href="#add-a-director" aria-label="Link to this section">#</a></h2>
+<p>Copy <strong>both</strong> secret files - <code>director.secret</code> and <code>backend.secret</code> - to the new machine, readable by root only. Then start it with the same command as the first one (with or without <code>--bootstrap</code>):</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 \
+  <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret</code></pre></div>
+<p>It finds the cluster on the control VIP and waits for approval. Approve it on any director:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin approve lb-2</code></pre></div>
+<p>It then copies the cluster's state from the leader. Once it has caught up, it becomes a voting member, and can take over if the leader fails.</p>
+<figure class="screen"><img src="assets/screens/director-join.svg" width="918" height="232" alt="A second director&#x27;s log: it finds the cluster, waits, is approved, catches up and is ready." loading="lazy"><figcaption>A second director's log: it finds the cluster, waits, is approved, catches up and is ready.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:53.168Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:53.169Z [director] OK node fingerprint node=d2 fingerprint=0ecf672c4027c77f hostname=linux interface=eth0 address=198.18.0.12
+2026-11-14T21:35:53.182Z [director] OK waiting for approval cluster=lab node=d2 fingerprint=0ecf672c4027c77f address=198.18.0.12 mac=b6:df:e6:99:04:4e
+2026-11-14T21:35:53.393Z [director] OK approved cluster=lab by=d1
+2026-11-14T21:35:53.419Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d2-3ac448fb leader=d1
+2026-11-14T21:35:53.429Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d2-3ac448fb</code></pre></details></figure>
+<p><code>thelb status directors</code> shows every director, its state, and the cluster's leader:</p>
+<figure class="screen"><img src="assets/screens/status-directors.svg" width="765" height="412" alt="The cluster, its directors, and their certificates." loading="lazy"><figcaption>The cluster, its directors, and their certificates.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ node | role     | address     | state | version | node fingerprint | last check-in
+------+----------+-------------+-------+---------+------------------+---------------
+ d1   | leader   | 198.18.0.11 | up    | 0.1.0   | 54cbcbbb78ad3cc6 | -
+ d2   | director | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | 0.4 s ago
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.4 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ certificate  | kind     | fingerprint      | not after
+--------------+----------+------------------+---------------------
+ theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
+ d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
+ d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
+ d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+<h2 id="how-many-directors">How many directors?<a class="anchor" href="#how-many-directors" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Directors</th><th>What it survives</th></tr></thead><tbody><tr><td>1</td><td>nothing: if it stops, the VIPs stop. Fine for trying theLB.</td></tr><tr><td>2</td><td>one planned stop, or one crash - with a few rules (below)</td></tr><tr><td><strong>3</strong></td><td><strong>any one failure, with no guessing. Recommended.</strong></td></tr><tr><td>5</td><td>any two failures</td></tr></tbody></table></div>
+<p>The cluster uses <strong>Raft</strong>: a change counts once a majority of the voting directors have it. Three directors keep their majority when any one fails.</p>
+<h2 id="the-leader-and-the-vip-lease">The leader and the VIP lease<a class="anchor" href="#the-leader-and-the-vip-lease" aria-label="Link to this section">#</a></h2>
+<p>One director, the <strong>leader</strong>, holds the control VIP and every service VIP, and programs the kernel's load balancer (IPVS). The others follow, and are ready to take over.</p>
+<p>The leader adds each VIP with a <strong>lifetime</strong> - a lease. By default the lease is 6 seconds, and the leader renews it every 2 seconds. You can see it with <code>ip address</code>: <code>valid_lft 6sec</code>.</p>
+<figure class="screen"><img src="assets/screens/lease.svg" width="854" height="286" alt="The leader&#x27;s `eth0`: its own address, the control VIP (`eth0:thelb`) and the service VIPs, each with `valid_lft` - its lease." loading="lazy"><figcaption>The leader's <code>eth0</code>: its own address, the control VIP (<code>eth0:thelb</code>) and the service VIPs, each with <code>valid_lft</code> - its lease.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ ip -4 address show dev eth0
+3: eth0@if4: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UP group default qlen 1000 link-netnsid 0
+    inet 198.18.0.11/24 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet 198.18.0.10/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 5sec preferred_lft 5sec
+    inet 198.18.0.20/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec
+    inet 198.18.0.22/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec
+    inet 198.18.0.21/32 scope global dynamic proto 0x74 eth0:thelb
+       valid_lft 6sec preferred_lft 6sec</code></pre></details></figure>
+<p>Why a lease? If theLB is killed, or its machine hangs, it stops renewing. Its own kernel then removes the VIPs when the lease runs out. So a dead theLB never leaves a VIP answering on the network.</p>
+<p><strong>No director ever takes a VIP that another machine still answers for.</strong> Before a new leader takes a VIP, it looks twice, one second apart. It takes the VIP only when nothing answers for it (no ARP or neighbour reply, and for the control VIP, nothing accepting connections on it).</p>
+<p>You can change the lease:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin lease 10     <span class="tok-com"># seconds, from 3 to 3600</span></code></pre></div>
+<p>The lease is stored in the cluster's state, so every director knows how long a stopped leader's VIP can still answer. A longer lease means a slower takeover after a crash. A shorter one means more renewals.</p>
+<h2 id="when-a-director-stops-or-fails">When a director stops or fails<a class="anchor" href="#when-a-director-stops-or-fails" aria-label="Link to this section">#</a></h2>
+<h3 id="a-planned-stop">A planned stop<a class="anchor" href="#a-planned-stop" aria-label="Link to this section">#</a></h3>
+<p>Stop a director with <code>SIGTERM</code>, <code>Ctrl+C</code> or <code>systemctl stop</code>. If it was leading, it first hands leadership to another director - a short, clean failover. Then it leaves the vote, so the others keep their majority without it.</p>
+<p>It stays approved: when it starts again, it rejoins without approval. <code>thelb status directors</code> shows it as <code>stopped</code>.</p>
+<h3 id="a-crash-with-three-or-more-directors">A crash, with three or more directors<a class="anchor" href="#a-crash-with-three-or-more-directors" aria-label="Link to this section">#</a></h3>
+<p>The others still have a majority. They elect a new leader within a few seconds. The new leader takes each VIP once its lease has run out on the dead machine.</p>
+<p>After 10 seconds without hearing from the dead director, the leader checks it. If it is really gone - its control port refuses connections, or its machine does not answer at all - the leader takes it <strong>out of the vote</strong>. That way, a second crash still leaves a working majority. <code>thelb status</code> shows it as <code>down</code>:</p>
+<figure class="screen"><img src="assets/screens/failover-status.svg" width="765" height="412" alt="After the leader was killed: the new leader, and the old one `down`, out of the vote." loading="lazy"><figcaption>After the leader was killed: the new leader, and the old one <code>down</code>, out of the vote.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d2     |    3 | 2026-11-14 21:36:36 |        6s
+
+ node | role     | address     | state | version | node fingerprint | last check-in
+------+----------+-------------+-------+---------+------------------+---------------
+ d1   | director | 198.18.0.11 | down  | 0.1.0   | 54cbcbbb78ad3cc6 | 10.3 s ago
+ d2   | leader   | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | -
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.8 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ certificate  | kind     | fingerprint      | not after
+--------------+----------+------------------+---------------------
+ theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
+ d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
+ d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
+ d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+<p>When the crashed director starts again, it cleans up what it left in its kernel and rejoins - without approval:</p>
+<figure class="screen"><img src="assets/screens/rejoin.svg" width="918" height="196" alt="The crashed director, started again: it removes what the crash left, rejoins and follows." loading="lazy"><figcaption>The crashed director, started again: it removes what the crash left, rejoins and follows.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:46.367Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:36:46.368Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
+2026-11-14T21:36:46.375Z [director] OK approved before: rejoining cluster=lab approved_by=bootstrap
+2026-11-14T21:36:46.387Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d1-b073ec0e leader=d2
+2026-11-14T21:36:46.393Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-b073ec0e</code></pre></details></figure>
+<h3 id="connections-in-progress">Connections in progress<a class="anchor" href="#connections-in-progress" aria-label="Link to this section">#</a></h3>
+<p>Connections keep going through a failover. The leader sends its connection table to the other directors all the time (IPVS <em>connection sync</em>, by multicast). So the new leader already knows which backend each open connection belongs to. This needs multicast between the directors - see the firewall table in <a href="install.html#open-these-in-your-firewalls">Install</a>.</p>
+<h2 id="two-directors">Two directors<a class="anchor" href="#two-directors" aria-label="Link to this section">#</a></h2>
+<p>Two directors work, but a crash is harder to judge: the one left alone has no majority, so it cannot simply win an election. theLB handles it like this:</p>
+<ol><li>The survivor waits until the lease has surely run out - the lease plus 2 seconds (8 seconds by default). The director whose name sorts later waits 6 seconds more, so the two never act at the same moment.</li><li>Then it checks that <strong>the other is gone</strong> (its control port refuses connections, or its machine is silent), that <strong>its own gateway answers</strong> (so it is not the one cut off), and that <strong>the control VIP is free</strong>.</li><li>If all three hold, it <strong>stands alone</strong>: it takes the VIP and goes on as the only voter, with every pool, service and assignment. The crashed director must be <strong>approved again</strong> when it comes back - it might have crashed for a reason you want to look at first.</li></ol>
+<p>If the other's machine still holds the VIP after the lease, the survivor does not take it: something is still alive there.</p>
+<div class="callout callout-warning"><p class="callout-title">Give two directors a gateway</p><p>The gateway check is what tells a director that it is the one cut off. Make sure the control VIP's network has a gateway that answers.</p></div>
+<p>When both directors are alive but cannot talk to each other:</p>
+<div class="tablewrap"><table><thead><tr><th>What is between them</th><th>What happens</th></tr></thead><tbody><tr><td>A firewall that <strong>drops</strong> the control port</td><td>Neither stands alone: each can see the other on the network. No leader until they can talk again.</td></tr><tr><td>A firewall that <strong>rejects</strong> the control port</td><td>One stands alone and takes the VIP. The other finds the VIP in use and stays out. One leader.</td></tr><tr><td>A cut neither can see</td><td>Both stand alone, each on its side. When they see each other again, the one whose name sorts later stands down and waits for approval. <strong>Changes made on its side meanwhile are lost.</strong></td></tr></tbody></table></div>
+<p>Under systemd with two directors, use <code>RestartSec=30</code> (<code>thelb generate systemd</code> does this). A crashed director that restarts sooner could create a cluster of its own before the other has stood alone. With a lease longer than 6 seconds, use the lease plus 25 seconds.</p>
+<h2 id="bootstrap"><code>--bootstrap</code><a class="anchor" href="#bootstrap" aria-label="Link to this section">#</a></h2>
+<p><code>--bootstrap</code> lets a director create the cluster when it finds none, after looking for 5 seconds. Put it on the first director. You may put it on others too, so that the cluster does not depend on one machine coming back after every director has stopped.</p>
+<div class="callout callout-warning"><p class="callout-title">When every director stops</p><p>The cluster's state lives in the directors' memory. If <strong>every</strong> director stops, it is gone: the next director with <code>--bootstrap</code> creates a new cluster, every node must be approved again, and pools, services and assignments must be created again. Keep a copy with <a href="services.html#keeping-them-thelb-generate-commands"><code>thelb generate commands</code></a>.</p></div>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="lab.html"><span>Previous</span>Try it on one machine</a><a class="next" href="backends.html"><span>Next</span>Backends and offers</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/directors.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#add-a-director">Add a director</a></li><li class="toc2"><a href="#how-many-directors">How many directors?</a></li><li class="toc2"><a href="#the-leader-and-the-vip-lease">The leader and the VIP lease</a></li><li class="toc2"><a href="#when-a-director-stops-or-fails">When a director stops or fails</a></li><li class="toc3"><a href="#a-planned-stop">A planned stop</a></li><li class="toc3"><a href="#a-crash-with-three-or-more-directors">A crash, with three or more directors</a></li><li class="toc3"><a href="#connections-in-progress">Connections in progress</a></li><li class="toc2"><a href="#two-directors">Two directors</a></li><li class="toc2"><a href="#bootstrap"><code>--bootstrap</code></a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

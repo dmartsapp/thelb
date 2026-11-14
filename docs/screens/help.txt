@@ -1,0 +1,25 @@
+d1
+$ thelb --help
+theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
+
+Usage:
+  thelb <command> [flags]
+
+Commands:
+  director   run this node as a director
+  backend    run this node as a backend
+  status     show the cluster, from the theLB running on this node
+  doctor     check this node for theLB, and say what to do
+  offer      on a backend: offer an application to the cluster, or withdraw it
+  generate   print a file's content, and write nothing: secret, commands,
+             systemd, sysctl, modules
+  admin      change the cluster, on a director: approve, refuse, remove,
+             pool, service, assign, unassign, lease, secret show
+
+Every command runs only as root (effective user ID 0); this help and --version
+run for anyone.
+
+  thelb <command> --help   a command's flags
+  thelb --version          the version, the commit, Go and the platform
+
+The documentation: https://dmartsapp.github.io/thelb/

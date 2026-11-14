@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try it on one machine · theLB</title>
+<meta name="description" content="Try theLB on one Linux machine with make lab - a cluster in network namespaces with three services, direct routing, port mapping and IP-in-IP.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html" class="active" aria-current="page">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Get started</p>
+<h1>Try it on one machine</h1>
+<p class="lead">The lab builds a whole theLB setup inside one Linux machine - three directors, four backends, a router and a client - with nothing on your real network.</p>
+<h2 id="start-the-lab">Start the lab<a class="anchor" href="#start-the-lab" aria-label="Link to this section">#</a></h2>
+<p>You need a Linux machine, root (<code>sudo</code>), Go, <code>python3</code> and <code>curl</code>. From the source tree:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">make</span> lab</code></pre></div>
+<p><code>make lab</code> builds a binary of its own (<code>bin/lab/thelb</code>) and starts the lab. Each machine is a <strong>network namespace</strong> - a separate network stack inside the same Linux kernel. They live on <code>198.18.0.0/24</code>, a range reserved for testing, so nothing reaches your own network.</p>
+<div class="tablewrap"><table><thead><tr><th>Node</th><th>Address</th><th>What</th></tr></thead><tbody><tr><td><code>d1</code>, <code>d2</code>, <code>d3</code></td><td><code>198.18.0.11</code>-<code>.13</code></td><td>directors; the control VIP is <code>198.18.0.10</code>, port <code>7443</code></td></tr><tr><td><code>b1</code>, <code>b2</code>, <code>b3</code></td><td><code>198.18.0.31</code>-<code>.33</code></td><td>backends, each with two small web servers: port 80, and 8080, 9090 or 7070</td></tr><tr><td><code>b4</code></td><td><code>198.19.0.41</code></td><td>a backend behind a router, in another network</td></tr><tr><td><code>c</code></td><td><code>198.18.0.100</code></td><td>the client</td></tr></tbody></table></div>
+<p>And three services:</p>
+<div class="tablewrap"><table><thead><tr><th>Service</th><th>VIP</th><th>What it shows</th></tr></thead><tbody><tr><td><code>web</code></td><td><code>198.18.0.20:80</code></td><td>direct routing to port 80 on <code>b1</code>, <code>b2</code> and <code>b3</code></td></tr><tr><td><code>mapped</code></td><td><code>198.18.0.21:80</code></td><td>each backend on a port of its own: it maps port 80 to 8080, 9090 or 7070</td></tr><tr><td><code>far</code></td><td><code>198.18.0.22:80</code></td><td>IP-in-IP to <code>b4</code>, behind the router, and <code>b1</code></td></tr></tbody></table></div>
+<h2 id="look-around">Look around<a class="anchor" href="#look-around" aria-label="Link to this section">#</a></h2>
+<p><code>test/lab.sh</code> drives the lab. <code>run &lt;node&gt; &lt;command&gt;</code> runs a command on a node; <code>thelb</code> there is the lab's binary.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> test/lab.sh curl 12                  <span class="tok-com"># the client fetches web 12 times, and counts who answered</span>
+<span class="tok-cmd">sudo</span> test/lab.sh curl 9 198.18.0.21       <span class="tok-com"># the same for mapped</span>
+<span class="tok-cmd">sudo</span> test/lab.sh curl 8 198.18.0.22       <span class="tok-com"># and far, by IP-in-IP</span>
+<span class="tok-cmd">sudo</span> test/lab.sh run d1 thelb status      <span class="tok-com"># the summary; also: status directors, backends, vips, all</span>
+<span class="tok-cmd">sudo</span> test/lab.sh run d1 ipvsadm <span class="tok-flag">-Ln</span>       <span class="tok-com"># what theLB programmed into IPVS, on the leader</span>
+<span class="tok-cmd">sudo</span> test/lab.sh run b2 nft list table inet thelb   <span class="tok-com"># b2's port mapping</span>
+<span class="tok-cmd">sudo</span> test/lab.sh logs d1                  <span class="tok-com"># follow a node's log</span></code></pre></div>
+<figure class="screen"><img src="assets/screens/curl.svg" width="515" height="250" alt="Each service answered by its backends, in turn." loading="lazy"><figcaption>Each service answered by its backends, in turn.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo test/lab.sh curl 12
+   4  hello from b1
+   4  hello from b2
+   4  hello from b3
+$ sudo test/lab.sh curl 9 198.18.0.21
+   3  hello from b1, on port 8080
+   3  hello from b2, on port 9090
+   3  hello from b3, on port 7070
+$ sudo test/lab.sh curl 8 198.18.0.22
+   4  hello from b1
+   4  hello from b4, behind the router</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/ipvsadm.svg" width="588" height="322" alt="What theLB told the kernel on the leader: one IPVS service per theLB service, with its backends and weights. `Route` is direct routing, `Tunnel` is IP-in-IP." loading="lazy"><figcaption>What theLB told the kernel on the leader: one IPVS service per theLB service, with its backends and weights. <code>Route</code> is direct routing, <code>Tunnel</code> is IP-in-IP.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo ipvsadm -Ln
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port Scheduler Flags
+  -&gt; RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  198.18.0.20:80 wrr
+  -&gt; 198.18.0.31:80               Route   1      0          4         
+  -&gt; 198.18.0.32:80               Route   1      0          4         
+  -&gt; 198.18.0.33:80               Route   1      0          4         
+TCP  198.18.0.21:80 wrr
+  -&gt; 198.18.0.31:80               Route   1      0          3         
+  -&gt; 198.18.0.32:80               Route   1      0          3         
+  -&gt; 198.18.0.33:80               Route   1      0          3         
+TCP  198.18.0.22:80 wrr
+  -&gt; 198.18.0.31:80               Tunnel  1      0          4         
+  -&gt; 198.19.0.41:80               Tunnel  1      0          4         </code></pre></details></figure>
+<h2 id="break-things">Break things<a class="anchor" href="#break-things" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> test/lab.sh app b2 down       <span class="tok-com"># b2's web servers stop: theLB gives b2 weight 0</span>
+<span class="tok-cmd">sudo</span> test/lab.sh app b2 up         <span class="tok-com"># and it gets traffic again</span>
+<span class="tok-cmd">sudo</span> test/lab.sh kill d1           <span class="tok-com"># the leader crashes: another director takes the VIPs</span>
+<span class="tok-cmd">sudo</span> test/lab.sh start d1          <span class="tok-com"># it comes back, and rejoins without approval</span>
+<span class="tok-cmd">sudo</span> test/lab.sh stop b3           <span class="tok-com"># b3 stops cleanly, and gives its VIPs up first</span>
+<span class="tok-cmd">sudo</span> test/lab.sh serve d2          <span class="tok-com"># a backend on d2's machine, beside its director: d2-web</span></code></pre></div>
+<p>When the leader crashes, the new leader's log tells the story - the old leader is gone, the VIP is taken once it is free, and the dead director is taken out of the vote:</p>
+<figure class="screen"><img src="assets/screens/failover.svg" width="910" height="448" alt="The new leader&#x27;s log after `kill d1`." loading="lazy"><figcaption>The new leader's log after <code>kill d1</code>.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:34.468Z [raft] WARN rejecting pre-vote request since we have a leader from=198.18.0.13:7443 leader=198.18.0.11:7443 leader-id=d1-74a7b4d5
+2026-11-14T21:36:36.040Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr=198.18.0.11:7443 last-leader-id=d1-74a7b4d5
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.22 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.21 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.070Z [director] WARN another machine answers for a service VIP: this leader waits vip=198.18.0.20 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:36.071Z [director] WARN another machine answers for the control VIP: this leader waits vip=198.18.0.10 reason="1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more - within the 6s lease, if a theLB that stopped left it"
+2026-11-14T21:36:42.217Z [director] OK the control VIP is no more: taking it vip=198.18.0.10
+2026-11-14T21:36:42.219Z [director] OK leader node=d2 term=3 member=d2-3ac448fb
+2026-11-14T21:36:42.219Z [director] OK control VIP taken vip=198.18.0.10 port=7443 interface=eth0
+2026-11-14T21:36:46.219Z [director] WARN director gone: out of the vote, so the others keep their majority; it rejoins without approval when it starts again node=d1 member=d1-74a7b4d5 voters=2 reason="d1's control port refuses connections: its theLB is not running"</code></pre></details></figure>
+<p>See <a href="failures.html">When things fail</a> for every case.</p>
+<p><code>start</code> takes extra flags, so you can try the metrics and debug logs:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> test/lab.sh stop d1
+<span class="tok-cmd">sudo</span> test/lab.sh start d1 <span class="tok-flag">--debug</span> <span class="tok-flag">--metrics</span> 198.18.0.11:9100</code></pre></div>
+<h2 id="take-it-away">Take it away<a class="anchor" href="#take-it-away" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">make</span> lab-down</code></pre></div>
+<p>This stops every node and deletes the namespaces. Nothing is left on the machine.</p>
+<h2 id="a-thousand-services">A thousand services<a class="anchor" href="#a-thousand-services" aria-label="Link to this section">#</a></h2>
+<p><code>make scale N=1000</code> builds a lab of its own with three directors, three backends and a thousand services, each on its own VIP. It prints what that costs: how long it took to create the services and bring their VIPs up, the leader's CPU and memory at rest, how long <code>thelb status</code> takes, and a failover. On one CPU, a thousand services used about 10% of it on the leader, and every VIP was back about 10 seconds after the leader was killed.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="quickstart.html"><span>Previous</span>Quick start</a><a class="next" href="directors.html"><span>Next</span>Directors and failover</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/lab.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#start-the-lab">Start the lab</a></li><li class="toc2"><a href="#look-around">Look around</a></li><li class="toc2"><a href="#break-things">Break things</a></li><li class="toc2"><a href="#take-it-away">Take it away</a></li><li class="toc2"><a href="#a-thousand-services">A thousand services</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+d1
+$ sudo thelb status pending
+ pending | role    | address     | mac               | node fingerprint | waiting
+---------+---------+-------------+-------------------+------------------+---------
+ d2-web  | backend | 198.18.0.12 | b6:df:e6:99:04:4e | 0ecf672c4027c77f | 0.2 s
+$ sudo thelb admin approve d2-web
+approved: d2-web
+$ sudo thelb admin assign web d2-web:tcp/80
+assigned to web: d2-web

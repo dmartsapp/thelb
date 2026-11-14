@@ -1,0 +1,56 @@
+d2
+$ sudo thelb doctor
+theLB doctor, for a director and a backend on this node - it changes nothing:
+
+ area       | check                                 | state | detail
+------------+---------------------------------------+-------+------------------------------------------------------------------------------------------------------------------------------------------
+ kernel     | version                               | info  | 6.12.116+deb13-amd64
+ kernel     | address protocol (IFA_PROTO)          | ok    | Linux 6.1 or later: theLB marks its addresses by their protocol, 116, and IPv4 ones by their label too
+ kernel     | IPv6                                  | info  | disabled (ipv6.disable=1?): IPv6 VIPs cannot be used
+ kernel     | SCTP in IPVS                          | ok    | built in: SCTP services can be served
+ kernel     | module ip_vs                          | ok    | loaded - IPVS, the data plane
+ kernel     | module ip_vs_wrr                      | ok    | loaded - the wrr scheduler, the default
+ kernel     | module ip_vs_mh                       | ok    | not loaded yet; the kernel loads it on first use - the mh (Maglev) scheduler, if a service uses it
+ kernel     | module dummy                          | ok    | loaded - thelb0, where a backend holds its VIPs
+ kernel     | module ipip                           | ok    | loaded - thelbt0, for tunnelled services
+ kernel     | module nf_tables                      | ok    | loaded - port mapping
+ authority  | capabilities                          | ok    | CAP_NET_ADMIN and CAP_NET_RAW
+ parameters | net.ipv4.vs.sloppy_tcp                | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.vs.expire_nodest_conn        | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.vs.expire_quiescent_template | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.conf.all.arp_ignore          | info  | theLB sets 1 while it runs; now 1; from boot: not set
+ parameters | net.ipv4.conf.all.arp_announce        | info  | theLB sets 2 while it runs; now 2; from boot: not set
+ theLB      | the director                          | warn  | process 11140, started by hand: a crash, a reboot or a closed terminal stops it
+ theLB      | the backend                           | warn  | process 12090, started by hand: a crash, a reboot or a closed terminal stops it
+ firewall   | firewall                              | ok    | none found dropping by default (ufw, firewalld, nftables)
+ in the way | others                                | ok    | no keepalived, kube-proxy, Cilium or kube-router here
+ network    | listeners on every address            | warn  | TCP 80: they answer on every VIP this director holds
+ platform   | hypervisor                            | info  | KVM/QEMU
+ cluster    | cluster                               | info  | lab, led by d1
+ cluster    | directors up                          | ok    | 3
+ cluster    | control VIP lease                     | info  | 6s: a stopped leader's VIPs answer up to this long
+ link       | the gateway answers ARP               | ok    | 198.18.0.1 answers: a director cut off from it knows it, and does not take over
+ link       | director d1 answers ARP               | ok    | 198.18.0.11 answers probes: its silence would mean its machine is down
+ link       | director d3 answers ARP               | ok    | 198.18.0.13 answers probes: its silence would mean its machine is down
+ link       | connection sync                       | ok    | backup on eth0; 29 connection entries here
+ link       | gratuitous ARP                        | ok    | this node's cache points the control VIP at the leader (1a:45:77:7a:8f:bf): its announcements arrive
+ plan       | control VIP                           | info  | while it leads: 198.18.0.10 on eth0 - label eth0:thelb, protocol 116, leased 6s, renewed every third of it - announced by gratuitous ARP
+ plan       | service VIPs                          | info  | while it leads: the VIPs of 3 services on their pools' interfaces, leased the same, once a backend serves them
+ plan       | IPVS                                  | info  | while it leads: the cluster's services and their backends, over netlink
+ plan       | neighbour entries                     | info  | while it leads: each directly reached backend's address pinned to its MAC address
+ plan       | connection sync                       | info  | IPVS's sync daemons on eth0: a backup while a member, a master too while it leads
+ plan       | /run/thelb/director                   | info  | its socket and lock, root only
+ plan       | net.ipv4.vs.sloppy_tcp                | info  | sets 1, restored when theLB stops (now 0)
+ plan       | net.ipv4.vs.expire_nodest_conn        | info  | sets 1, restored when theLB stops (now 0)
+ plan       | net.ipv4.vs.expire_quiescent_template | info  | sets 1, restored when theLB stops (now 0)
+ plan       | thelb0                                | info  | a dummy interface, holding the VIPs of the services its offers are assigned to
+ plan       | nftables                              | info  | the table inet thelb, only while a port mapping or a tunnelled service needs it
+ plan       | thelbt0                               | info  | an IPIP interface, only while a tunnelled service is assigned; rp_filter 0 on it, and 2 for all if it was 1
+ plan       | /run/thelb/backend                    | info  | its socket and lock, root only
+ plan       | net.ipv4.conf.all.arp_ignore          | info  | leaves it: already 1
+ plan       | net.ipv4.conf.all.arp_announce        | info  | leaves it: already 2
+
+What to do:
+  warn - the director: run it under systemd: thelb generate systemd director <its flags> prints the unit
+  warn - the backend: run it under systemd: thelb generate systemd backend <its flags> prints the unit
+  warn - listeners on every address: bind them to this machine's own address (ListenAddress for sshd), or filter them on the VIPs

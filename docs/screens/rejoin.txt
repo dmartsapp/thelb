@@ -1,0 +1,6 @@
+d1 - started again
+2026-11-14T21:36:46.367Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:36:46.368Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
+2026-11-14T21:36:46.375Z [director] OK approved before: rejoining cluster=lab approved_by=bootstrap
+2026-11-14T21:36:46.387Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d1-b073ec0e leader=d2
+2026-11-14T21:36:46.393Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-b073ec0e

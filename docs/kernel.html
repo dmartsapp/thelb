@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What theLB changes · theLB</title>
+<meta name="description" content="The kernel state theLB adds on directors and backends - VIPs, IPVS, neighbour entries, kernel parameters, interfaces, nftables - and how it repairs and cleans it.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html" class="active" aria-current="page">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Reference</p>
+<h1>What theLB changes</h1>
+<p class="lead">Everything theLB changes on a machine is temporary. It is recorded, kept as it should be, and removed when theLB stops.</p>
+<h2 id="the-rule">The rule<a class="anchor" href="#the-rule" aria-label="Link to this section">#</a></h2>
+<p>theLB changes only the running system - never a configuration file. When it stops cleanly, it removes what it added and puts back the settings it changed. After a crash, the next start removes what the crash left. theLB marks what it owns: its addresses carry its own protocol number (<code>proto 0x74</code> in <code>ip address</code>), and its interfaces and nftables table have its own names.</p>
+<h2 id="the-full-list">The full list<a class="anchor" href="#the-full-list" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>What</th><th>When</th></tr></thead><tbody><tr><td>Director, the leader</td><td>the control VIP on its interface (<code>eth0:thelb</code>) and the service VIPs on their pools' interfaces - <strong>leased</strong>, renewed every third of the lease, and announced with gratuitous ARP or neighbour advertisements</td><td>while it leads</td></tr><tr><td>Director, the leader</td><td>IPVS services and their backends</td><td>while it leads, for each service</td></tr><tr><td>Director, the leader</td><td>permanent neighbour entries: each directly reachable backend's address, pinned to its MAC address</td><td>while it leads</td></tr><tr><td>Director, the leader</td><td><code>net.ipv4.vs.sloppy_tcp</code>, <code>expire_nodest_conn</code> and <code>expire_quiescent_template</code> set to 1</td><td>while it leads, with services</td></tr><tr><td>Director, the leader</td><td>IPVS's connection-sync daemon as master, on the control VIP's interface</td><td>while it leads</td></tr><tr><td>Director, every member</td><td>IPVS's connection-sync daemon as backup</td><td>while it is a member</td></tr><tr><td>Backend</td><td><code>thelb0</code>, a dummy interface, with its services' VIPs</td><td>while it runs</td></tr><tr><td>Backend</td><td><code>net.ipv4.conf.all.arp_ignore</code> 1 and <code>arp_announce</code> 2</td><td>while it runs, unless already stricter</td></tr><tr><td>Backend</td><td>the nftables table <code>inet thelb</code>: port mappings and MSS clamps</td><td>while a mapping or a tunnelled service needs it</td></tr><tr><td>Backend</td><td><code>thelbt0</code>, an IP-in-IP interface with the address <code>192.0.0.8</code>; <code>rp_filter</code> 0 on it, and <code>conf.all.rp_filter</code> 2 if it was 1</td><td>while a tunnelled service is assigned</td></tr><tr><td>Every node</td><td><code>/run/thelb/director/</code> or <code>/run/thelb/backend/</code>: a socket and a lock, root only</td><td>while it runs</td></tr><tr><td>A bootstrapping director</td><td>the two secret files, if missing</td><td>once</td></tr></tbody></table></div>
+<p>IPVS services carry no mark. A director removes the ones the cluster has, and any on a pool's address, and leaves other programs' IPVS services alone.</p>
+<figure class="screen"><img src="assets/screens/ipvsadm.svg" width="588" height="322" alt="IPVS on the leader, as theLB programmed it." loading="lazy"><figcaption>IPVS on the leader, as theLB programmed it.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo ipvsadm -Ln
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port Scheduler Flags
+  -&gt; RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  198.18.0.20:80 wrr
+  -&gt; 198.18.0.31:80               Route   1      0          4         
+  -&gt; 198.18.0.32:80               Route   1      0          4         
+  -&gt; 198.18.0.33:80               Route   1      0          4         
+TCP  198.18.0.21:80 wrr
+  -&gt; 198.18.0.31:80               Route   1      0          3         
+  -&gt; 198.18.0.32:80               Route   1      0          3         
+  -&gt; 198.18.0.33:80               Route   1      0          3         
+TCP  198.18.0.22:80 wrr
+  -&gt; 198.18.0.31:80               Tunnel  1      0          4         
+  -&gt; 198.19.0.41:80               Tunnel  1      0          4         </code></pre></details></figure>
+<h2 id="thelb-keeps-it-so">theLB keeps it so<a class="anchor" href="#thelb-keeps-it-so" aria-label="Link to this section">#</a></h2>
+<p>Every 10 seconds the leader compares the kernel with what it should be: IPVS services, backends and weights, the VIPs, the pinned neighbour entries and the IPVS settings. Every director checks its connection-sync daemons, and every backend checks its own setup: <code>thelb0</code> and its VIPs, the nftables table, <code>thelbt0</code>, the settings.</p>
+<p>Anything removed or changed is put back, and logged as <code>WARN drift repaired: ...</code>. A backend someone added by hand to one of theLB's IPVS services is removed. Between checks, the leader changes only what its plan changed - and nothing at all while nothing changes.</p>
+<p>A rule edited inside the nftables table is noticed only if the number of rules changed.</p>
+<h2 id="see-for-yourself">See for yourself<a class="anchor" href="#see-for-yourself" aria-label="Link to this section">#</a></h2>
+<p>On the leader:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">ip</span> address show                  <span class="tok-com"># the VIPs, with valid_lft: their lease</span>
+<span class="tok-cmd">ipvsadm</span> <span class="tok-flag">-Ln</span>                      <span class="tok-com"># the IPVS services and backends</span>
+<span class="tok-cmd">ipvsadm</span> <span class="tok-flag">-L</span> <span class="tok-flag">--daemon</span>              <span class="tok-com"># the connection-sync daemons</span>
+<span class="tok-cmd">ip</span> neighbour show nud permanent  <span class="tok-com"># the pinned backends</span></code></pre></div>
+<p>On a backend:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">ip</span> address show thelb0
+<span class="tok-cmd">ip</span> address show thelbt0          <span class="tok-com"># with tunnelled services</span>
+<span class="tok-cmd">nft</span> list table inet thelb        <span class="tok-com"># with port mapping or tunnelled services</span></code></pre></div>
+<p><code>thelb doctor</code> shows all of this as a plan, before theLB runs.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="failures.html"><span>Previous</span>When things fail</a><a class="next" href="messages.html"><span>Next</span>Log messages</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/kernel.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-rule">The rule</a></li><li class="toc2"><a href="#the-full-list">The full list</a></li><li class="toc2"><a href="#thelb-keeps-it-so">theLB keeps it so</a></li><li class="toc2"><a href="#see-for-yourself">See for yourself</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

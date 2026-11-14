@@ -1,0 +1,7 @@
+b1
+$ sudo thelb offer add shop tcp/5001,check=http:/
+thelb: the leader's check of shop (http /) at 198.18.0.31:5001 fails: Get "http://198.18.0.31:5001/": dial tcp 198.18.0.31:5001: connect: connection refused - offer it once it answers
+$ sudo thelb offer add shop tcp/5000,check=http:/
+offer shop: tcp/5000 at 198.18.0.31:5000, unassigned; it answers the leader's check (http /)
+$ sudo thelb offer remove shop
+withdrawn: shop (tcp/5000)

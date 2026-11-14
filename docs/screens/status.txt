@@ -1,0 +1,14 @@
+d1
+$ sudo thelb status
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ what      | total | up | down | pending
+-----------+-------+----+------+---------
+ directors |     3 |  3 |    0 |       0
+ backends  |     4 |  4 |    0 |       0
+ services  |     3 |  3 |    0 |       -
+ vips      |     4 |  4 |    0 |       -
+
+More: thelb status directors | backends | vips | all

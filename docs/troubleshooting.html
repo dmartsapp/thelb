@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting · theLB</title>
+<meta name="description" content="Find and fix problems with theLB - thelb doctor, and the most common problems with their fixes.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html" class="active" aria-current="page">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Troubleshooting</h1>
+<p class="lead">Start with thelb doctor. It checks the machine, changes nothing, and tells you what to fix.</p>
+<h2 id="thelb-doctor"><code>thelb doctor</code><a class="anchor" href="#thelb-doctor" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb doctor</code></pre></div>
+<p><code>doctor</code> changes nothing. It checks:</p>
+<ul><li>the kernel, its modules and IPv6, and theLB's capabilities;</li><li>the kernel settings theLB sets, and what the system sets at boot;</li><li>whether theLB runs under systemd - with a long enough <code>RestartSec=</code> - or by hand;</li><li>the firewall (ufw, firewalld or nftables), with the commands that open the control port and connection sync;</li><li>SELinux, and software that gets in the way: keepalived, kube-proxy, Cilium, kube-router, other IPVS services;</li><li>on a director, programs that listen on every address - they would answer on every VIP too;</li><li>clouds where a VIP cannot move, and hypervisors that need a setting;</li><li>the clock, and the cluster this machine's director sees;</li><li>the network link: whether the gateway and the other directors answer, whether connection sync works, and whether this machine sees the leader's announcements;</li><li>the plan: everything theLB would add, set and start on this machine.</li></ul>
+<p>It prints a table, then what to do. <code>--json</code> gives the same for scripts. It exits with <code>1</code> when theLB could not run on the machine, or could not do part of its work.</p>
+<figure class="screen"><img src="assets/screens/doctor.svg" width="991" height="1366" alt="`thelb doctor` on a director in the lab." loading="lazy"><figcaption><code>thelb doctor</code> on a director in the lab.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb doctor
+theLB doctor, for a director and a backend on this node - it changes nothing:
+
+ area       | check                                 | state | detail
+------------+---------------------------------------+-------+------------------------------------------------------------------------------------------------------------------------------------------
+ kernel     | version                               | info  | 6.12.116+deb13-amd64
+ kernel     | address protocol (IFA_PROTO)          | ok    | Linux 6.1 or later: theLB marks its addresses by their protocol, 116, and IPv4 ones by their label too
+ kernel     | IPv6                                  | info  | disabled (ipv6.disable=1?): IPv6 VIPs cannot be used
+ kernel     | SCTP in IPVS                          | ok    | built in: SCTP services can be served
+ kernel     | module ip_vs                          | ok    | loaded - IPVS, the data plane
+ kernel     | module ip_vs_wrr                      | ok    | loaded - the wrr scheduler, the default
+ kernel     | module ip_vs_mh                       | ok    | not loaded yet; the kernel loads it on first use - the mh (Maglev) scheduler, if a service uses it
+ kernel     | module dummy                          | ok    | loaded - thelb0, where a backend holds its VIPs
+ kernel     | module ipip                           | ok    | loaded - thelbt0, for tunnelled services
+ kernel     | module nf_tables                      | ok    | loaded - port mapping
+ authority  | capabilities                          | ok    | CAP_NET_ADMIN and CAP_NET_RAW
+ parameters | net.ipv4.vs.sloppy_tcp                | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.vs.expire_nodest_conn        | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.vs.expire_quiescent_template | info  | theLB sets 1 while it runs; now 0; from boot: not set
+ parameters | net.ipv4.conf.all.arp_ignore          | info  | theLB sets 1 while it runs; now 1; from boot: not set
+ parameters | net.ipv4.conf.all.arp_announce        | info  | theLB sets 2 while it runs; now 2; from boot: not set
+ theLB      | the director                          | warn  | process 11140, started by hand: a crash, a reboot or a closed terminal stops it
+ theLB      | the backend                           | warn  | process 12090, started by hand: a crash, a reboot or a closed terminal stops it
+ firewall   | firewall                              | ok    | none found dropping by default (ufw, firewalld, nftables)
+ in the way | others                                | ok    | no keepalived, kube-proxy, Cilium or kube-router here
+ network    | listeners on every address            | warn  | TCP 80: they answer on every VIP this director holds
+ platform   | hypervisor                            | info  | KVM/QEMU
+ cluster    | cluster                               | info  | lab, led by d1
+ cluster    | directors up                          | ok    | 3
+ cluster    | control VIP lease                     | info  | 6s: a stopped leader's VIPs answer up to this long
+ link       | the gateway answers ARP               | ok    | 198.18.0.1 answers: a director cut off from it knows it, and does not take over
+ link       | director d1 answers ARP               | ok    | 198.18.0.11 answers probes: its silence would mean its machine is down
+ link       | director d3 answers ARP               | ok    | 198.18.0.13 answers probes: its silence would mean its machine is down
+ link       | connection sync                       | ok    | backup on eth0; 29 connection entries here
+ link       | gratuitous ARP                        | ok    | this node's cache points the control VIP at the leader (1a:45:77:7a:8f:bf): its announcements arrive
+ plan       | control VIP                           | info  | while it leads: 198.18.0.10 on eth0 - label eth0:thelb, protocol 116, leased 6s, renewed every third of it - announced by gratuitous ARP
+ plan       | service VIPs                          | info  | while it leads: the VIPs of 3 services on their pools' interfaces, leased the same, once a backend serves them
+ plan       | IPVS                                  | info  | while it leads: the cluster's services and their backends, over netlink
+ plan       | neighbour entries                     | info  | while it leads: each directly reached backend's address pinned to its MAC address
+ plan       | connection sync                       | info  | IPVS's sync daemons on eth0: a backup while a member, a master too while it leads
+ plan       | /run/thelb/director                   | info  | its socket and lock, root only
+ plan       | net.ipv4.vs.sloppy_tcp                | info  | sets 1, restored when theLB stops (now 0)
+ plan       | net.ipv4.vs.expire_nodest_conn        | info  | sets 1, restored when theLB stops (now 0)
+ plan       | net.ipv4.vs.expire_quiescent_template | info  | sets 1, restored when theLB stops (now 0)
+ plan       | thelb0                                | info  | a dummy interface, holding the VIPs of the services its offers are assigned to
+ plan       | nftables                              | info  | the table inet thelb, only while a port mapping or a tunnelled service needs it
+ plan       | thelbt0                               | info  | an IPIP interface, only while a tunnelled service is assigned; rp_filter 0 on it, and 2 for all if it was 1
+ plan       | /run/thelb/backend                    | info  | its socket and lock, root only
+ plan       | net.ipv4.conf.all.arp_ignore          | info  | leaves it: already 1
+ plan       | net.ipv4.conf.all.arp_announce        | info  | leaves it: already 2
+
+What to do:
+  warn - the director: run it under systemd: thelb generate systemd director &lt;its flags&gt; prints the unit
+  warn - the backend: run it under systemd: thelb generate systemd backend &lt;its flags&gt; prints the unit
+  warn - listeners on every address: bind them to this machine's own address (ListenAddress for sshd), or filter them on the VIPs</code></pre></details></figure>
+<p>Where no director runs yet, give <code>--vip</code> and <code>--port</code>, so that doctor can show the plan and the firewall commands:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb doctor <span class="tok-flag">--role</span> director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443</code></pre></div>
+<h2 id="common-problems">Common problems<a class="anchor" href="#common-problems" aria-label="Link to this section">#</a></h2>
+<h3 id="a-node-waits-for-approval-and-nothing-happens">A node waits for approval, and nothing happens<a class="anchor" href="#a-node-waits-for-approval-and-nothing-happens" aria-label="Link to this section">#</a></h3>
+<p>Approve it on a director: <code>sudo thelb admin approve &lt;name&gt;</code>. Check its fingerprint first - see <a href="approval.html">Secrets and approval</a>.</p>
+<h3 id="did-not-accept-the-secret">"did not accept the secret"<a class="anchor" href="#did-not-accept-the-secret" aria-label="Link to this section">#</a></h3>
+<p>The node's secret file is not this cluster's. On a director, print the right one, put it in the node's file, and start the node again:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin secret show <span class="tok-flag">--role</span> backend      <span class="tok-com"># or --role director</span></code></pre></div>
+<h3 id="nothing-accepts-a-connection-on-port-7443">"nothing accepts a connection on port 7443"<a class="anchor" href="#nothing-accepts-a-connection-on-port-7443" aria-label="Link to this section">#</a></h3>
+<p>The control VIP answers on the network, but its port does not. Most often a firewall on the leader drops it. Open the control port to the directors and backends:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> ufw allow from 10.0.0.0/24 to any port 7443 proto tcp</code></pre></div>
+<p>If no firewall is in the way, another machine has the address: choose another control VIP.</p>
+<h3 id="a-backend-gets-no-traffic">A backend gets no traffic<a class="anchor" href="#a-backend-gets-no-traffic" aria-label="Link to this section">#</a></h3>
+<p>Look at the leader's log for <code>backend not serving</code>. Its <code>reason=</code> says which condition failed:</p>
+<div class="tablewrap"><table><thead><tr><th>Reason</th><th>What to do</th></tr></thead><tbody><tr><td><code>no heartbeat</code></td><td>the backend's theLB is not running, or cannot reach the control VIP</td></tr><tr><td><code>its own check fails</code></td><td>the application is down on the backend, or listens on another port</td></tr><tr><td><code>it does not hold the VIP yet</code></td><td>wait a moment; if it stays, look at the backend's log</td></tr><tr><td><code>the director's check fails</code></td><td>the directors cannot reach the application: check that it listens on all addresses, and that the firewall lets the directors in</td></tr><tr><td><code>it is stopping</code></td><td>the backend is shutting down</td></tr></tbody></table></div>
+<h3 id="a-tunnelled-service-does-not-answer">A tunnelled service does not answer<a class="anchor" href="#a-tunnelled-service-does-not-answer" aria-label="Link to this section">#</a></h3>
+<ul><li>Check that the backend has the <code>ipip</code> module (<code>sudo modprobe ipip</code>) and that IP protocol 4 from the directors is allowed.</li><li>Check that the backends' routers allow replies <strong>from the VIPs' addresses</strong>. Source-address checks (uRPF, cloud source/destination checks) drop them. See <a href="forwarding.html#what-a-tunnelled-backend-needs">Direct routing and tunnels</a>.</li></ul>
+<h3 id="warn-drift-repaired-again-and-again"><code>WARN drift repaired</code> again and again<a class="anchor" href="#warn-drift-repaired-again-and-again" aria-label="Link to this section">#</a></h3>
+<p>Something else keeps changing theLB's kernel setup - a script, a person, another network tool - and theLB keeps putting it back. Find what does it and stop it, or the two will undo each other every 10 seconds.</p>
+<h3 id="two-directors-and-no-leader">Two directors, and no leader<a class="anchor" href="#two-directors-and-no-leader" aria-label="Link to this section">#</a></h3>
+<p>The log says <code>not standing alone reason=...</code>. The reason tells you why:</p>
+<ul><li><code>a partition, not a crash</code>: the other director answers on the network but not on its control port. Open the control port between them.</li><li><code>waiting out the control VIP's ... lease</code>: wait - it has not waited long enough yet.</li><li><code>... still answers for the control VIP</code>: something still holds the VIP. Check <code>ip address</code> on the other machine.</li><li><code>does not reach its network</code>: this director's own link or gateway is down.</li></ul>
+<p>See <a href="directors.html#two-directors">Directors and failover</a> for the rules.</p>
+<h2 id="more-help">More help<a class="anchor" href="#more-help" aria-label="Link to this section">#</a></h2>
+<ul><li><a href="messages.html">Log messages</a> lists the messages that need action, and what to do.</li><li><a href="failures.html">When things fail</a> says what theLB does in every failure.</li><li><code>thelb status</code> on each node, and the logs, are the first places to look.</li><li>Still stuck? <a href="https://github.com/dmartsapp/thelb/issues">Open an issue</a> with the output of <code>thelb doctor</code> and the log around the problem.</li></ul>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="monitoring.html"><span>Previous</span>Status, logs and metrics</a><a class="next" href="commands.html"><span>Next</span>Commands</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/troubleshooting.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#thelb-doctor"><code>thelb doctor</code></a></li><li class="toc2"><a href="#common-problems">Common problems</a></li><li class="toc3"><a href="#a-node-waits-for-approval-and-nothing-happens">A node waits for approval, and nothing happens</a></li><li class="toc3"><a href="#did-not-accept-the-secret">"did not accept the secret"</a></li><li class="toc3"><a href="#nothing-accepts-a-connection-on-port-7443">"nothing accepts a connection on port 7443"</a></li><li class="toc3"><a href="#a-backend-gets-no-traffic">A backend gets no traffic</a></li><li class="toc3"><a href="#a-tunnelled-service-does-not-answer">A tunnelled service does not answer</a></li><li class="toc3"><a href="#warn-drift-repaired-again-and-again"><code>WARN drift repaired</code> again and again</a></li><li class="toc3"><a href="#two-directors-and-no-leader">Two directors, and no leader</a></li><li class="toc2"><a href="#more-help">More help</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

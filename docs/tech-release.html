@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Releasing · theLB</title>
+<meta name="description" content="How theLB is released - the end-to-end test on a development machine, the release branch and tag, the Release workflow, SBOMs and attestations, and the Slack notification.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html" class="active" aria-current="page">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Technical</p>
+<h1>Releasing</h1>
+<p class="lead">A release is a version tag on a release branch. The tag starts the only workflow that builds - checks, three Linux binaries, checksums, SBOMs, attestations, the release page, and a Slack message.</p>
+<h2 id="what-runs-when">What runs when<a class="anchor" href="#what-runs-when" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Event</th><th>What runs</th></tr></thead><tbody><tr><td>A push to <code>main</code> or any branch</td><td><strong>nothing</strong> - documentation and code go to <code>main</code> as they are written</td></tr><tr><td>A pull request</td><td>nothing</td></tr><tr><td>A tag <code>vX.Y.Z</code></td><td>the <strong>Release</strong> workflow, and <strong>Notify Slack</strong></td></tr></tbody></table></div>
+<p>So a documentation change is just a commit to <code>main</code>: the site updates within a minute or two, and no workflow runs - see <a href="tech-docs.html">This documentation</a>.</p>
+<h2 id="cutting-a-release">Cutting a release<a class="anchor" href="#cutting-a-release" aria-label="Link to this section">#</a></h2>
+<ol><li><strong>Run the end-to-end test</strong> on a Linux development machine, on the commit you will release. It must pass:</li></ol>
+<p>``<code>bash make check make remote-e2e REMOTE=&lt;host&gt;      # or make e2e on the machine itself </code>``</p>
+<ol><li><strong>Write the changelog.</strong> <code>CHANGELOG.md</code> must have a section <code>## vX.Y.Z - &lt;date&gt;</code> with what changed. Its text becomes the release page.</li><li><strong>Create or update the release branch</strong> <code>release/vX.Y</code> from <code>main</code>, and push it:</li></ol>
+<p>``<code>bash git switch -c release/v0.1 main      # the first release of a line; later: git switch release/v0.1 &amp;&amp; git merge --ff-only main git push origin release/v0.1 </code>``</p>
+<ol><li><strong>Tag the release on that branch</strong>, and push the tag:</li></ol>
+<p>``<code>bash git tag -a v0.1.0 -m "theLB v0.1.0" git push origin v0.1.0 </code>``</p>
+<p>The tag must be on its <code>release/vX.Y</code> branch: the workflow checks, and stops if it is not.</p>
+<h2 id="the-release-workflow">The Release workflow<a class="anchor" href="#the-release-workflow" aria-label="Link to this section">#</a></h2>
+<p><code>.github/workflows/release.yaml</code> has three jobs:</p>
+<div class="tablewrap"><table><thead><tr><th>Job</th><th>What it does</th></tr></thead><tbody><tr><td><strong>check</strong></td><td>the tag is on its release branch; <code>make check</code> (with fixed versions of golangci-lint and govulncheck); the scripts' tests; <code>docs/build.py --check</code></td></tr><tr><td><strong>build</strong> (amd64, arm, arm64)</td><td>builds the binary with <code>make dist-one</code>; attests its build provenance; writes its <code>.sha256</code>; writes its SBOMs (CycloneDX 1.6 and SPDX 2.3) and attests both</td></tr><tr><td><strong>publish</strong></td><td>collects every file, writes <code>SHA256SUMS</code>, and creates the GitHub release with the changelog's section as its notes</td></tr></tbody></table></div>
+<p>Every third-party action is pinned to a full commit hash. Jobs get only the permissions they need: the build jobs may sign attestations, and only the publish job may write the release.</p>
+<h3 id="the-sboms">The SBOMs<a class="anchor" href="#the-sboms" aria-label="Link to this section">#</a></h3>
+<p><code>.github/scripts/sbom.py</code> reads the build information Go embeds in every binary (<code>go version -m</code>) - the Go release, the main module and every dependency with its checksum - and writes it as CycloneDX and SPDX. Standard library only. Each SBOM is attested, so anyone can check that it describes that exact file:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
+<h2 id="the-slack-notification">The Slack notification<a class="anchor" href="#the-slack-notification" aria-label="Link to this section">#</a></h2>
+<p><code>.github/workflows/notify-slack.yaml</code> starts with the same tag. It waits for the Release run to finish, then posts one message to Slack:</p>
+<ul><li><strong>Released</strong>: the version, a link to the release page, and how many files it has.</li><li><strong>Failed</strong>: which job and which step failed, and the last lines of that step's log, so you can see why without opening GitHub.</li></ul>
+<p>It reads the webhook from the repository secret <code>SLACK_WEBHOOK_URL</code>. Without the secret, it says so and succeeds. It publishes nothing and changes nothing, so if it fails, the release is not affected.</p>
+<p>To set the secret:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> secret set SLACK_WEBHOOK_URL <span class="tok-flag">--repo</span> dmartsapp/thelb</code></pre></div>
+<p>(It asks for the webhook URL; paste it there, not on the command line.)</p>
+<h2 id="after-a-release">After a release<a class="anchor" href="#after-a-release" aria-label="Link to this section">#</a></h2>
+<ul><li>Check the release page: three binaries, three <code>.sha256</code> files, six SBOMs, and <code>SHA256SUMS</code>.</li><li>Check one download: <code>sha256sum -c SHA256SUMS --ignore-missing</code> and <code>gh attestation verify</code> - see <a href="security.html#check-a-release">Security</a>.</li><li>Development goes on on <code>main</code>. Fixes for a released line are merged to its <code>release/vX.Y</code> branch and tagged <code>vX.Y.Z+1</code>.</li></ul>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="tech-testing.html"><span>Previous</span>Testing</a><a class="next" href="tech-docs.html"><span>Next</span>This documentation</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-release.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#what-runs-when">What runs when</a></li><li class="toc2"><a href="#cutting-a-release">Cutting a release</a></li><li class="toc2"><a href="#the-release-workflow">The Release workflow</a></li><li class="toc3"><a href="#the-sboms">The SBOMs</a></li><li class="toc2"><a href="#the-slack-notification">The Slack notification</a></li><li class="toc2"><a href="#after-a-release">After a release</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

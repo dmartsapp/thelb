@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 520" width="910" height="520" role="img" aria-label="d1 - the first director&#x27;s log" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="910" height="520" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h894A8 8 0 0 1 910 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="455" y="19.5" text-anchor="middle">d1 - the first director's log</text>
+<text x="16" y="55"><tspan class="d">2026-11-14T21:35:39.663Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> preflight: this node has all theLB needs <tspan class="k">found=</tspan>"kernel</text>
+<text x="16" y="73">    6.12.116+deb13-amd64"</text>
+<text x="16" y="91"><tspan class="d">2026-11-14T21:35:39.672Z </tspan><tspan class="m">[metrics] </tspan><tspan class="ok">OK</tspan> metrics served <tspan class="k">address=</tspan>198.18.0.11:9100 <tspan class="k">path=</tspan>/metrics</text>
+<text x="16" y="109"><tspan class="d">2026-11-14T21:35:39.673Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node fingerprint <tspan class="k">node=</tspan>d1 <tspan class="k">fingerprint=</tspan>54cbcbbb78ad3cc6 <tspan class="k">hostname=</tspan>linux</text>
+<text x="16" y="127">    <tspan class="k">interface=</tspan>eth0 <tspan class="k">address=</tspan>198.18.0.11</text>
+<text x="16" y="145"><tspan class="d">2026-11-14T21:35:48.182Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> secret file created <tspan class="k">role=</tspan>director</text>
+<text x="16" y="163">    <tspan class="k">file=</tspan>/tmp/thelb-lab/d1/director.secret <tspan class="k">mode=</tspan>0600</text>
+<text x="16" y="181"><tspan class="d">2026-11-14T21:35:48.182Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> secret file created <tspan class="k">role=</tspan>backend <tspan class="k">file=</tspan>/tmp/thelb-lab/d1/backend.secret</text>
+<text x="16" y="199">    <tspan class="k">mode=</tspan>0600</text>
+<text x="16" y="217"><tspan class="d">2026-11-14T21:35:48.183Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> creating the cluster: nothing answers on the control VIP <tspan class="k">cluster=</tspan>lab</text>
+<text x="16" y="235">    <tspan class="k">vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443</text>
+<text x="16" y="253"><tspan class="d">2026-11-14T21:35:49.785Z </tspan><tspan class="m">[raft] </tspan><tspan class="wa">WARN</tspan> heartbeat timeout reached, starting election <tspan class="k">last-leader-addr=</tspan>""</text>
+<text x="16" y="271">    <tspan class="k">last-leader-id=</tspan>""</text>
+<text x="16" y="289"><tspan class="d">2026-11-14T21:35:49.787Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> director ready <tspan class="k">socket=</tspan>/run/thelb/director/thelb.sock</text>
+<text x="16" y="307">    <tspan class="k">control_vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443 <tspan class="k">interface=</tspan>eth0 <tspan class="k">member=</tspan>d1-74a7b4d5</text>
+<text x="16" y="325"><tspan class="d">2026-11-14T21:35:49.787Z </tspan><tspan class="m">[dataplane] </tspan><tspan class="ok">OK</tspan> IPVS connection sync started <tspan class="k">role=</tspan>master <tspan class="k">interface=</tspan>eth0 <tspan class="k">sync_id=</tspan>188</text>
+<text x="16" y="343"><tspan class="d">2026-11-14T21:35:49.787Z </tspan><tspan class="m">[dataplane] </tspan><tspan class="ok">OK</tspan> IPVS connection sync started <tspan class="k">role=</tspan>backup <tspan class="k">interface=</tspan>eth0 <tspan class="k">sync_id=</tspan>188</text>
+<text x="16" y="361"><tspan class="d">2026-11-14T21:35:49.787Z </tspan><tspan class="m">[director] </tspan><tspan class="db">DEBUG</tspan> watching IPVS's connections, to log each new one <tspan class="k">in_progress=</tspan>0</text>
+<text x="16" y="379"><tspan class="d">2026-11-14T21:35:52.898Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> cluster created <tspan class="k">cluster=</tspan>lab <tspan class="k">id=</tspan>b98a54ee</text>
+<text x="16" y="397"><tspan class="d">2026-11-14T21:35:52.898Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> certificate authority created</text>
+<text x="16" y="415">    <tspan class="k">fingerprint=</tspan>587cd93f8c26fb25004feaf88a73519cf98eee509f37098a73bde3c13db916ad</text>
+<text x="16" y="433">    <tspan class="k">not_after=</tspan>2036-11-11T21:35:48Z</text>
+<text x="16" y="451"><tspan class="d">2026-11-14T21:35:52.898Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> certificate issued <tspan class="k">node=</tspan>d1 <tspan class="k">role=</tspan>director</text>
+<text x="16" y="469">    <tspan class="k">fingerprint=</tspan>0387929998603c0c59f5c35bae7cfc13aeed3bc74d9f417d0ae24070533157ff</text>
+<text x="16" y="487">    <tspan class="k">not_after=</tspan>2026-11-15T21:35:48Z</text>
+<text x="16" y="505"><tspan class="d">2026-11-14T21:35:52.898Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> leader <tspan class="k">node=</tspan>d1 <tspan class="k">term=</tspan>2 <tspan class="k">member=</tspan>d1-74a7b4d5</text>
+</svg>

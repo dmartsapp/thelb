@@ -1,0 +1,46 @@
+d1
+$ sudo thelb generate systemd director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+# theLB director, as `thelb generate systemd` printed it. Install it, and start it:
+#   sudo tee /etc/systemd/system/thelb-director.service <this file
+#   sudo systemctl daemon-reload && sudo systemctl enable --now thelb-director
+[Unit]
+Description=theLB director
+Documentation=https://dmartsapp.github.io/thelb/docs/systemd.html
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+Restart=always
+# Longer than the other of two directors takes to stand alone after a crash -
+# the control VIP's lease (6 s unless set) and about 15 s more: back sooner,
+# with --bootstrap it could create a cluster of its own first. With a longer
+# lease, lengthen it: https://dmartsapp.github.io/thelb/docs/directors.html#two-directors
+RestartSec=30
+WatchdogSec=30
+TimeoutStopSec=30
+
+# What theLB needs - the network's administration, raw packets, a control port
+# below 1024 if it is one - and no more.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=-/etc/thelb
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+[Install]
+WantedBy=multi-user.target

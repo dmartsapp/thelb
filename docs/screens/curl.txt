@@ -1,0 +1,12 @@
+lab
+$ sudo test/lab.sh curl 12
+   4  hello from b1
+   4  hello from b2
+   4  hello from b3
+$ sudo test/lab.sh curl 9 198.18.0.21
+   3  hello from b1, on port 8080
+   3  hello from b2, on port 9090
+   3  hello from b3, on port 7070
+$ sudo test/lab.sh curl 8 198.18.0.22
+   4  hello from b1
+   4  hello from b4, behind the router

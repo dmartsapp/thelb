@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status, logs and metrics · theLB</title>
+<meta name="description" content="Watch theLB - thelb status and its views, the log format, --debug connection logs, and the Prometheus metrics endpoint.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html" class="active" aria-current="page">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Status, logs and metrics</h1>
+<p class="lead">Three ways to see what theLB is doing - thelb status for now, the log for what happened, and Prometheus metrics for your dashboards.</p>
+<h2 id="thelb-status"><code>thelb status</code><a class="anchor" href="#thelb-status" aria-label="Link to this section">#</a></h2>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status                  <span class="tok-com"># the summary</span>
+<span class="tok-cmd">sudo</span> thelb status directors        <span class="tok-com"># directors, pending directors, certificates</span>
+<span class="tok-cmd">sudo</span> thelb status backends         <span class="tok-com"># backends, offers, and who serves what</span>
+<span class="tok-cmd">sudo</span> thelb status offers           <span class="tok-com"># every offer, and which are not assigned</span>
+<span class="tok-cmd">sudo</span> thelb status vips             <span class="tok-com"># VIPs and who holds them, services, pools</span>
+<span class="tok-cmd">sudo</span> thelb status all              <span class="tok-com"># everything</span>
+<span class="tok-cmd">sudo</span> thelb status <span class="tok-flag">--json</span>           <span class="tok-com"># the same, as JSON</span>
+<span class="tok-cmd">sudo</span> thelb status <span class="tok-flag">--watch</span>          <span class="tok-com"># again every 2 seconds</span></code></pre></div>
+<figure class="screen"><img src="assets/screens/status.svg" width="765" height="286" alt="The summary." loading="lazy"><figcaption>The summary.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ what      | total | up | down | pending
+-----------+-------+----+------+---------
+ directors |     3 |  3 |    0 |       0
+ backends  |     4 |  4 |    0 |       0
+ services  |     3 |  3 |    0 |       -
+ vips      |     4 |  4 |    0 |       -
+
+More: thelb status directors | backends | vips | all</code></pre></details></figure>
+<p><code>status backends</code> shows each backend of each service: its checks, its weight in IPVS, and the traffic IPVS sent it:</p>
+<figure class="screen"><img src="assets/screens/status-backends.svg" width="1015" height="736" alt="Every backend of every service, its checks (its own / the directors&#x27;), weight and traffic." loading="lazy"><figcaption>Every backend of every service, its checks (its own / the directors'), weight and traffic.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status backends
+ node | role    | address     | state | version | node fingerprint | last check-in
+------+---------+-------------+-------+---------+------------------+---------------
+ b1   | backend | 198.18.0.31 | up    | 0.1.0   | 13fb773a2f1602be | 1.8 s ago
+ b2   | backend | 198.18.0.32 | up    | 0.1.0   | 47e299ae51b988ce | 1.8 s ago
+ b3   | backend | 198.18.0.33 | up    | 0.1.0   | fbc7b527309b076e | 1.8 s ago
+ b4   | backend | 198.19.0.41 | up    | 0.1.0   | 138d4b1de80a58a0 | 1.5 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ node | offer    | address     | port     | check  | own check | service  | since
+------+----------+-------------+----------+--------+-----------+----------+--------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.7 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.7 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.7 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s
+
+ service | vip            | backend | at               | checks  | weight | connections | packets | bytes  | last check-in
+---------+----------------+---------+------------------+---------+--------+-------------+---------+--------+---------------
+ web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      19 | 1.2 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.5 s ago
+
+ certificate | kind    | fingerprint      | not after
+-------------+---------+------------------+---------------------
+ b1          | backend | fb7a6dccf0b61793 | 2026-11-15 21:35:54
+ b2          | backend | 3f79e6b05f968c20 | 2026-11-15 21:35:54
+ b3          | backend | f1c3a00db0a7c495 | 2026-11-15 21:35:54
+ b4          | backend | 4f2240e08f2c1741 | 2026-11-15 21:35:54</code></pre></details></figure>
+<p><a href="status.html">Reading thelb status</a> explains every column.</p>
+<h2 id="logs">Logs<a class="anchor" href="#logs" aria-label="Link to this section">#</a></h2>
+<p>theLB writes one line per event to standard error - so under systemd, to the journal (<code>journalctl -u thelb-director</code>).</p>
+<div class="codeblock lang-text"><div class="codebar"><span class="codelabel">Output</span></div><pre><code>2026-11-09T01:28:39.596Z <span class="tok-mod">[director]</span> <span class="tok-ok">OK</span> service added <span class="tok-key">service</span>=web <span class="tok-key">vip</span>=10.0.0.20 <span class="tok-key">proto</span>=tcp <span class="tok-key">port</span>=80 <span class="tok-key">scheduler</span>=wrr <span class="tok-key">method</span>=direct <span class="tok-key">pool</span>=main <span class="tok-key">by</span>=lb-1
+2026-11-09T01:28:55.655Z <span class="tok-mod">[director]</span> WARN backend not serving: weight 0 <span class="tok-key">service</span>=web <span class="tok-key">node</span>=web-1 <span class="tok-key">at</span>=10.0.0.21:80 <span class="tok-key">reason</span>="the director's check fails"</code></pre></div>
+<ul><li><code>OK</code> is something that went as it should; <code>WARN</code> is something to look at; <code>ERROR</code> is a failure.</li><li>The word in brackets is the part of theLB that wrote it: <code>director</code>, <code>backend</code>, <code>network</code>, <code>dataplane</code>, <code>kernel</code>, <code>raft</code>, <code>socket</code> or <code>watchdog</code>.</li><li>No secret or key is ever logged.</li></ul>
+<p>When a backend's application stops, the leader's log says so - and says so again when it is back:</p>
+<figure class="screen"><img src="assets/screens/app-down.svg" width="902" height="160" alt="`b2`&#x27;s web servers stopped and started again: weight 0, then serving again." loading="lazy"><figcaption><code>b2</code>'s web servers stopped and started again: weight 0, then serving again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:20.868Z [director] WARN backend not serving: weight 0 service=mapped node=b2 at=198.18.0.32:9090 reason="the director's check fails"
+2026-11-14T21:36:21.871Z [director] WARN backend not serving: weight 0 service=web node=b2 at=198.18.0.32:80 reason="the director's check fails"
+2026-11-14T21:36:26.885Z [director] OK backend serving service=mapped node=b2 at=198.18.0.32:9090 weight=1
+2026-11-14T21:36:26.886Z [director] OK backend serving service=web node=b2 at=198.18.0.32:80 weight=1</code></pre></details></figure>
+<p>When something changes theLB's setup behind its back, theLB puts it back within 10 seconds and logs it. Here someone cleared IPVS on the leader (<code>ipvsadm -C</code>):</p>
+<figure class="screen"><img src="assets/screens/drift.svg" width="821" height="160" alt="theLB finds its IPVS services gone, and adds them again." loading="lazy"><figcaption>theLB finds its IPVS services gone, and adds them again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.22:80 scheduler=wrr
+2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.21:80 scheduler=wrr
+2026-11-14T21:36:31.898Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.20:80 scheduler=wrr</code></pre></details></figure>
+<p><a href="messages.html">Log messages</a> lists the messages that need you to do something.</p>
+<h3 id="each-connection-with-debug">Each connection, with <code>--debug</code><a class="anchor" href="#each-connection-with-debug" aria-label="Link to this section">#</a></h3>
+<p>Start a director with <code>--debug</code> to log every new connection. While it leads, it reads the kernel's connection table every second and logs each new connection once: the client's address, the service and VIP, and the backend it went to.</p>
+<figure class="screen"><img src="assets/screens/debug.svg" width="862" height="268" alt="Each new connection, once: client, service, VIP, backend, protocol, state." loading="lazy"><figcaption>Each new connection, once: client, service, VIP, backend, protocol, state.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39380 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39300 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
+2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39320 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
+2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:51708 service=mapped vip=198.18.0.21:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39294 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39372 service=web vip=198.18.0.20:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT</code></pre></details></figure>
+<p>A busy service writes many lines, so turn <code>--debug</code> on to look, not for good. Without it there are no DEBUG lines at all.</p>
+<h2 id="metrics">Metrics<a class="anchor" href="#metrics" aria-label="Link to this section">#</a></h2>
+<p><code>--metrics &lt;address:port&gt;</code> on a director or a backend serves Prometheus metrics at <code>http://&lt;address:port&gt;/metrics</code>.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb director ... <span class="tok-flag">--metrics</span> 10.0.0.11:9100</code></pre></div>
+<div class="callout callout-warning"><p class="callout-title">Choose the address carefully</p><p>The metrics are plain HTTP. Use an address that only your monitoring can reach - <code>127.0.0.1</code>, or the machine's management address. theLB refuses <code>0.0.0.0</code> and <code>::</code>, because they would include the VIPs.</p></div>
+<p>Every director reports its own state, and <strong>only the leader</strong> reports what the cluster serves. So scrape every director: nothing is counted twice.</p>
+<figure class="screen"><img src="assets/screens/metrics.svg" width="733" height="484" alt="Some of the leader&#x27;s metrics: leadership, VIPs held, and the traffic through each service." loading="lazy"><figcaption>Some of the leader's metrics: leadership, VIPs held, and the traffic through each service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ curl -s http://198.18.0.11:9100/metrics | grep -E '^thelb_(leader|vip_held|service_)'
+thelb_leader 1
+thelb_vip_held{vip="198.18.0.10",purpose="control",interface="eth0"} 1
+thelb_vip_held{vip="198.18.0.20",purpose="service",interface="eth0"} 1
+thelb_vip_held{vip="198.18.0.21",purpose="service",interface="eth0"} 1
+thelb_vip_held{vip="198.18.0.22",purpose="service",interface="eth0"} 1
+thelb_service_backends{service="web",vip="198.18.0.20"} 3
+thelb_service_backends{service="mapped",vip="198.18.0.21"} 3
+thelb_service_backends{service="far",vip="198.18.0.22"} 2
+thelb_service_backends_up{service="web",vip="198.18.0.20"} 3
+thelb_service_backends_up{service="mapped",vip="198.18.0.21"} 3
+thelb_service_backends_up{service="far",vip="198.18.0.22"} 2
+thelb_service_connections_total{service="web",vip="198.18.0.20"} 12
+thelb_service_connections_total{service="mapped",vip="198.18.0.21"} 9
+thelb_service_connections_total{service="far",vip="198.18.0.22"} 8
+thelb_service_packets_total{service="web",vip="198.18.0.20"} 80
+thelb_service_packets_total{service="mapped",vip="198.18.0.21"} 59
+thelb_service_packets_total{service="far",vip="198.18.0.22"} 51
+thelb_service_bytes_total{service="web",vip="198.18.0.20"} 5156
+thelb_service_bytes_total{service="mapped",vip="198.18.0.21"} 3815
+thelb_service_bytes_total{service="far",vip="198.18.0.22"} 3316
+thelb_service_connections_active{service="web",vip="198.18.0.20"} 0
+thelb_service_connections_active{service="mapped",vip="198.18.0.21"} 0
+thelb_service_connections_active{service="far",vip="198.18.0.22"} 0</code></pre></details></figure>
+<div class="tablewrap"><table><thead><tr><th>Metric</th><th>What it is</th></tr></thead><tbody><tr><td><code>thelb_build_info{role,version,commit}</code></td><td>always 1; the build is in the labels</td></tr><tr><td><code>thelb_member</code>, <code>thelb_leader</code></td><td>1 or 0: in a cluster; the leader</td></tr><tr><td><code>thelb_raft_term</code>, <code>thelb_vip_lease_seconds</code></td><td>the Raft term this director knows; the VIP lease</td></tr><tr><td><code>thelb_nodes{role,state}</code></td><td>the cluster's nodes, by role and state</td></tr><tr><td><code>thelb_takeovers_total</code></td><td>how many times this director stood alone, the other of two gone</td></tr><tr><td><code>thelb_vip_held{vip,purpose,interface}</code></td><td>leader: 1 for each VIP it holds</td></tr><tr><td><code>thelb_service_backends{service,vip}</code>, <code>thelb_service_backends_up{service,vip}</code></td><td>leader: backends assigned, and serving</td></tr><tr><td><code>thelb_backend_weight{service,backend}</code></td><td>leader: each backend's weight in IPVS (0 while it does not serve)</td></tr><tr><td><code>thelb_backend_check_up{service,backend,check}</code></td><td>leader: 1 while a check passes; <code>check</code> is <code>own</code> or <code>director</code></td></tr><tr><td><code>thelb_backend_connections_total</code>, <code>_packets_total</code>, <code>_bytes_total</code></td><td>leader: what IPVS sent each backend</td></tr><tr><td><code>thelb_backend_connections_active</code>, <code>_inactive</code></td><td>leader: each backend's connections now</td></tr><tr><td><code>thelb_service_connections_total</code>, <code>_packets_total</code>, <code>_bytes_total</code>, <code>thelb_service_connections_active</code></td><td>leader: <strong>the traffic through it</strong>, by service and VIP</td></tr><tr><td><code>thelb_offer_check_up{offer,port}</code>, <code>thelb_offer_assigned{offer,service}</code></td><td>backend: its own checks, and its offers' services</td></tr></tbody></table></div>
+<p>The traffic counts are what came <strong>in</strong>. Replies go from the backends straight to the clients, so they never pass a director, and there is no count of them.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="systemd.html"><span>Previous</span>Running under systemd</a><a class="next" href="troubleshooting.html"><span>Next</span>Troubleshooting</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/monitoring.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#thelb-status"><code>thelb status</code></a></li><li class="toc2"><a href="#logs">Logs</a></li><li class="toc3"><a href="#each-connection-with-debug">Each connection, with <code>--debug</code></a></li><li class="toc2"><a href="#metrics">Metrics</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

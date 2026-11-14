@@ -1,0 +1,5 @@
+d1
+$ sudo thelb admin service add mapped --pool lab --proto tcp --port 80
+service mapped: 198.18.0.21 tcp/80
+$ sudo thelb admin assign mapped b1:tcp/8080 b2:tcp/9090 b3:tcp/7070
+assigned to mapped: b1, b2, b3

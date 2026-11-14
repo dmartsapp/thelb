@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 515 250" width="515" height="250" role="img" aria-label="lab" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="515" height="250" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h499A8 8 0 0 1 515 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="257" y="19.5" text-anchor="middle">lab</text>
+<text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo test/lab.sh curl 12</tspan></text>
+<text x="16" y="73">   4  hello from b1</text>
+<text x="16" y="91">   4  hello from b2</text>
+<text x="16" y="109">   4  hello from b3</text>
+<text x="16" y="127"><tspan class="p">$ </tspan><tspan class="c">sudo test/lab.sh curl 9 198.18.0.21</tspan></text>
+<text x="16" y="145">   3  hello from b1, on port 8080</text>
+<text x="16" y="163">   3  hello from b2, on port 9090</text>
+<text x="16" y="181">   3  hello from b3, on port 7070</text>
+<text x="16" y="199"><tspan class="p">$ </tspan><tspan class="c">sudo test/lab.sh curl 8 198.18.0.22</tspan></text>
+<text x="16" y="217">   4  hello from b1</text>
+<text x="16" y="235">   4  hello from b4, behind the router</text>
+</svg>

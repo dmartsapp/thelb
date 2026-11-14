@@ -1,0 +1,17 @@
+d1
+$ sudo thelb admin pool add lab --vip 198.18.0.20/24 --vippool-count 10
+pool lab: 198.18.0.20 - 198.18.0.29, on eth0
+$ sudo thelb admin service add web --pool lab --proto tcp --port 80
+service web: 198.18.0.20 tcp/80
+$ sudo thelb status offers
+ node | offer    | address     | port     | check  | own check | service | since
+------+----------+-------------+----------+--------+-----------+---------+-------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | -       | 1.5 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | -       | 1.4 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | -       | 1.5 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | -       | 1.4 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | -       | 1.5 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | -       | 1.4 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | -       | 1.2 s
+$ sudo thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80
+assigned to web: b1, b2, b3

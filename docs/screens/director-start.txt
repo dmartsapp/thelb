@@ -1,0 +1,16 @@
+d1 - the first director's log
+2026-11-14T21:35:39.663Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:39.672Z [metrics] OK metrics served address=198.18.0.11:9100 path=/metrics
+2026-11-14T21:35:39.673Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
+2026-11-14T21:35:48.182Z [director] OK secret file created role=director file=/tmp/thelb-lab/d1/director.secret mode=0600
+2026-11-14T21:35:48.182Z [director] OK secret file created role=backend file=/tmp/thelb-lab/d1/backend.secret mode=0600
+2026-11-14T21:35:48.183Z [director] OK creating the cluster: nothing answers on the control VIP cluster=lab vip=198.18.0.10 port=7443
+2026-11-14T21:35:49.785Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr="" last-leader-id=""
+2026-11-14T21:35:49.787Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-74a7b4d5
+2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=master interface=eth0 sync_id=188
+2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=backup interface=eth0 sync_id=188
+2026-11-14T21:35:49.787Z [director] DEBUG watching IPVS's connections, to log each new one in_progress=0
+2026-11-14T21:35:52.898Z [director] OK cluster created cluster=lab id=b98a54ee
+2026-11-14T21:35:52.898Z [director] OK certificate authority created fingerprint=587cd93f8c26fb25004feaf88a73519cf98eee509f37098a73bde3c13db916ad not_after=2036-11-11T21:35:48Z
+2026-11-14T21:35:52.898Z [director] OK certificate issued node=d1 role=director fingerprint=0387929998603c0c59f5c35bae7cfc13aeed3bc74d9f417d0ae24070533157ff not_after=2026-11-15T21:35:48Z
+2026-11-14T21:35:52.898Z [director] OK leader node=d1 term=2 member=d1-74a7b4d5

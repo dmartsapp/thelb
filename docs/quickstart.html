@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick start · theLB</title>
+<meta name="description" content="Build a theLB cluster - start the first director, join two backends, approve them, and serve a web service on a VIP.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html" class="active" aria-current="page">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Get started</p>
+<h1>Quick start</h1>
+<p class="lead">One director, two backends and one web service, in five steps.</p>
+<h2 id="the-example-network">The example network<a class="anchor" href="#the-example-network" aria-label="Link to this section">#</a></h2>
+<p>In this guide all machines are on <code>10.0.0.0/24</code>:</p>
+<div class="tablewrap"><table><thead><tr><th>Machine</th><th>Address</th><th>Role</th></tr></thead><tbody><tr><td><code>lb-1</code></td><td><code>10.0.0.11</code></td><td>the first director</td></tr><tr><td><code>web-1</code>, <code>web-2</code></td><td><code>10.0.0.21</code>, <code>10.0.0.22</code></td><td>backends, running nginx on port 80</td></tr><tr><td>-</td><td><code>10.0.0.10</code></td><td>the <strong>control VIP</strong>: the cluster's own address, port <code>7443</code></td></tr><tr><td>-</td><td><code>10.0.0.20</code> and up</td><td>VIPs for services</td></tr></tbody></table></div>
+<p>Pick addresses that nothing else uses. theLB checks them before it uses them.</p>
+<div class="callout callout-note"><p class="callout-title">About the screenshots</p><p>The screenshots on this site come from the <a href="lab.html">lab</a>, a whole cluster on one machine. There the directors are called <code>d1</code>-<code>d3</code>, the backends <code>b1</code>-<code>b4</code>, the network is <code>198.18.0.0/24</code>, and the control VIP is <code>198.18.0.10</code>. The commands are the same.</p></div>
+<h2 id="1-start-the-first-director">1. Start the first director<a class="anchor" href="#1-start-the-first-director" aria-label="Link to this section">#</a></h2>
+<p>On <code>lb-1</code>, start a director with <code>--bootstrap</code>:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 <span class="tok-flag">--bootstrap</span> \
+  <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret</code></pre></div>
+<p>What happens:</p>
+<ol><li>It checks that the machine has everything theLB needs (this is called <em>preflight</em>).</li><li>It looks for an existing cluster on the control VIP for 5 seconds, and finds none.</li><li>It creates the cluster, and - because the files do not exist yet - the two <strong>secret files</strong>, readable by root only.</li><li>It takes the control VIP and becomes the leader.</li></ol>
+<figure class="screen"><img src="assets/screens/director-start.svg" width="910" height="520" alt="The first director&#x27;s log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab&#x27;s `d1` also runs with `--metrics` and `--debug`: hence their two lines.)" loading="lazy"><figcaption>The first director's log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab's <code>d1</code> also runs with <code>--metrics</code> and <code>--debug</code>: hence their two lines.)</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:39.663Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:39.672Z [metrics] OK metrics served address=198.18.0.11:9100 path=/metrics
+2026-11-14T21:35:39.673Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
+2026-11-14T21:35:48.182Z [director] OK secret file created role=director file=/tmp/thelb-lab/d1/director.secret mode=0600
+2026-11-14T21:35:48.182Z [director] OK secret file created role=backend file=/tmp/thelb-lab/d1/backend.secret mode=0600
+2026-11-14T21:35:48.183Z [director] OK creating the cluster: nothing answers on the control VIP cluster=lab vip=198.18.0.10 port=7443
+2026-11-14T21:35:49.785Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr="" last-leader-id=""
+2026-11-14T21:35:49.787Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-74a7b4d5
+2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=master interface=eth0 sync_id=188
+2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=backup interface=eth0 sync_id=188
+2026-11-14T21:35:49.787Z [director] DEBUG watching IPVS's connections, to log each new one in_progress=0
+2026-11-14T21:35:52.898Z [director] OK cluster created cluster=lab id=b98a54ee
+2026-11-14T21:35:52.898Z [director] OK certificate authority created fingerprint=587cd93f8c26fb25004feaf88a73519cf98eee509f37098a73bde3c13db916ad not_after=2036-11-11T21:35:48Z
+2026-11-14T21:35:52.898Z [director] OK certificate issued node=d1 role=director fingerprint=0387929998603c0c59f5c35bae7cfc13aeed3bc74d9f417d0ae24070533157ff not_after=2026-11-15T21:35:48Z
+2026-11-14T21:35:52.898Z [director] OK leader node=d1 term=2 member=d1-74a7b4d5</code></pre></details></figure>
+<p>Leave it running. (Later, <a href="systemd.html">run it under systemd</a> instead.)</p>
+<h2 id="2-copy-the-backend-secret">2. Copy the backend secret<a class="anchor" href="#2-copy-the-backend-secret" aria-label="Link to this section">#</a></h2>
+<p>Copy <code>/etc/thelb/backend.secret</code> from <code>lb-1</code> to each backend, readable by root only:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> install <span class="tok-flag">-o</span> root <span class="tok-flag">-m</span> 0600 backend.secret /etc/thelb/backend.secret   <span class="tok-com"># on web-1 and web-2</span></code></pre></div>
+<p>The secret lets a backend <em>ask</em> to join. It does not let it in: a director still has to approve it.</p>
+<h2 id="3-start-the-backends">3. Start the backends<a class="anchor" href="#3-start-the-backends" aria-label="Link to this section">#</a></h2>
+<p>On <code>web-1</code> and <code>web-2</code>, with nginx already running on port 80:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb backend <span class="tok-flag">--join</span> 10.0.0.10:7443 <span class="tok-flag">--secret-file</span> /etc/thelb/backend.secret \
+  <span class="tok-flag">--offer</span> web=tcp/80,check=http:/</code></pre></div>
+<p><code>--offer web=tcp/80,check=http:/</code> means: "I have an application. Call it <code>web</code>. It is on TCP port 80. Check it with an HTTP request for <code>/</code>."</p>
+<p>The backend joins and waits for approval. Its log shows its <strong>node fingerprint</strong> - a code that identifies this machine:</p>
+<figure class="screen"><img src="assets/screens/pending-log.svg" width="894" height="214" alt="A new backend&#x27;s log: it reaches the cluster, and waits to be approved." loading="lazy"><figcaption>A new backend's log: it reaches the cluster, and waits to be approved.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:11.314Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:36:11.315Z [kernel] OK interface created interface=thelb0 arp=off
+2026-11-14T21:36:11.315Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
+2026-11-14T21:36:11.315Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
+2026-11-14T21:36:11.315Z [backend] OK node fingerprint node=d2-web fingerprint=0ecf672c4027c77f hostname=linux interface=eth0 address=198.18.0.12
+2026-11-14T21:36:11.326Z [backend] OK waiting for approval cluster=lab node=d2-web fingerprint=0ecf672c4027c77f address=198.18.0.12 mac=b6:df:e6:99:04:4e</code></pre></details></figure>
+<h2 id="4-approve-the-backends">4. Approve the backends<a class="anchor" href="#4-approve-the-backends" aria-label="Link to this section">#</a></h2>
+<p>On the director, list the nodes that are waiting:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending</code></pre></div>
+<p>Check that each fingerprint matches the one in the backend's own log. Then approve them, by name:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin approve web-1 web-2</code></pre></div>
+<p>Or approve many at once with a pattern - theLB shows the matching nodes and asks you to confirm:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin approve <span class="tok-flag">--match</span> <span class="tok-str">'web-[0-9]+'</span></code></pre></div>
+<figure class="screen"><img src="assets/screens/approve.svg" width="684" height="196" alt="The waiting list, the approval, and assigning the new backend to a service." loading="lazy"><figcaption>The waiting list, the approval, and assigning the new backend to a service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status pending
+ pending | role    | address     | mac               | node fingerprint | waiting
+---------+---------+-------------+-------------------+------------------+---------
+ d2-web  | backend | 198.18.0.12 | b6:df:e6:99:04:4e | 0ecf672c4027c77f | 0.2 s
+$ sudo thelb admin approve d2-web
+approved: d2-web
+$ sudo thelb admin assign web d2-web:tcp/80
+assigned to web: d2-web</code></pre></details></figure>
+<p>Once approved, the backend says <code>backend ready</code>:</p>
+<figure class="screen"><img src="assets/screens/backend-join.svg" width="894" height="268" alt="A backend&#x27;s log from start to ready: preflight, joining, approval, its offers." loading="lazy"><figcaption>A backend's log from start to ready: preflight, joining, approval, its offers.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:53.564Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:53.579Z [kernel] OK interface created interface=thelb0 arp=off
+2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
+2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
+2026-11-14T21:35:53.579Z [backend] OK node fingerprint node=b1 fingerprint=13fb773a2f1602be hostname=linux interface=eth0 address=198.18.0.31
+2026-11-14T21:35:53.607Z [backend] OK waiting for approval cluster=lab node=b1 fingerprint=13fb773a2f1602be address=198.18.0.31 mac=da:ca:55:fb:f2:6b
+2026-11-14T21:35:54.107Z [backend] OK approved cluster=lab by=d1
+2026-11-14T21:35:54.118Z [backend] OK enrolled cluster=lab id=b98a54ee member=b1-09877083
+2026-11-14T21:35:54.127Z [backend] OK backend ready cluster=lab member=b1-09877083 offers=2</code></pre></details></figure>
+<h2 id="5-create-a-service">5. Create a service<a class="anchor" href="#5-create-a-service" aria-label="Link to this section">#</a></h2>
+<p>Three commands on the director. A <strong>pool</strong> is a range of addresses for VIPs. A <strong>service</strong> is a VIP, a protocol and a port. An <strong>assignment</strong> connects a backend's offer to a service.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin pool add main <span class="tok-flag">--vip</span> 10.0.0.20/24 <span class="tok-flag">--vippool-count</span> 10
+<span class="tok-cmd">sudo</span> thelb admin service add web <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80
+<span class="tok-cmd">sudo</span> thelb status offers
+<span class="tok-cmd">sudo</span> thelb admin assign web web-1:web web-2:web</code></pre></div>
+<p>The service takes the pool's first free address, <code>10.0.0.20</code>. <code>status offers</code> lists each backend's offers; <code>-</code> under <em>service</em> means "not assigned yet".</p>
+<figure class="screen"><img src="assets/screens/services.svg" width="676" height="340" alt="The same steps in the lab: a pool, a service, the offers, and the assignment." loading="lazy"><figcaption>The same steps in the lab: a pool, a service, the offers, and the assignment.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb admin pool add lab --vip 198.18.0.20/24 --vippool-count 10
+pool lab: 198.18.0.20 - 198.18.0.29, on eth0
+$ sudo thelb admin service add web --pool lab --proto tcp --port 80
+service web: 198.18.0.20 tcp/80
+$ sudo thelb status offers
+ node | offer    | address     | port     | check  | own check | service | since
+------+----------+-------------+----------+--------+-----------+---------+-------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | -       | 1.5 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | -       | 1.4 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | -       | 1.5 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | -       | 1.4 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | -       | 1.5 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | -       | 1.4 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | -       | 1.2 s
+$ sudo thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80
+assigned to web: b1, b2, b3</code></pre></details></figure>
+<p>Within a few seconds both backends pass their health checks, and the leader brings the VIP up. Check it, then try it from a client:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status vips
+<span class="tok-cmd">curl</span> http://10.0.0.20/</code></pre></div>
+<figure class="screen"><img src="assets/screens/status-vips.svg" width="620" height="358" alt="The VIPs, who holds them, and the services on them." loading="lazy"><figcaption>The VIPs, who holds them, and the services on them.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status vips
+ vip         | purpose | pool | interface | held by | since
+-------------+---------+------+-----------+---------+---------------------
+ 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-14 21:35:49
+ 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-14 21:35:59
+ 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-14 21:36:00
+ 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-14 21:36:01
+
+ service | vip         | port   | scheduler | method | backends up
+---------+-------------+--------+-----------+--------+-------------
+ web     | 198.18.0.20 | tcp/80 | wrr       | direct | 3 of 3
+ mapped  | 198.18.0.21 | tcp/80 | wrr       | direct | 3 of 3
+ far     | 198.18.0.22 | tcp/80 | wrr       | tunnel | 2 of 2
+
+ pool | network       | addresses                 | interface | used
+------+---------------+---------------------------+-----------+---------
+ lab  | 198.18.0.0/24 | 198.18.0.20 - 198.18.0.29 | eth0      | 3 of 10</code></pre></details></figure>
+<p>That is a working load balancer. Next:</p>
+<ul><li>add two more directors, so that one can fail: <a href="directors.html">Directors and failover</a>;</li><li>keep it running after a reboot: <a href="systemd.html">Running under systemd</a>;</li><li>save your pools, services and assignments: <a href="services.html#keeping-them-thelb-generate-commands">Keeping them</a>.</li></ul>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="install.html"><span>Previous</span>Install</a><a class="next" href="lab.html"><span>Next</span>Try it on one machine</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/quickstart.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-example-network">The example network</a></li><li class="toc2"><a href="#1-start-the-first-director">1. Start the first director</a></li><li class="toc2"><a href="#2-copy-the-backend-secret">2. Copy the backend secret</a></li><li class="toc2"><a href="#3-start-the-backends">3. Start the backends</a></li><li class="toc2"><a href="#4-approve-the-backends">4. Approve the backends</a></li><li class="toc2"><a href="#5-create-a-service">5. Create a service</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

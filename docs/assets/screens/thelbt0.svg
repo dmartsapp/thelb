@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 813 142" width="813" height="142" role="img" aria-label="b4" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="813" height="142" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h797A8 8 0 0 1 813 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="406" y="19.5" text-anchor="middle">b4</text>
+<text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">ip address show thelbt0</tspan></text>
+<text x="16" y="73">5: thelbt0@NONE: &lt;NOARP,UP,LOWER_UP&gt; mtu 1480 qdisc noqueue state UNKNOWN group default qlen 1000</text>
+<text x="16" y="91">    link/ipip 0.0.0.0 brd 0.0.0.0</text>
+<text x="16" y="109">    inet 192.0.0.8/32 scope global proto 0x74 thelbt0:thelb</text>
+<text x="16" y="127">       valid_lft forever preferred_lft forever</text>
+</svg>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Secrets and approval · theLB</title>
+<meta name="description" content="theLB&#x27;s secret files, approving and removing nodes, node fingerprints, and what to do after a secret leaks.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html" class="active" aria-current="page">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Secrets and approval</h1>
+<p class="lead">Two secrets let machines ask to join. A person approves each one. Together they decide who is in the cluster.</p>
+<h2 id="the-two-secret-files">The two secret files<a class="anchor" href="#the-two-secret-files" aria-label="Link to this section">#</a></h2>
+<p>The cluster has two secrets, each in a file of its own:</p>
+<div class="tablewrap"><table><thead><tr><th>File</th><th>Goes to</th><th>Lets a machine</th></tr></thead><tbody><tr><td><code>director.secret</code></td><td>every director</td><td>ask to join as a director</td></tr><tr><td><code>backend.secret</code></td><td>every director and every backend</td><td>ask to join as a backend</td></tr></tbody></table></div>
+<ul><li><strong>Created once.</strong> The first <code>--bootstrap</code> writes any missing file - mode <code>0600</code>, owned by root - and never overwrites one. You can also create them yourself first: <code>sudo thelb generate secret | sudo tee /etc/thelb/director.secret &gt;/dev/null</code>, then <code>sudo chmod 0600</code> it.</li><li><strong>Read only from files</strong>, never from the command line. theLB refuses a file that anyone but root can read, or that is a symbolic link.</li><li><strong>Never logged or printed</strong> - except by <code>thelb generate secret</code>, and by <code>sudo thelb admin secret show --role director|backend</code> on a director, to repair a node whose file is out of date.</li><li><strong>Not enough on their own.</strong> A machine with the right secret can only <em>ask</em> to join. A person must approve it.</li></ul>
+<p>When every director has stopped, the next bootstrap creates the cluster again, with a new certificate authority and <strong>the same secrets</strong>.</p>
+<h2 id="approving-nodes">Approving nodes<a class="anchor" href="#approving-nodes" aria-label="Link to this section">#</a></h2>
+<p>Every new director and backend waits for approval:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending                         <span class="tok-com"># who is waiting, with fingerprints</span>
+<span class="tok-cmd">sudo</span> thelb admin approve web-1 web-2              <span class="tok-com"># by name</span>
+<span class="tok-cmd">sudo</span> thelb admin approve <span class="tok-flag">--match</span> <span class="tok-str">'web-[0-9]+'</span>     <span class="tok-com"># by pattern; shows the matches and asks y/N</span>
+<span class="tok-cmd">sudo</span> thelb admin approve <span class="tok-flag">--match</span> <span class="tok-str">'web-[0-9]+'</span> <span class="tok-flag">--yes</span>    <span class="tok-com"># the same, for scripts</span>
+<span class="tok-cmd">sudo</span> thelb admin refuse web-9                     <span class="tok-com"># it is told so, and stops</span>
+<span class="tok-cmd">sudo</span> thelb admin remove web-2                     <span class="tok-com"># its certificate is revoked; it stops or leaves</span></code></pre></div>
+<figure class="screen"><img src="assets/screens/approve.svg" width="684" height="196" alt="A backend waiting, approved, then assigned to a service." loading="lazy"><figcaption>A backend waiting, approved, then assigned to a service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status pending
+ pending | role    | address     | mac               | node fingerprint | waiting
+---------+---------+-------------+-------------------+------------------+---------
+ d2-web  | backend | 198.18.0.12 | b6:df:e6:99:04:4e | 0ecf672c4027c77f | 0.2 s
+$ sudo thelb admin approve d2-web
+approved: d2-web
+$ sudo thelb admin assign web d2-web:tcp/80
+assigned to web: d2-web</code></pre></details></figure>
+<ul><li><strong>Compare the fingerprint.</strong> A waiting node shows its <strong>node fingerprint</strong> in its own log and in <code>thelb status</code>. It identifies the machine. Check that the fingerprint on the director matches the one on the machine before you approve.</li><li><strong>Approved once, a node rejoins by itself</strong> after a restart - unless its fingerprint, address or MAC address changed.</li><li>After <strong>every</strong> director has stopped, the cluster is new, and every node waits for approval again. <code>approve --match</code> approves many at once.</li><li>A request that stops asking is dropped after an hour.</li><li><code>--match</code> takes a regular expression (<a href="https://github.com/google/re2/wiki/Syntax">RE2</a> syntax) that must match the <strong>whole</strong> name.</li></ul>
+<h2 id="inside-the-cluster">Inside the cluster<a class="anchor" href="#inside-the-cluster" aria-label="Link to this section">#</a></h2>
+<p>All traffic between nodes uses mutual TLS 1.3. Each approved node gets a certificate from the cluster's own certificate authority, and <code>thelb admin remove</code> revokes it.</p>
+<h2 id="if-a-secret-leaks">If a secret leaks<a class="anchor" href="#if-a-secret-leaks" aria-label="Link to this section">#</a></h2>
+<p>A leaked secret lets a machine ask to join, but not get in: someone still has to approve it. So:</p>
+<ol><li>Do not approve nodes you do not expect. Check <code>thelb status pending</code> and the fingerprints.</li><li>Remove any member that should not be there: <code>sudo thelb admin remove &lt;name&gt;</code>.</li><li>Replace the secret. Secret rotation (<code>thelb admin secret rotate</code>) is not built yet in 0.1. Until it is, start the cluster again with new secret files: stop every director, create new files with <code>thelb generate secret</code>, copy them to every node, start a director with <code>--bootstrap</code>, approve the nodes, and run your <a href="services.html#keeping-them-thelb-generate-commands">saved commands</a>.</li></ol>
+<p>See <a href="security.html">Security</a> for what theLB trusts, and how to report a problem.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="forwarding.html"><span>Previous</span>Direct routing and tunnels</a><a class="next" href="systemd.html"><span>Next</span>Running under systemd</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/approval.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-two-secret-files">The two secret files</a></li><li class="toc2"><a href="#approving-nodes">Approving nodes</a></li><li class="toc2"><a href="#inside-the-cluster">Inside the cluster</a></li><li class="toc2"><a href="#if-a-secret-leaks">If a secret leaks</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

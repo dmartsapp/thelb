@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>This documentation · theLB</title>
+<meta name="description" content="How the theLB documentation site is structured, built with docs/build.py, illustrated with real screenshots, and published with GitHub Pages from main.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html" class="active" aria-current="page">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Technical</p>
+<h1>This documentation</h1>
+<p class="lead">How this site is built, how its screenshots are made, and how to change a page.</p>
+<h2 id="structure">Structure<a class="anchor" href="#structure" aria-label="Link to this section">#</a></h2>
+<p>The site is plain static HTML served by GitHub Pages. There is no framework and no external service: no JavaScript build, no CDN, no web fonts.</p>
+<div class="codeblock lang-plain"><pre><code>docs/
+├── build.py              the generator (Python 3, standard library only)
+├── test_build.py         its tests
+├── src/*.md              one Markdown source per page
+├── screens/capture.sh    captures the screenshots from the real binary
+├── screens/*.txt         the captured output, one file per screenshot
+├── assets/               style.css, site.js, favicon.svg, and screens/*.svg
+├── *.html                generated pages - committed, never edited by hand
+├── design.md             the full design (read on GitHub)
+├── diagrams.md           the design in pictures (read on GitHub)
+└── build-state.md        where the code is, and what comes next
+CHANGELOG.md              at the repository root; also the Changelog page
+index.html, .nojekyll     at the repository root; see Hosting</code></pre></div>
+<p>The generator turns each <code>docs/src/&lt;name&gt;.md</code> into <code>docs/&lt;name&gt;.html</code>, wraps it in the shared layout (top bar, sidebar, "On this page", previous and next links), and renders <code>CHANGELOG.md</code> as the <a href="changelog.html">Changelog</a> page.</p>
+<h2 id="changing-a-page">Changing a page<a class="anchor" href="#changing-a-page" aria-label="Link to this section">#</a></h2>
+<p>Documentation changes go straight to <code>main</code>. They are not releases: no branch, no tag, and no workflow runs.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code>$EDITOR docs/src/directors.md
+<span class="tok-cmd">python3</span> docs/build.py           <span class="tok-com"># regenerate the HTML</span>
+<span class="tok-cmd">python3</span> docs/build.py <span class="tok-flag">--check</span>   <span class="tok-com"># pages current? every link and anchor good?</span>
+<span class="tok-cmd">git</span> add docs &amp;&amp; git commit
+<span class="tok-cmd">git</span> push origin main</code></pre></div>
+<p><code>--check</code> fails if a generated page or screenshot is stale, an internal link or <code>#anchor</code> is broken, a screenshot is no longer used, or a link to the published site (<code>https://dmartsapp.github.io/thelb/...</code>) in <code>README.md</code>, <code>CHANGELOG.md</code> or a page names a page that does not exist. The release workflow runs it too.</p>
+<h2 id="screenshots">Screenshots<a class="anchor" href="#screenshots" aria-label="Link to this section">#</a></h2>
+<p>Every screenshot is <strong>real output</strong> of the theLB binary, captured in the <a href="lab.html">lab</a> - never typed by hand.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">make</span> screens                       <span class="tok-com"># on a Linux machine, as root, with the lab down</span>
+<span class="tok-cmd">make</span> remote-screens REMOTE=&lt;host&gt;  <span class="tok-com"># on another machine, over ssh; the files come back</span></code></pre></div>
+<p><code>docs/screens/capture.sh</code> starts a lab with a binary of its own, runs every command the pages show, and saves each output as <code>docs/screens/&lt;name&gt;.txt</code>: the window title on the first line, then the commands (<code>$ ...</code>) and what they printed. Then <code>python3 docs/build.py</code> draws each one as a terminal window, <code>docs/assets/screens/&lt;name&gt;.svg</code>, with a "As text" box under it for copying.</p>
+<p>To show a screenshot on a page:</p>
+<div class="codeblock lang-plain"><pre><code>:::screen status
+The caption, under the picture.
+:::</code></pre></div>
+<p>When theLB's output changes, capture them all again: they then all come from the same build.</p>
+<h2 id="page-format">Page format<a class="anchor" href="#page-format" aria-label="Link to this section">#</a></h2>
+<p>Each source starts with a small header, then Markdown:</p>
+<div class="codeblock lang-plain"><pre><code>---
+title: Directors and failover
+lead: One sentence under the title.
+description: Text for search engines and link previews.
+section: Guides
+order: 1
+nav: Directors and failover
+---
+
+## First section</code></pre></div>
+<div class="tablewrap"><table><thead><tr><th>Header key</th><th>Meaning</th></tr></thead><tbody><tr><td><code>title</code></td><td>the page heading and browser title</td></tr><tr><td><code>lead</code></td><td>the larger sentence under the title</td></tr><tr><td><code>description</code></td><td>the <code>&lt;meta name="description"&gt;</code></td></tr><tr><td><code>section</code></td><td>the sidebar group: <code>Get started</code>, <code>Guides</code>, <code>Reference</code> or <code>Technical</code></td></tr><tr><td><code>order</code></td><td>its position in the group</td></tr><tr><td><code>nav</code></td><td>the sidebar label, if not the title</td></tr></tbody></table></div>
+<p>The Markdown is a small dialect: headings (<code>##</code>, <code>###</code>), lists, tables, inline code, bold, italic and links (<code>.md</code> links become <code>.html</code>); fenced code blocks (<code>bash</code>, <code>text</code>, <code>json</code>, <code>yaml</code>, <code>go</code>); callouts (<code>:::note</code>, <code>:::tip</code>, <code>:::warning</code>); raw HTML (<code>:::html</code>, for diagrams and cards); and screenshots (<code>:::screen</code>).</p>
+<p><code>{{version}}</code>, <code>{{minor}}</code> and <code>{{go}}</code> in a page become the newest version in the changelog, its minor line, and the Go release from <code>go.mod</code>.</p>
+<h2 id="writing-guidelines">Writing guidelines<a class="anchor" href="#writing-guidelines" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>Simple English.</strong> Short sentences, common words. Explain a term the first time it appears.</li><li><strong>Real output only.</strong> Examples and screenshots come from the real binary.</li><li><strong>What and why before how.</strong> The user pages explain; the Technical section goes deep.</li><li><strong>Exact facts.</strong> Defaults, limits and timings as the code has them.</li></ul>
+<h2 id="hosting">Hosting<a class="anchor" href="#hosting" aria-label="Link to this section">#</a></h2>
+<p>The repository's Pages setting builds from the <code>main</code> branch, folder <code>/</code>. Two small files at the repository root make that work:</p>
+<ul><li><strong><code>.nojekyll</code></strong> tells GitHub Pages to serve the files as they are, without Jekyll.</li><li><strong><code>index.html</code></strong> sends visitors from <code>https://dmartsapp.github.io/thelb/</code> to <code>docs/</code>.</li></ul>
+<p>A push to <code>main</code> runs GitHub's own <code>pages-build-deployment</code>, and the change is live within a minute or two. Nothing in this repository's workflows builds the site, which is why the generated HTML is committed.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="tech-release.html"><span>Previous</span>Releasing</a><span></span></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-docs.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#structure">Structure</a></li><li class="toc2"><a href="#changing-a-page">Changing a page</a></li><li class="toc2"><a href="#screenshots">Screenshots</a></li><li class="toc2"><a href="#page-format">Page format</a></li><li class="toc2"><a href="#writing-guidelines">Writing guidelines</a></li><li class="toc2"><a href="#hosting">Hosting</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

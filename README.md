@@ -11,49 +11,38 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 - **Nothing left behind**: theLB changes only runtime state and never writes a configuration file. What would make its setup survive a reboot - a systemd unit, sysctl settings, Kubernetes manifests - it prints, for you to install if you choose.
 - **Full authority or nothing**: it checks that it can do its whole job before it changes anything, and says exactly what is missing if it cannot.
 
+## Documentation
+
+**[dmartsapp.github.io/thelb](https://dmartsapp.github.io/thelb/docs/)** - in simple English, with screenshots of the real output:
+
+- [Install](https://dmartsapp.github.io/thelb/docs/install.html) and the [quick start](https://dmartsapp.github.io/thelb/docs/quickstart.html): one director, two backends and a service;
+- [Try it on one machine](https://dmartsapp.github.io/thelb/docs/lab.html): a whole cluster in network namespaces;
+- [Directors and failover](https://dmartsapp.github.io/thelb/docs/directors.html): the VIP lease, and what happens when a machine fails;
+- [Troubleshooting](https://dmartsapp.github.io/thelb/docs/troubleshooting.html) and the [commands](https://dmartsapp.github.io/thelb/docs/commands.html);
+- [How it works](https://dmartsapp.github.io/thelb/docs/tech-design.html), and the full [design](docs/design.md) with its [diagrams](docs/diagrams.md); [where the code is](docs/build-state.md).
+
 ## Status
 
 **v0.1.0, the first release** ([changelog](CHANGELOG.md)): directors forming a cluster with Raft - joining with a secret and an approval, the leader holding the control VIP, failover, two directors surviving either one's crash - and backends serving services through IPVS, by direct routing or IP-in-IP, with port mapping and health checks from both sides, shared across the directors. VIPs leased from the kernel, connection synchronisation, drift repair, `thelb status`, `doctor`, `generate` (systemd units, kernel parameters, the cluster's commands) and Prometheus metrics. Linux only; Kubernetes comes next.
 
-- [User manual](docs/manual.md) - installing theLB, building a cluster, serving services, and keeping it running;
-- [Philosophy](docs/philosophy.md) - the principles every decision follows;
-- [Design](docs/design.md) - how it works, and the questions still open;
-- [Diagrams](docs/diagrams.md) - both, in pictures;
-- [Build state](docs/build-state.md) - where the code is, what is broken, and what comes next.
-
 ## Releases
 
-Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries (amd64, arm64), their SHA-256 sums and build-provenance attestations - see the [manual](docs/manual.md#3-installing) to install one, and [SECURITY.md](SECURITY.md) to verify it or to report a vulnerability. Releases are cut from `release/vX.Y` branches, tagged there; `main` is where development goes on, checked by CI - `make check` and the end-to-end test - on every push.
+Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries (amd64, arm, arm64), their SHA-256 sums, SBOMs (CycloneDX and SPDX), and attestations of their build provenance and SBOMs - see [Install](https://dmartsapp.github.io/thelb/docs/install.html) to download and check one, and [SECURITY.md](SECURITY.md) to report a vulnerability. Releases are tagged `vX.Y.Z` on `release/vX.Y` branches: the tag is the only thing that runs a workflow ([Releasing](https://dmartsapp.github.io/thelb/docs/tech-release.html)). The end-to-end test runs on a development machine before each release, not in CI.
 
 ## Building and testing
 
-theLB is Linux only, and built with Go 1.27.3 or later. `make` is the one place to build and check from:
+theLB is Linux only, and built with Go 1.27.4 or later. `make` is the one place to build and check from:
 
 ```text
-make build                         # bin/thelb.linux.amd64 and bin/thelb.linux.arm64
+make build                         # bin/thelb.linux.amd64, .arm and .arm64
 make check                         # gofmt, go vet, go test -race, golangci-lint v2.15.0, govulncheck
-make e2e                           # the built binary in a lab of network namespaces, as root (Linux, passwordless sudo)
+make e2e                           # the kernel tests, and the binary in a lab of network namespaces (Linux, passwordless sudo)
 make remote-check REMOTE=<host>    # make check on a Linux machine, over ssh
 make remote-e2e REMOTE=<host>      # make e2e there
 make lab                           # a lab to try by hand, on one Linux machine (root)
 make lab-down                      # take it away
-```
-
-### Trying it on one machine
-
-`make lab` builds, in network namespaces on `198.18.0.0/24` - so nothing reaches the machine's own network - a cluster of three directors, three backends each running two small web servers, and a client; then a pool and two services: `web` on `198.18.0.20:80`, from port 80 on every backend, and `mapped` on `198.18.0.21:80`, from 8080, 9090 and 7070 - each backend mapping the port. `test/lab.sh` drives it:
-
-```text
-sudo test/lab.sh curl 12                    # the client fetches web 12 times, and counts who answered
-sudo test/lab.sh curl 9 198.18.0.21         # the same for mapped
-sudo test/lab.sh run b2 nft list table inet thelb   # b2's port mapping: 80 to 9090
-sudo test/lab.sh run d1 thelb status        # the summary; then status directors, backends, vips, all
-sudo test/lab.sh run d1 ipvsadm -Ln         # what theLB programmed in IPVS, on the leader
-sudo test/lab.sh app b2 down                # a backend's application fails: weight 0; app b2 up brings it back
-sudo test/lab.sh serve d1                   # a backend beside d1's director, on its host: d1-web
-sudo test/lab.sh kill d1                    # the leader crashes: another director takes the VIPs
-sudo test/lab.sh start d1                   # it comes back, cleans up what it left, and rejoins
-sudo test/lab.sh down                       # takes it all away
+make remote-screens REMOTE=<host>  # the documentation's screenshots, captured there
+python3 docs/build.py              # the documentation site, from docs/src
 ```
 
 ## License

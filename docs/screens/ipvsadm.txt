@@ -1,0 +1,16 @@
+d1
+$ sudo ipvsadm -Ln
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port Scheduler Flags
+  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  198.18.0.20:80 wrr
+  -> 198.18.0.31:80               Route   1      0          4         
+  -> 198.18.0.32:80               Route   1      0          4         
+  -> 198.18.0.33:80               Route   1      0          4         
+TCP  198.18.0.21:80 wrr
+  -> 198.18.0.31:80               Route   1      0          3         
+  -> 198.18.0.32:80               Route   1      0          3         
+  -> 198.18.0.33:80               Route   1      0          3         
+TCP  198.18.0.22:80 wrr
+  -> 198.18.0.31:80               Tunnel  1      0          4         
+  -> 198.19.0.41:80               Tunnel  1      0          4         

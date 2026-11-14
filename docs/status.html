@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading thelb status · theLB</title>
+<meta name="description" content="The tables and columns of thelb status - nodes, backends, services, offers, VIPs and the cluster - and what each state means.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html" class="active" aria-current="page">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Reference</p>
+<h1>Reading thelb status</h1>
+<p class="lead">What each table and column of thelb status means.</p>
+<h2 id="the-views">The views<a class="anchor" href="#the-views" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Command</th><th>Shows</th></tr></thead><tbody><tr><td><code>thelb status</code></td><td>the summary: the cluster, and how many of each thing are up</td></tr><tr><td><code>thelb status directors</code></td><td>the cluster, directors, pending directors, certificates</td></tr><tr><td><code>thelb status backends</code></td><td>backends, pending backends, offers, and each service's backends</td></tr><tr><td><code>thelb status offers</code></td><td>every backend's offers</td></tr><tr><td><code>thelb status vips</code></td><td>VIPs and who holds them, services, pools</td></tr><tr><td><code>thelb status all</code></td><td>everything</td></tr></tbody></table></div>
+<p><code>thelb status</code>, <code>status directors</code> and <code>status vips</code> are quick at any size. The views with the backends table also read IPVS's traffic counters on the leader, service by service: about a second for a thousand services.</p>
+<h2 id="the-summary">The summary<a class="anchor" href="#the-summary" aria-label="Link to this section">#</a></h2>
+<figure class="screen"><img src="assets/screens/status.svg" width="765" height="286" alt="The summary: each kind of thing, how many there are, and how many are up, down or waiting." loading="lazy"><figcaption>The summary: each kind of thing, how many there are, and how many are up, down or waiting.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ what      | total | up | down | pending
+-----------+-------+----+------+---------
+ directors |     3 |  3 |    0 |       0
+ backends  |     4 |  4 |    0 |       0
+ services  |     3 |  3 |    0 |       -
+ vips      |     4 |  4 |    0 |       -
+
+More: thelb status directors | backends | vips | all</code></pre></details></figure>
+<h2 id="nodes">Nodes<a class="anchor" href="#nodes" aria-label="Link to this section">#</a></h2>
+<figure class="screen"><img src="assets/screens/status-directors.svg" width="765" height="412" alt="The cluster table, then the nodes and their certificates." loading="lazy"><figcaption>The cluster table, then the nodes and their certificates.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ node | role     | address     | state | version | node fingerprint | last check-in
+------+----------+-------------+-------+---------+------------------+---------------
+ d1   | leader   | 198.18.0.11 | up    | 0.1.0   | 54cbcbbb78ad3cc6 | -
+ d2   | director | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | 0.4 s ago
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.4 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ certificate  | kind     | fingerprint      | not after
+--------------+----------+------------------+---------------------
+ theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
+ d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
+ d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
+ d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+<p><strong>state</strong> is one of:</p>
+<div class="tablewrap"><table><thead><tr><th>State</th><th>Means</th></tr></thead><tbody><tr><td><code>up</code></td><td>working</td></tr><tr><td><code>down</code></td><td>a director that has not checked in for 3 seconds, or a backend with no heartbeat for 10; also a director the leader found gone and took out of the vote</td></tr><tr><td><code>catching up</code></td><td>a new director, copying the cluster's state; it cannot vote yet</td></tr><tr><td><code>stopped</code></td><td>a director stopped on purpose; out of the vote until it starts again</td></tr><tr><td><code>unknown</code></td><td>this director cannot reach the leader, so it cannot tell</td></tr></tbody></table></div>
+<p>The <strong>node fingerprint</strong> identifies the machine. Compare it before you approve a node.</p>
+<h2 id="the-cluster">The cluster<a class="anchor" href="#the-cluster" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>leader</strong>, <strong>term</strong>, <strong>leader since</strong>: who leads, the Raft term, and since when.</li><li><strong>vip lease</strong>: how long the kernel keeps a VIP after the leader's last renewal - <code>thelb admin lease</code>.</li></ul>
+<h2 id="backends">Backends<a class="anchor" href="#backends" aria-label="Link to this section">#</a></h2>
+<figure class="screen"><img src="assets/screens/status-backends.svg" width="1015" height="736" alt="Each backend of each service." loading="lazy"><figcaption>Each backend of each service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status backends
+ node | role    | address     | state | version | node fingerprint | last check-in
+------+---------+-------------+-------+---------+------------------+---------------
+ b1   | backend | 198.18.0.31 | up    | 0.1.0   | 13fb773a2f1602be | 1.8 s ago
+ b2   | backend | 198.18.0.32 | up    | 0.1.0   | 47e299ae51b988ce | 1.8 s ago
+ b3   | backend | 198.18.0.33 | up    | 0.1.0   | fbc7b527309b076e | 1.8 s ago
+ b4   | backend | 198.19.0.41 | up    | 0.1.0   | 138d4b1de80a58a0 | 1.5 s ago
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ node | offer    | address     | port     | check  | own check | service  | since
+------+----------+-------------+----------+--------+-----------+----------+--------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.7 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.7 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.7 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s
+
+ service | vip            | backend | at               | checks  | weight | connections | packets | bytes  | last check-in
+---------+----------------+---------+------------------+---------+--------+-------------+---------+--------+---------------
+ web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.8 s ago
+ web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      19 | 1.2 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.8 s ago
+ far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.5 s ago
+
+ certificate | kind    | fingerprint      | not after
+-------------+---------+------------------+---------------------
+ b1          | backend | fb7a6dccf0b61793 | 2026-11-15 21:35:54
+ b2          | backend | 3f79e6b05f968c20 | 2026-11-15 21:35:54
+ b3          | backend | f1c3a00db0a7c495 | 2026-11-15 21:35:54
+ b4          | backend | 4f2240e08f2c1741 | 2026-11-15 21:35:54</code></pre></details></figure>
+<div class="tablewrap"><table><thead><tr><th>Column</th><th>Means</th></tr></thead><tbody><tr><td><strong>checks</strong></td><td>the backend's own check, then the directors' check: <code>ok</code>, <code>fail</code>, or <code>-</code> (no result yet)</td></tr><tr><td><strong>weight</strong></td><td>what IPVS has now: the assigned weight, or 0 while the backend does not serve</td></tr><tr><td><strong>connections</strong>, <strong>packets</strong>, <strong>bytes</strong></td><td>what IPVS sent the backend. There is no count of replies: they never pass the director</td></tr><tr><td><strong>last check-in</strong></td><td>how long ago the backend's last heartbeat arrived</td></tr></tbody></table></div>
+<h2 id="services">Services<a class="anchor" href="#services" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>backends up</strong>: how many of the assigned backends have a weight above 0.</li><li><strong>method</strong>: <code>direct</code> or <code>tunnel</code>.</li><li><strong>scheduler</strong>: how connections are spread - <code>wrr</code> by default.</li></ul>
+<h2 id="offers">Offers<a class="anchor" href="#offers" aria-label="Link to this section">#</a></h2>
+<figure class="screen"><img src="assets/screens/status-offers.svg" width="692" height="232" alt="Every offer." loading="lazy"><figcaption>Every offer.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status offers
+ node | offer    | address     | port     | check  | own check | service  | since
+------+----------+-------------+----------+--------+-----------+----------+--------
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.8 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.8 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s</code></pre></details></figure>
+<ul><li><strong>offer</strong>: the name the backend gave it.</li><li><strong>own check</strong>: the backend's own check, as its last heartbeat said.</li><li><strong>service</strong>: what it is assigned to; <code>-</code> while not assigned.</li></ul>
+<h2 id="vips">VIPs<a class="anchor" href="#vips" aria-label="Link to this section">#</a></h2>
+<figure class="screen"><img src="assets/screens/status-vips.svg" width="620" height="358" alt="The VIPs: the control VIP and each service&#x27;s, with their holder." loading="lazy"><figcaption>The VIPs: the control VIP and each service's, with their holder.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status vips
+ vip         | purpose | pool | interface | held by | since
+-------------+---------+------+-----------+---------+---------------------
+ 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-14 21:35:49
+ 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-14 21:35:59
+ 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-14 21:36:00
+ 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-14 21:36:01
+
+ service | vip         | port   | scheduler | method | backends up
+---------+-------------+--------+-----------+--------+-------------
+ web     | 198.18.0.20 | tcp/80 | wrr       | direct | 3 of 3
+ mapped  | 198.18.0.21 | tcp/80 | wrr       | direct | 3 of 3
+ far     | 198.18.0.22 | tcp/80 | wrr       | tunnel | 2 of 2
+
+ pool | network       | addresses                 | interface | used
+------+---------------+---------------------------+-----------+---------
+ lab  | 198.18.0.0/24 | 198.18.0.20 - 198.18.0.29 | eth0      | 3 of 10</code></pre></details></figure>
+<ul><li><strong>purpose</strong>: <code>control</code> (the cluster's own address) or <code>service</code>.</li><li><strong>held by</strong>: the leader, while a backend serves one of the VIP's services; <code>-</code> otherwise.</li><li><strong>since</strong>: when the holder took it.</li></ul>
+<h2 id="json">JSON<a class="anchor" href="#json" aria-label="Link to this section">#</a></h2>
+<p><code>thelb status --json</code> gives everything as JSON, for scripts. It has a few fields the tables do not show - for example, who makes each backend's directors' check (<code>checked_by</code>), and each backend's active and inactive connections.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="changelog.html"><span>Previous</span>Changelog</a><a class="next" href="failures.html"><span>Next</span>When things fail</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/status.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-views">The views</a></li><li class="toc2"><a href="#the-summary">The summary</a></li><li class="toc2"><a href="#nodes">Nodes</a></li><li class="toc2"><a href="#the-cluster">The cluster</a></li><li class="toc2"><a href="#backends">Backends</a></li><li class="toc2"><a href="#services">Services</a></li><li class="toc2"><a href="#offers">Offers</a></li><li class="toc2"><a href="#vips">VIPs</a></li><li class="toc2"><a href="#json">JSON</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

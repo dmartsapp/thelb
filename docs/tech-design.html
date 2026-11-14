@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · theLB</title>
+<meta name="description" content="theLB&#x27;s architecture - directors, Raft, the control VIP and its lease, IPVS, the backend agent, health checks, the control protocol and the source layout.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html" class="active" aria-current="page">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Technical</p>
+<h1>How it works</h1>
+<p class="lead">The pieces inside theLB, and how a packet, a change and a failover move through them.</p>
+<h2 id="the-big-picture">The big picture<a class="anchor" href="#the-big-picture" aria-label="Link to this section">#</a></h2>
+<p>theLB has a <strong>control plane</strong> and a <strong>data plane</strong>:</p>
+<ul><li>The <strong>data plane</strong> is the Linux kernel: IPVS forwards packets, and ARP or neighbour discovery tell the network where each VIP is. theLB never touches a packet itself.</li><li>The <strong>control plane</strong> is theLB: the directors agree on what the kernel should do, the leader does it, and every node checks that it stays done.</li></ul>
+<div class="diagram">
+<svg viewBox="0 0 660 300" role="img" aria-label="Three directors in a Raft cluster; the leader holds the VIPs and programs IPVS; backends check in with the leader over mutual TLS">
+  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker></defs>
+  <rect class="box accent" x="30" y="30" width="170" height="78" rx="10"/>
+  <text class="h" x="115" y="56" text-anchor="middle">Director 1 - leader</text>
+  <text class="sub" x="115" y="75" text-anchor="middle">VIPs (leased) · IPVS</text>
+  <text class="sub" x="115" y="92" text-anchor="middle">checks · decisions</text>
+  <rect class="box" x="245" y="30" width="170" height="78" rx="10"/>
+  <text class="h" x="330" y="56" text-anchor="middle">Director 2</text>
+  <text class="sub" x="330" y="75" text-anchor="middle">follows · shares checks</text>
+  <text class="sub" x="330" y="92" text-anchor="middle">sync backup</text>
+  <rect class="box" x="460" y="30" width="170" height="78" rx="10"/>
+  <text class="h" x="545" y="56" text-anchor="middle">Director 3</text>
+  <text class="sub" x="545" y="75" text-anchor="middle">follows · shares checks</text>
+  <text class="sub" x="545" y="92" text-anchor="middle">sync backup</text>
+  <path class="arrow" d="M200 69H243"/>
+  <path class="arrow" d="M200 60C260 8 460 8 500 28"/>
+  <text class="sub" x="330" y="135" text-anchor="middle">Raft: every change is agreed by a majority, then applied</text>
+  <rect class="box" x="60" y="200" width="150" height="70" rx="10"/>
+  <text class="h" x="135" y="226" text-anchor="middle">Backend</text>
+  <text class="sub" x="135" y="245" text-anchor="middle">thelb0 · own checks</text>
+  <text class="sub" x="135" y="260" text-anchor="middle">heartbeat every 2 s</text>
+  <rect class="box" x="255" y="200" width="150" height="70" rx="10"/>
+  <text class="h" x="330" y="226" text-anchor="middle">Backend</text>
+  <text class="sub" x="330" y="245" text-anchor="middle">port mapping (nftables)</text>
+  <text class="sub" x="330" y="260" text-anchor="middle">heartbeat every 2 s</text>
+  <rect class="box" x="450" y="200" width="150" height="70" rx="10"/>
+  <text class="h" x="525" y="226" text-anchor="middle">Backend</text>
+  <text class="sub" x="525" y="245" text-anchor="middle">thelbt0 (IP-in-IP)</text>
+  <text class="sub" x="525" y="260" text-anchor="middle">heartbeat every 2 s</text>
+  <path class="arrow" d="M135 198L115 110"/>
+  <path class="arrow" d="M330 198L140 110"/>
+  <path class="arrow" d="M525 198L170 110"/>
+  <text class="sub" x="330" y="168" text-anchor="middle">backends talk to the control VIP: mutual TLS 1.3</text>
+</svg>
+</div>
+<h2 id="a-packet">A packet<a class="anchor" href="#a-packet" aria-label="Link to this section">#</a></h2>
+<ol><li>A client sends a packet to a service VIP. The leader holds the VIP on its interface and has announced it, so the network delivers the packet to the leader.</li><li>IPVS on the leader matches the VIP, protocol and port to a service, and picks a backend with the service's scheduler (weighted round robin by default). An existing connection keeps its backend.</li><li><strong>Direct routing</strong>: IPVS sends the packet, unchanged, to the backend's MAC address. <strong>IP-in-IP</strong>: it wraps the packet in a new IPv4 header addressed to the backend.</li><li>The backend has the VIP on <code>thelb0</code>, a dummy interface that never answers ARP, so it accepts the packet as its own. A tunnelled packet is unwrapped on <code>thelbt0</code> first. If the application listens on another port, nftables on the backend changes the port.</li><li>The application answers. The reply goes from the VIP's address straight to the client - through the backend's own router, never back through the director.</li></ol>
+<h2 id="a-change">A change<a class="anchor" href="#a-change" aria-label="Link to this section">#</a></h2>
+<ol><li><code>sudo thelb admin service add ...</code> talks to the local director over a Unix socket (<code>/run/thelb/director/</code>), which only root can use.</li><li>A director that is not the leader passes the change to the leader, over mutual TLS.</li><li>The leader checks the change (is the VIP free on the network? does the backend offer that port? can the director reach the backend's network?), then puts it in the Raft log.</li><li>Once a majority of directors have the entry, every director applies it to its copy of the cluster's state.</li><li>The leader turns the new state into a <strong>plan</strong> - the VIPs, IPVS services and backends, weights, neighbour entries - and changes only what the plan changed: IPVS first, then the VIP.</li></ol>
+<h2 id="the-vips-and-the-lease">The VIPs and the lease<a class="anchor" href="#the-vips-and-the-lease" aria-label="Link to this section">#</a></h2>
+<p>The leader adds every VIP with a kernel address lifetime - the <strong>lease</strong>, 6 seconds by default - and renews it every third of that, many VIPs per netlink message. If theLB is killed or hangs, the kernel removes the VIPs by itself when the lease runs out. The lease is part of the Raft state, so every director knows how long an old leader's VIP can still answer.</p>
+<p>A new leader takes a VIP only when two looks, one second apart, find nothing answering for it: no ARP or neighbour reply, and for the control VIP, nothing accepting a TCP connection. With two directors, the survivor waits for the lease plus 2 seconds before it even looks; the director whose identity sorts later waits 6 seconds more.</p>
+<p>While it leads, the leader watches the control VIP every 5 seconds. If another machine answers for it, the leader announces itself again - or, if the other is a second leader whose identity sorts first, it stands down.</p>
+<h2 id="health-checks">Health checks<a class="anchor" href="#health-checks" aria-label="Link to this section">#</a></h2>
+<ul><li>Each <strong>backend</strong> checks its own applications every 2 seconds and reports in its heartbeat.</li><li>The <strong>directors</strong> check each application from the outside. The leader shares the checks among the directors with rendezvous hashing, so a director coming or going moves only its own share. Each director reports its results with its check-in, every second. The leader runs a check itself before the first result arrives, and whenever a result is more than 3 seconds old.</li><li>One check of an application (address, port and kind) serves every service it is assigned to.</li><li>The leader gives a backend weight 0 when its heartbeat is late, when either check fails, or when it does not yet hold the VIP.</li></ul>
+<h2 id="joining-and-trust">Joining and trust<a class="anchor" href="#joining-and-trust" aria-label="Link to this section">#</a></h2>
+<ul><li>A new node proves it knows its role's secret, and sends its <strong>node fingerprint</strong>. A director approves it by hand. The node then gets a certificate from the cluster's certificate authority, which lives only in the directors' memory.</li><li>All node-to-node traffic is TLS 1.3 with certificates on both sides. <code>admin remove</code> revokes a certificate.</li><li>An approved node rejoins after a restart without approval, as long as its fingerprint, address and MAC address are the same.</li></ul>
+<h2 id="the-source">The source<a class="anchor" href="#the-source" aria-label="Link to this section">#</a></h2>
+<p>theLB is written in Go. Its only direct dependencies are HashiCorp's Raft and its logger. It talks to the kernel itself, over netlink - no <code>ip</code>, <code>ipvsadm</code> or <code>nft</code> commands.</p>
+<div class="tablewrap"><table><thead><tr><th>Package</th><th>What it does</th></tr></thead><tbody><tr><td><code>cmd/thelb</code></td><td>the program's entry point</td></tr><tr><td><code>internal/cli</code></td><td>the command line, help and <code>generate</code></td></tr><tr><td><code>internal/director</code>, <code>internal/backend</code></td><td>the two roles</td></tr><tr><td><code>internal/cluster</code>, <code>internal/raftlog</code></td><td>what Raft carries, and Raft's log lines</td></tr><tr><td><code>internal/dplane</code>, <code>internal/ctlnet</code></td><td>the leader's data plane, and a director's network (the control VIP, its lease)</td></tr><tr><td><code>internal/backnet</code>, <code>internal/nft</code></td><td>a backend's kernel state, and its nftables table</td></tr><tr><td><code>internal/ipvs</code>, <code>internal/netlink</code>, <code>internal/announce</code></td><td>IPVS, rtnetlink and ARP / neighbour discovery, by hand</td></tr><tr><td><code>internal/wire</code>, <code>internal/join</code>, <code>internal/api</code>, <code>internal/ca</code></td><td>the protocol between nodes, joining, the messages, and the certificate authority</td></tr><tr><td><code>internal/check</code>, <code>internal/preflight</code>, <code>internal/doctor</code></td><td>health checks, preflight, and <code>doctor</code></td></tr><tr><td><code>internal/status</code>, <code>internal/table</code>, <code>internal/localsock</code></td><td><code>thelb status</code>, its tables, and the local socket</td></tr><tr><td><code>internal/metrics</code>, <code>internal/logx</code>, <code>internal/alive</code>, <code>internal/sdnotify</code></td><td>metrics, logging, the watchdog and systemd notifications</td></tr><tr><td><code>internal/secret</code>, <code>internal/fingerprint</code>, <code>internal/sysctl</code>, <code>internal/hostnet</code></td><td>secrets, fingerprints, kernel settings, this machine's interfaces</td></tr></tbody></table></div>
+<h2 id="the-full-design">The full design<a class="anchor" href="#the-full-design" aria-label="Link to this section">#</a></h2>
+<p>This page is the short version. The full design - every decision and its reasons, Kubernetes, and the questions still open - is in the repository:</p>
+<ul><li><a href="https://github.com/dmartsapp/thelb/blob/main/docs/design.md">docs/design.md</a> - the design;</li><li><a href="https://github.com/dmartsapp/thelb/blob/main/docs/diagrams.md">docs/diagrams.md</a> - the design in pictures;</li><li><a href="https://github.com/dmartsapp/thelb/blob/main/docs/build-state.md">docs/build-state.md</a> - where the code is, and what comes next.</li></ul>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="tech-philosophy.html"><span>Previous</span>Philosophy</a><a class="next" href="tech-testing.html"><span>Next</span>Testing</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-design.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#the-big-picture">The big picture</a></li><li class="toc2"><a href="#a-packet">A packet</a></li><li class="toc2"><a href="#a-change">A change</a></li><li class="toc2"><a href="#the-vips-and-the-lease">The VIPs and the lease</a></li><li class="toc2"><a href="#health-checks">Health checks</a></li><li class="toc2"><a href="#joining-and-trust">Joining and trust</a></li><li class="toc2"><a href="#the-source">The source</a></li><li class="toc2"><a href="#the-full-design">The full design</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

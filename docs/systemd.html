@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Running under systemd · theLB</title>
+<meta name="description" content="Run theLB under systemd - thelb generate systemd, the watchdog, the hardening in the unit, and the kernel settings from boot.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html" class="active" aria-current="page">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Guides</p>
+<h1>Running under systemd</h1>
+<p class="lead">theLB installs nothing by itself. It prints a systemd unit for you to install, so it starts at boot and restarts if it fails.</p>
+<h2 id="print-a-unit-then-install-it">Print a unit, then install it<a class="anchor" href="#print-a-unit-then-install-it" aria-label="Link to this section">#</a></h2>
+<p><code>thelb generate systemd</code> prints a unit for a role and the flags you give it. It checks the flags the same way the role would:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate systemd director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 <span class="tok-flag">--bootstrap</span> \
+  <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret \
+  | sudo tee /etc/systemd/system/thelb-director.service
+
+<span class="tok-cmd">sudo</span> thelb generate systemd backend <span class="tok-flag">--join</span> 10.0.0.10:7443 \
+  <span class="tok-flag">--secret-file</span> /etc/thelb/backend.secret <span class="tok-flag">--offer</span> web=tcp/80,check=http:/ \
+  | sudo tee /etc/systemd/system/thelb-backend.service</code></pre></div>
+<p>Then start it:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> systemctl daemon-reload
+<span class="tok-cmd">sudo</span> systemctl enable <span class="tok-flag">--now</span> thelb-director     <span class="tok-com"># or thelb-backend</span>
+<span class="tok-cmd">journalctl</span> <span class="tok-flag">-u</span> thelb-director <span class="tok-flag">-f</span>                <span class="tok-com"># follow its log</span></code></pre></div>
+<p>Here is a director's unit:</p>
+<figure class="screen"><img src="assets/screens/generate-systemd.svg" width="797" height="898" alt="A director&#x27;s unit, for the binary in `/usr/local/bin`." loading="lazy"><figcaption>A director's unit, for the binary in <code>/usr/local/bin</code>.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb generate systemd director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+# theLB director, as `thelb generate systemd` printed it. Install it, and start it:
+#   sudo tee /etc/systemd/system/thelb-director.service &lt;this file
+#   sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now thelb-director
+[Unit]
+Description=theLB director
+Documentation=https://dmartsapp.github.io/thelb/docs/systemd.html
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+Restart=always
+# Longer than the other of two directors takes to stand alone after a crash -
+# the control VIP's lease (6 s unless set) and about 15 s more: back sooner,
+# with --bootstrap it could create a cluster of its own first. With a longer
+# lease, lengthen it: https://dmartsapp.github.io/thelb/docs/directors.html#two-directors
+RestartSec=30
+WatchdogSec=30
+TimeoutStopSec=30
+
+# What theLB needs - the network's administration, raw packets, a control port
+# below 1024 if it is one - and no more.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=-/etc/thelb
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+[Install]
+WantedBy=multi-user.target</code></pre></details></figure>
+<h2 id="what-is-in-the-unit">What is in the unit<a class="anchor" href="#what-is-in-the-unit" aria-label="Link to this section">#</a></h2>
+<ul><li><strong><code>Type=notify</code></strong>: theLB tells systemd when it has started.</li><li><strong><code>WatchdogSec=30</code></strong>: theLB tells systemd that it is alive - but only while its main loops keep running. If a loop stops for 30 seconds, systemd restarts theLB.</li><li><strong><code>Restart=always</code></strong>, with <strong><code>RestartSec=30</code> for a director</strong> and 1 for a backend. The 30 seconds matter with two directors - see <a href="directors.html#two-directors">Two directors</a>.</li><li><strong>Hardening that does not get in theLB's way</strong>:<ul><li>its capabilities are limited to <code>CAP_NET_ADMIN</code>, <code>CAP_NET_RAW</code> and <code>CAP_NET_BIND_SERVICE</code>;</li><li><code>ProtectSystem=full</code>, with the secret files' folder writable only with <code>--bootstrap</code> (the first bootstrap writes missing files);</li><li><code>NoNewPrivileges=</code>, <code>ProtectHome=</code>, <code>PrivateTmp=</code> and more.</li><li>It does not set <code>ProtectKernelTunables=</code>, because theLB writes to <code>/proc/sys/net</code>.</li></ul></li></ul>
+<div class="callout callout-tip"><p class="callout-title">Keep files in their usual places</p><p>Keep the binary in <code>/usr/local/bin</code> and the secret files in <code>/etc/thelb</code>. A file in a home folder makes the unit use <code>ProtectHome=read-only</code> instead of hiding homes; a file in <code>/tmp</code> drops <code>PrivateTmp=</code> - and <code>/tmp</code> does not survive a reboot.</p></div>
+<h2 id="the-flags-are-the-whole-setup">The flags are the whole setup<a class="anchor" href="#the-flags-are-the-whole-setup" aria-label="Link to this section">#</a></h2>
+<p>There is no configuration file: the flags in the unit are the node's whole setup.</p>
+<ul><li>A backend offers its <code>--offer</code> flags at every start.</li><li>Offers made later with <code>thelb offer add</code> are kept by the cluster, and a restarted backend takes them back.</li><li>To withdraw an offer, use <code>thelb offer remove &lt;name&gt;</code>. Taking a flag out of the unit does not withdraw what the cluster holds.</li></ul>
+<h2 id="kernel-settings-and-modules-from-boot">Kernel settings and modules from boot<a class="anchor" href="#kernel-settings-and-modules-from-boot" aria-label="Link to this section">#</a></h2>
+<p>theLB sets the kernel settings it needs when it starts, and puts them back when it stops. If you want them set from boot anyway, theLB prints them:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate sysctl director | sudo tee /etc/sysctl.d/90-thelb-director.conf
+<span class="tok-cmd">sudo</span> thelb generate modules director | sudo tee /etc/modules-load.d/thelb-director.conf</code></pre></div>
+<p>Use <code>backend</code> instead of <code>director</code> on a backend. This is optional: theLB works without them.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="approval.html"><span>Previous</span>Secrets and approval</a><a class="next" href="monitoring.html"><span>Next</span>Status, logs and metrics</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/systemd.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#print-a-unit-then-install-it">Print a unit, then install it</a></li><li class="toc2"><a href="#what-is-in-the-unit">What is in the unit</a></li><li class="toc2"><a href="#the-flags-are-the-whole-setup">The flags are the whole setup</a></li><li class="toc2"><a href="#kernel-settings-and-modules-from-boot">Kernel settings and modules from boot</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

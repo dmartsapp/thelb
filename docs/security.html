@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security · theLB</title>
+<meta name="description" content="theLB security - verifying releases with checksums, attestations and SBOMs, the trust model, and reporting vulnerabilities privately.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html" class="active" aria-current="page">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Reference</p>
+<h1>Security</h1>
+<p class="lead">How to check a release, what theLB trusts by design, and how to report a vulnerability.</p>
+<h2 id="report-a-vulnerability">Report a vulnerability<a class="anchor" href="#report-a-vulnerability" aria-label="Link to this section">#</a></h2>
+<p>Please report it <strong>privately</strong>, through GitHub: the repository's <strong>Security</strong> tab, <strong>Report a vulnerability</strong>. Do not open a public issue for it.</p>
+<p>Say what you found, which version (<code>thelb --version</code>), and how to reproduce it. You will hear back within a week. The fix goes into a patch release of every supported line, and the advisory is published with it, crediting you unless you ask otherwise.</p>
+<div class="tablewrap"><table><thead><tr><th>Version</th><th>Supported</th></tr></thead><tbody><tr><td>0.1.x</td><td>yes</td></tr></tbody></table></div>
+<p>Before 1.0, only the latest minor line gets fixes.</p>
+<h2 id="check-a-release">Check a release<a class="anchor" href="#check-a-release" aria-label="Link to this section">#</a></h2>
+<p>Every release has, for each binary:</p>
+<div class="tablewrap"><table><thead><tr><th>File</th><th>What it is</th></tr></thead><tbody><tr><td><code>thelb-&lt;version&gt;-linux-&lt;arch&gt;</code></td><td>the binary</td></tr><tr><td><code>....sha256</code></td><td>its SHA-256 checksum; <code>SHA256SUMS</code> has all three</td></tr><tr><td><code>....cdx.json</code>, <code>....spdx.json</code></td><td>its software bill of materials (SBOM), CycloneDX 1.6 and SPDX 2.3: the Go release and every module it was built from</td></tr></tbody></table></div>
+<p>And GitHub-signed attestations: one saying which workflow built the binary from which commit (build provenance), and one for each SBOM.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sha256sum</span> <span class="tok-flag">-c</span> SHA256SUMS <span class="tok-flag">--ignore-missing</span>
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://spdx.dev/Document/v2.3</code></pre></div>
+<p>The SBOMs list exactly what is inside the binary, so you can check it against vulnerability databases with your own tools.</p>
+<h2 id="what-thelb-trusts-by-design">What theLB trusts, by design<a class="anchor" href="#what-thelb-trusts-by-design" aria-label="Link to this section">#</a></h2>
+<p>These are not vulnerabilities, but you should run theLB with them in mind.</p>
+<ul><li><strong>The directors' network.</strong> VIPs move by ARP and neighbour discovery, which anyone on the network can answer. IPVS connection sync - multicast to <code>224.0.0.81</code>, UDP <code>8848</code> - is not authenticated by the kernel: a machine on that network can inject connection entries. Keep the directors on a network that only they and their backends share.</li><li><strong>The secret files.</strong> A secret lets a machine ask to join; it never lets one in by itself - every new node waits for approval. Keep the files owned by root, mode <code>0600</code> (theLB refuses others). After a leak, see <a href="approval.html#if-a-secret-leaks">If a secret leaks</a>.</li><li><strong>Root on the nodes.</strong> theLB runs as root, with only the capabilities it needs under the unit <code>thelb generate systemd</code> prints. Anyone with root on a director can act as that director.</li><li><strong>The metrics endpoint</strong> is plain HTTP without authentication. Give <code>--metrics</code> an address only your monitoring reaches.</li></ul>
+<h2 id="what-is-in-scope">What is in scope<a class="anchor" href="#what-is-in-scope" aria-label="Link to this section">#</a></h2>
+<p>theLB's own code: the cluster's protocol (mutual TLS 1.3, the join proof, approvals, certificates, revocation), the local socket's authorisation, how secrets are read and kept out of logs, the kernel state it writes, and the metrics endpoint.</p>
+<p>The same policy is in the repository's <a href="https://github.com/dmartsapp/thelb/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="messages.html"><span>Previous</span>Log messages</a><a class="next" href="tech-philosophy.html"><span>Next</span>Philosophy</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/security.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#report-a-vulnerability">Report a vulnerability</a></li><li class="toc2"><a href="#check-a-release">Check a release</a></li><li class="toc2"><a href="#what-thelb-trusts-by-design">What theLB trusts, by design</a></li><li class="toc2"><a href="#what-is-in-scope">What is in scope</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

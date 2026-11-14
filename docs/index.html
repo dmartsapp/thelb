@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>theLB</title>
+<meta name="description" content="theLB is a load balancer for Linux in one binary - IPVS direct routing or IP-in-IP, a Raft cluster of directors that moves the virtual IP when a machine fails, health checks from both sides, and nothing left behind.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html" class="active" aria-current="page">Overview</a></li><li><a href="install.html">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+
+<h1>theLB</h1>
+<p class="lead">A load balancer for Linux in one small program. Your machines share a virtual IP address, the Linux kernel spreads the traffic over your servers, and the address moves by itself when a machine fails.</p>
+<div class="hero-actions">
+  <a class="btn primary" href="quickstart.html">Quick start</a>
+  <a class="btn" href="install.html">Install theLB</a>
+  <a class="btn" href="https://github.com/dmartsapp/thelb/releases/latest">Download the latest release</a>
+</div>
+<h2 id="what-is-thelb">What is theLB?<a class="anchor" href="#what-is-thelb" aria-label="Link to this section">#</a></h2>
+<p>theLB - <em>The Load Balancer</em> - lets a group of Linux machines share one address, a <strong>virtual IP</strong> (VIP). Clients send their traffic to the VIP. theLB hands each new connection to one of your servers, and the server answers the client <strong>directly</strong>. When a machine fails, another one takes the VIP over within seconds.</p>
+<p>You run the same program, <code>thelb</code>, on every machine. You do not need to know <code>ipvsadm</code>, <code>sysctl</code>, <code>iptables</code> or ARP: theLB sets all of that up, checks it, and removes it when it stops.</p>
+<div class="facts">
+  <div class="fact"><b>1 file</b><span>one static binary for every machine</span></div>
+  <div class="fact"><b>0 config files</b><span>flags and the cluster's own state</span></div>
+  <div class="fact"><b>6 s</b><span>VIP lease: a crashed machine lets go by itself</span></div>
+  <div class="fact"><b>IPv4 + IPv6</b><span>VIPs of either kind</span></div>
+</div>
+<h2 id="how-it-works">How it works<a class="anchor" href="#how-it-works" aria-label="Link to this section">#</a></h2>
+<div class="diagram">
+<svg viewBox="0 0 660 340" role="img" aria-label="A client sends a request to the VIP on the leading director; the director forwards it to one backend; the backend replies straight to the client">
+  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker></defs>
+  <rect class="box" x="20" y="120" width="120" height="60" rx="10"/>
+  <text class="h" x="80" y="146" text-anchor="middle">Client</text>
+  <text class="sub" x="80" y="165" text-anchor="middle">anywhere</text>
+  <rect class="box accent" x="240" y="105" width="180" height="90" rx="10"/>
+  <text class="h" x="330" y="135" text-anchor="middle">Director (the leader)</text>
+  <text class="sub" x="330" y="155" text-anchor="middle">holds the VIP</text>
+  <text class="sub" x="330" y="172" text-anchor="middle">the kernel's IPVS forwards</text>
+  <rect class="box" x="520" y="30" width="120" height="50" rx="10"/>
+  <text class="h" x="580" y="52" text-anchor="middle">Backend 1</text>
+  <text class="sub" x="580" y="69" text-anchor="middle">your app</text>
+  <rect class="box" x="520" y="125" width="120" height="50" rx="10"/>
+  <text class="h" x="580" y="147" text-anchor="middle">Backend 2</text>
+  <text class="sub" x="580" y="164" text-anchor="middle">your app</text>
+  <rect class="box" x="520" y="220" width="120" height="50" rx="10"/>
+  <text class="h" x="580" y="242" text-anchor="middle">Backend 3</text>
+  <text class="sub" x="580" y="259" text-anchor="middle">your app</text>
+  <path class="arrow" d="M140 150H238"/>
+  <text class="sub" x="189" y="140" text-anchor="middle">1. to the VIP</text>
+  <path class="arrow" d="M420 140L518 58"/>
+  <path class="arrow" d="M420 150H518"/>
+  <path class="arrow" d="M420 160L518 242"/>
+  <text class="sub" x="330" y="215" text-anchor="middle">2. to one backend</text>
+  <path class="arrow" d="M580 270C580 330 80 330 80 182" stroke-dasharray="6 5"/>
+  <text class="sub" x="330" y="318" text-anchor="middle">3. the reply goes straight back to the client</text>
+</svg>
+</div>
+<ol><li>The client connects to the VIP. The VIP lives on one machine, the <strong>leading director</strong>.</li><li>The director's kernel (its built-in load balancer, IPVS) picks a healthy <strong>backend</strong> and passes the packet on. It does not change the packet's addresses.</li><li>The backend answers the client directly, from the VIP's address. Replies never pass back through the director, so one director can carry a lot of traffic.</li></ol>
+<p>There are two roles:</p>
+<ul><li><strong>Directors</strong> receive the traffic and decide where it goes. They form a cluster (with Raft). One of them, the leader, holds the VIPs. One director is enough to start; <strong>three are recommended</strong>, so that one can fail.</li><li><strong>Backends</strong> run your applications - a web server, an API, a DNS server. Each backend <em>offers</em> its applications to the cluster. A director <em>assigns</em> them to services.</li></ul>
+<h2 id="see-it-work">See it work<a class="anchor" href="#see-it-work" aria-label="Link to this section">#</a></h2>
+<p>The summary of a lab cluster - three directors, four backends, three services:</p>
+<figure class="screen"><img src="assets/screens/status.svg" width="765" height="286" alt="`thelb status` on a director: the cluster, and how many of each thing are up." loading="lazy"><figcaption><code>thelb status</code> on a director: the cluster, and how many of each thing are up.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
+ cluster | id       | created             | leader | term | leader since        | vip lease
+---------+----------+---------------------+--------+------+---------------------+-----------
+ lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+
+ what      | total | up | down | pending
+-----------+-------+----+------+---------
+ directors |     3 |  3 |    0 |       0
+ backends  |     4 |  4 |    0 |       0
+ services  |     3 |  3 |    0 |       -
+ vips      |     4 |  4 |    0 |       -
+
+More: thelb status directors | backends | vips | all</code></pre></details></figure>
+<p>The client fetches the <code>web</code> service twelve times. Three backends share the work:</p>
+<figure class="screen"><img src="assets/screens/curl.svg" width="515" height="250" alt="The lab&#x27;s client asking each service a few times, and counting who answered." loading="lazy"><figcaption>The lab's client asking each service a few times, and counting who answered.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo test/lab.sh curl 12
+   4  hello from b1
+   4  hello from b2
+   4  hello from b3
+$ sudo test/lab.sh curl 9 198.18.0.21
+   3  hello from b1, on port 8080
+   3  hello from b2, on port 9090
+   3  hello from b3, on port 7070
+$ sudo test/lab.sh curl 8 198.18.0.22
+   4  hello from b1
+   4  hello from b4, behind the router</code></pre></details></figure>
+<h2 id="why-people-use-it">Why people use it<a class="anchor" href="#why-people-use-it" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>The kernel does the forwarding.</strong> theLB programs IPVS, which is part of Linux. There is no proxy in the path, and no address translation: your application sees the client's real address.</li><li><strong>It survives failures.</strong> If the leader crashes, another director takes the VIP. Open connections keep going, because the directors share their connection tables.</li><li><strong>It never takes a VIP that is still in use.</strong> The VIP is <em>leased</em> from the kernel: if theLB is killed, its kernel removes the VIP a few seconds later. A new leader takes the VIP only after it checks, twice, that no machine still answers for it. See <a href="directors.html">Directors and failover</a>.</li><li><strong>Health checks from both sides.</strong> A backend checks its own application, and the directors check it too. A backend gets traffic only while both checks pass.</li><li><strong>Nothing left behind.</strong> theLB changes only the running system. It writes no configuration file, and removes everything when it stops. To make a setup survive a reboot, it <em>prints</em> what you need - a systemd unit, kernel settings - for you to install.</li><li><strong>It tells you what is wrong.</strong> Before it changes anything, theLB checks that it can do its whole job. If it cannot, it says exactly what is missing. <code>thelb doctor</code> checks a machine and tells you what to fix.</li></ul>
+<h2 id="where-to-go-next">Where to go next<a class="anchor" href="#where-to-go-next" aria-label="Link to this section">#</a></h2>
+<div class="cards">
+  <a class="card" href="install.html"><strong>Install</strong><span>Download one file, check it, and put it on each machine.</span></a>
+  <a class="card" href="quickstart.html"><strong>Quick start</strong><span>One director, two backends and a service, in five steps.</span></a>
+  <a class="card" href="lab.html"><strong>Try it on one machine</strong><span>A whole cluster in network namespaces, with nothing on your real network.</span></a>
+  <a class="card" href="directors.html"><strong>Directors and failover</strong><span>More directors, the VIP lease, and what happens when one fails.</span></a>
+  <a class="card" href="troubleshooting.html"><strong>Troubleshooting</strong><span>Start with <code>thelb doctor</code>.</span></a>
+  <a class="card" href="commands.html"><strong>Commands</strong><span>Every command and flag.</span></a>
+</div>
+<h2 id="status">Status<a class="anchor" href="#status" aria-label="Link to this section">#</a></h2>
+<p>theLB 0.1.0 is the first release. It runs on <strong>Linux only</strong> (amd64, arm64 and 32-bit arm). Kubernetes support - serving Services of type <code>LoadBalancer</code> - comes next. See the <a href="changelog.html">changelog</a> for what each release changed.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><span></span><a class="next" href="install.html"><span>Next</span>Install</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/index.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#what-is-thelb">What is theLB?</a></li><li class="toc2"><a href="#how-it-works">How it works</a></li><li class="toc2"><a href="#see-it-work">See it work</a></li><li class="toc2"><a href="#why-people-use-it">Why people use it</a></li><li class="toc2"><a href="#where-to-go-next">Where to go next</a></li><li class="toc2"><a href="#status">Status</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

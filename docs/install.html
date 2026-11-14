@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install · theLB</title>
+<meta name="description" content="Install theLB on Linux - requirements, downloading and verifying a release (checksums, provenance, SBOMs), and building from source.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("thelb-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body>
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation">
+<header class="topbar">
+  <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
+  <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
+  <span class="version">v0.1.0</span>
+  <nav class="toplinks" aria-label="Site">
+    <a href="install.html">Install</a>
+    <a href="quickstart.html">Docs</a>
+    <a href="tech-design.html">Technical</a>
+    <a href="https://github.com/dmartsapp/thelb/releases/latest">Releases</a>
+    <a href="https://github.com/dmartsapp/thelb">GitHub</a>
+    <button type="button" class="themebtn" id="themebtn" aria-label="Toggle color theme" title="Toggle color theme">&#9680;</button>
+  </nav>
+</header>
+<div class="layout">
+<nav class="sidebar" aria-label="Documentation"><div class="navgroup"><p class="navtitle">Get started</p><ul><li><a href="index.html">Overview</a></li><li><a href="install.html" class="active" aria-current="page">Install</a></li><li><a href="quickstart.html">Quick start</a></li><li><a href="lab.html">Try it on one machine</a></li></ul></div><div class="navgroup"><p class="navtitle">Guides</p><ul><li><a href="directors.html">Directors and failover</a></li><li><a href="backends.html">Backends and offers</a></li><li><a href="services.html">Pools, services, assignments</a></li><li><a href="forwarding.html">Direct routing and tunnels</a></li><li><a href="approval.html">Secrets and approval</a></li><li><a href="systemd.html">Running under systemd</a></li><li><a href="monitoring.html">Status, logs, metrics</a></li><li><a href="troubleshooting.html">Troubleshooting</a></li></ul></div><div class="navgroup"><p class="navtitle">Reference</p><ul><li><a href="commands.html">Commands</a></li><li><a href="changelog.html">Changelog</a></li><li><a href="status.html">Reading thelb status</a></li><li><a href="failures.html">When things fail</a></li><li><a href="kernel.html">What theLB changes</a></li><li><a href="messages.html">Log messages</a></li><li><a href="security.html">Security</a></li></ul></div><div class="navgroup"><p class="navtitle">Technical</p><ul><li><a href="tech-philosophy.html">Philosophy</a></li><li><a href="tech-design.html">How it works</a></li><li><a href="tech-testing.html">Testing</a></li><li><a href="tech-release.html">Releasing</a></li><li><a href="tech-docs.html">This documentation</a></li></ul></div></nav>
+<main class="content" id="content">
+<article>
+<p class="eyebrow">Get started</p>
+<h1>Install</h1>
+<p class="lead">theLB is one file. Download it, check it, and copy it to every machine that will be a director or a backend.</p>
+<h2 id="what-you-need">What you need<a class="anchor" href="#what-you-need" aria-label="Link to this section">#</a></h2>
+<ul><li><strong>Linux.</strong> theLB is tested on Debian 13 (kernel 6.12) and aims to work on kernels from 5.14 (RHEL 9) on.</li><li><strong>Root</strong> on every machine. Every command except <code>--help</code> and <code>--version</code> must run as root (<code>sudo</code>).</li><li><strong>Kernel modules.</strong> The kernel loads them by itself when they are installed:<ul><li>on directors: <code>ip_vs</code> and its schedulers (<code>ip_vs_wrr</code> for the default one);</li><li>on backends: <code>dummy</code>, and <code>nf_tables</code> with its NAT support;</li><li>on backends of tunnelled services: <code>ipip</code>.</li></ul></li><li><strong>One network for the directors.</strong> The directors must share a network (the same L2 segment), and the cluster's address - the <strong>control VIP</strong> - must be an unused address in it.</li><li><strong>Backends</strong> of normal (<em>direct</em>) services must be on the directors' network too. Backends of <em>tunnelled</em> services can be anywhere the directors can route to. See <a href="forwarding.html">Direct routing and tunnels</a>.</li></ul>
+<div class="callout callout-note"><p class="callout-title">Which machines?</p><p>Most setups use <strong>three directors</strong> and as many backends as you like. A director's machine can be a backend too, for small setups - see <a href="forwarding.html#a-director-s-machine-as-a-backend">A director's machine as a backend</a>.</p></div>
+<h3 id="open-these-in-your-firewalls">Open these in your firewalls<a class="anchor" href="#open-these-in-your-firewalls" aria-label="Link to this section">#</a></h3>
+<div class="tablewrap"><table><thead><tr><th>From</th><th>To</th><th>What</th></tr></thead><tbody><tr><td>directors and backends</td><td>the control VIP and every director</td><td>the control port (TCP), <code>7443</code> in these docs</td></tr><tr><td>clients</td><td>the service VIPs</td><td>your services' ports</td></tr><tr><td>directors</td><td>backends</td><td>your applications' ports (the directors' health checks)</td></tr><tr><td>directors</td><td>backends of tunnelled services</td><td>IP protocol 4 (IP-in-IP)</td></tr><tr><td>directors</td><td>directors</td><td>multicast to <code>224.0.0.81</code>, UDP port <code>8848</code> (connection sync)</td></tr></tbody></table></div>
+<p><code>thelb doctor</code> checks the firewall on a machine and prints the commands that open what is missing.</p>
+<div class="callout callout-warning"><p class="callout-title">Keep the directors' network trusted</p><p>The kernel's connection-sync messages are not authenticated. A machine on the directors' network could add entries to their connection tables. Keep the directors on a network that only trusted machines share.</p></div>
+<h2 id="download-a-release">Download a release<a class="anchor" href="#download-a-release" aria-label="Link to this section">#</a></h2>
+<p>Each <a href="https://github.com/dmartsapp/thelb/releases/latest">release</a> has one binary for each processor:</p>
+<div class="tablewrap"><table><thead><tr><th>File</th><th>For</th></tr></thead><tbody><tr><td><code>thelb-0.1.0-linux-amd64</code></td><td>64-bit Intel and AMD</td></tr><tr><td><code>thelb-0.1.0-linux-arm64</code></td><td>64-bit ARM (AWS Graviton, Ampere, Raspberry Pi 4 and 5 with a 64-bit OS)</td></tr><tr><td><code>thelb-0.1.0-linux-arm</code></td><td>32-bit ARM, ARMv7 and later (32-bit Raspberry Pi OS on a Pi 2, 3 or 4); not ARMv6 (Pi 1, Pi Zero)</td></tr></tbody></table></div>
+<p>Next to each binary are its SHA-256 checksum (<code>.sha256</code>) and two software bills of materials (<code>.cdx.json</code>, CycloneDX, and <code>.spdx.json</code>, SPDX). <code>SHA256SUMS</code> lists the checksums of all three binaries.</p>
+<p>Download, check and install - here for amd64:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0/thelb-0.1.0-linux-amd64
+<span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0/SHA256SUMS
+<span class="tok-cmd">sha256sum</span> <span class="tok-flag">-c</span> SHA256SUMS <span class="tok-flag">--ignore-missing</span>
+<span class="tok-cmd">sudo</span> install <span class="tok-flag">-m</span> 0755 thelb-0.1.0-linux-amd64 /usr/local/bin/thelb
+<span class="tok-cmd">thelb</span> <span class="tok-flag">--version</span></code></pre></div>
+<p><code>sha256sum</code> must say <code>OK</code>. Then <code>thelb --version</code> shows the version, the commit it was built from, and the Go release:</p>
+<figure class="screen"><img src="assets/screens/version.svg" width="515" height="88" alt="The version, the commit and the Go release the binary was built with." loading="lazy"><figcaption>The version, the commit and the Go release the binary was built with.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --version
+thelb 0.1.0 (commit 6025f4a, go1.27.3 linux/amd64)</code></pre></details></figure>
+<p>Copy the same file to every director and backend, as <code>/usr/local/bin/thelb</code>.</p>
+<h3 id="check-where-it-came-from-optional">Check where it came from (optional)<a class="anchor" href="#check-where-it-came-from-optional" aria-label="Link to this section">#</a></h3>
+<p>GitHub signs a statement for each binary, saying which workflow built it, from which commit. With the <a href="https://cli.github.com">GitHub CLI</a>:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
+<p>The first checks the build itself; the second checks that the CycloneDX SBOM describes this exact file. See <a href="security.html">Security</a> for more.</p>
+<h2 id="build-it-yourself">Build it yourself<a class="anchor" href="#build-it-yourself" aria-label="Link to this section">#</a></h2>
+<p>You need Go 1.27.4 or later, and <code>make</code>:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">git</span> clone https://github.com/dmartsapp/thelb.git
+<span class="tok-cmd">cd</span> thelb
+<span class="tok-cmd">make</span> build</code></pre></div>
+<p><code>make build</code> puts <code>bin/thelb.linux.amd64</code>, <code>bin/thelb.linux.arm</code> and <code>bin/thelb.linux.arm64</code> in <code>bin/</code>. You can build on any system - macOS too - but theLB itself runs only on Linux.</p>
+<h2 id="what-gets-installed">What gets installed<a class="anchor" href="#what-gets-installed" aria-label="Link to this section">#</a></h2>
+<p>Only the binary. theLB reads no configuration file: everything is a command-line flag, or the cluster's own state, which you change with <code>thelb admin</code>. The only files it ever writes are the two secret files, when the first director creates the cluster - see <a href="approval.html">Secrets and approval</a>.</p>
+<p>Next: the <a href="quickstart.html">quick start</a>.</p>
+</article>
+<nav class="pager" aria-label="Pagination"><a class="prev" href="index.html"><span>Previous</span>theLB</a><a class="next" href="quickstart.html"><span>Next</span>Quick start</a></nav>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/install.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
+</main>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#what-you-need">What you need</a></li><li class="toc3"><a href="#open-these-in-your-firewalls">Open these in your firewalls</a></li><li class="toc2"><a href="#download-a-release">Download a release</a></li><li class="toc3"><a href="#check-where-it-came-from-optional">Check where it came from (optional)</a></li><li class="toc2"><a href="#build-it-yourself">Build it yourself</a></li><li class="toc2"><a href="#what-gets-installed">What gets installed</a></li></ul></aside>
+</div>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

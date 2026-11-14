@@ -1,0 +1,10 @@
+b1 - a backend's log
+2026-11-14T21:35:53.564Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-14T21:35:53.579Z [kernel] OK interface created interface=thelb0 arp=off
+2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
+2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
+2026-11-14T21:35:53.579Z [backend] OK node fingerprint node=b1 fingerprint=13fb773a2f1602be hostname=linux interface=eth0 address=198.18.0.31
+2026-11-14T21:35:53.607Z [backend] OK waiting for approval cluster=lab node=b1 fingerprint=13fb773a2f1602be address=198.18.0.31 mac=da:ca:55:fb:f2:6b
+2026-11-14T21:35:54.107Z [backend] OK approved cluster=lab by=d1
+2026-11-14T21:35:54.118Z [backend] OK enrolled cluster=lab id=b98a54ee member=b1-09877083
+2026-11-14T21:35:54.127Z [backend] OK backend ready cluster=lab member=b1-09877083 offers=2
