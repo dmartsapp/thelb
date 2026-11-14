@@ -7,7 +7,9 @@
 # reaches this machine's own network. Each theLB has its own /run, as if it ran
 # on a machine of its own.
 #
-#   sudo test/lab.sh up [bin/thelb]     build the lab: a cluster, a pool, a service, three backends
+#   sudo test/lab.sh up [bin/lab/thelb] build the lab: a cluster, a pool, three services, four backends
+#                                       (BARE=1: the cluster and the backends only - no pool, no service;
+#                                       D1_FLAGS="--debug ...": more flags for d1)
 #   sudo test/lab.sh run <node> <cmd>   run a command on a node: d1-d3, b1-b3, or c (the client);
 #                                       "thelb" is the lab's binary - run d1 thelb status
 #   sudo test/lab.sh shell <node>       a shell on a node
@@ -17,7 +19,8 @@
 #                                       web server, approved and assigned to web
 #   sudo test/lab.sh kill <node>        crash a node's theLB (SIGKILL)
 #   sudo test/lab.sh stop <node>        stop it (SIGTERM)
-#   sudo test/lab.sh start <node>       start it again, as it was started
+#   sudo test/lab.sh start <node> [flags]   start it again, as it was started - with more flags if
+#                                       given: start d1 --debug --metrics 198.18.0.11:9100
 #   sudo test/lab.sh app <b1-b3> down|up   stop or start a backend's web servers
 #   sudo test/lab.sh logs <node>        follow a node's log
 #   sudo test/lab.sh down               take it all away
@@ -54,9 +57,11 @@ altport() {
 alive() { local p; p=$(pidof_node "$1") && kill -0 "$p" 2>/dev/null; }
 bin() { cat "$STATE/bin.path"; }
 
-# start_node <node>: start a node's theLB with a /run of its own.
+# start_node <node> [flags]: start a node's theLB with a /run of its own, and
+# any more flags given.
 start_node() {
 	local n=$1 b
+	shift
 	b=$(bin)
 	alive "$n" && die "$n runs already"
 	local args
@@ -66,7 +71,7 @@ start_node() {
 		local d=${n%-web} dp
 		dp=$(pidof_node "$d") || die "$d's director is not running: sudo $0 start $d"
 		nsenter -t "$dp" -m -n "$b" backend --join $VIP:$PORT --name $n --secret-file "$STATE/$d/backend.secret" \
-			--offer tcp/80,check=http:/ >>"$STATE/$n.log" 2>&1 &
+			--offer tcp/80,check=http:/ "$@" >>"$STATE/$n.log" 2>&1 &
 		echo $! >"$STATE/$n.pid"
 		return
 	fi
@@ -81,7 +86,7 @@ start_node() {
 	# shellcheck disable=SC2086
 	ip netns exec $P-$n unshare --mount --propagation private \
 		sh -c 'mount -t tmpfs -o mode=0755 tmpfs /run && exec "$@"' sh \
-		"$b" $args --name $n $secrets >>"$STATE/$n.log" 2>&1 &
+		"$b" $args --name $n $secrets "$@" >>"$STATE/$n.log" 2>&1 &
 	echo $! >"$STATE/$n.pid"
 }
 
@@ -146,9 +151,9 @@ app() {
 
 up() {
 	local b=${1:-}
-	[ -n "$b" ] || b="$(dirname "$0")/../bin/thelb"
+	[ -n "$b" ] || b="$(dirname "$0")/../bin/lab/thelb"
 	b="$(readlink -f "$b")"
-	[ -x "$b" ] || die "no binary at $b: make build-lab, or pass its path"
+	[ -x "$b" ] || die "no binary at $b: make lab, or pass its path"
 	ip netns list | grep -q "^$P-" && die "the lab is up already: sudo $0 down first"
 	install -d -m 0711 "$STATE"
 	install -m 0755 "$b" "$STATE/thelb"
@@ -192,7 +197,8 @@ up() {
 	for n in $DIRECTORS; do ip -n $P-$n route add 198.19.0.0/24 via $NET.1; done
 
 	echo "== d1 bootstraps the cluster; d2 and d3 join, and are approved"
-	start_node d1
+	# shellcheck disable=SC2086 # D1_FLAGS: more flags for d1, one word each
+	start_node d1 ${D1_FLAGS:-}
 	waitfor "$STATE/d1.log" "OK control VIP taken"
 	for n in d2 d3 $BACKENDS b4; do
 		[ "${n#d}" != "$n" ] && cp -p "$STATE/d1/director.secret" "$STATE/$n/"
@@ -222,6 +228,10 @@ up() {
 	waitfor "$STATE/b4.log" "OK waiting for approval"
 	on d1 "$(bin)" admin approve b4 >/dev/null
 	waitfor "$STATE/b4.log" "OK backend ready"
+	if [ -n "${BARE:-}" ]; then
+		echo "lab: up, bare - the cluster and its backends, no pool and no service"
+		return
+	fi
 
 	echo "== a pool, a service on it, and the backends' offers assigned"
 	on d1 "$(bin)" admin pool add lab --vip $NET.20/24 --vippool-count 10
@@ -341,7 +351,7 @@ shell) on "${1:?shell <node>}" bash ;;
 curl) curls "$@" ;;
 kill) kill -KILL "$(pidof_node "${1:?kill <node>}")" && echo "lab: $1's theLB killed" ;;
 stop) kill -TERM "$(pidof_node "${1:?stop <node>}")" && echo "lab: $1's theLB stopped" ;;
-start) start_node "${1:?start <node>}" && echo "lab: $1's theLB started; its log: sudo $0 logs $1" ;;
+start) start_node "${1:?start <node> [flags]}" "${@:2}" && echo "lab: $1's theLB started; its log: sudo $0 logs $1" ;;
 app) app "${1:?app <b1-b3> up|down}" "${2:?up or down}" ;;
 serve) serve "${1:?serve <d1-d3>}" ;;
 logs) tail -n 40 -f "$STATE/${1:?logs <node>}.log" ;;

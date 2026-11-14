@@ -8,6 +8,8 @@
 #   make lab-down       take it away
 #   make remote-check REMOTE=<ssh host>   the same checks on a Linux machine, over ssh
 #   make remote-e2e   REMOTE=<ssh host>   the end-to-end test there (needs passwordless sudo)
+#   make screens        the documentation's screenshots, from a build of this tree in the lab (root)
+#   make remote-screens REMOTE=<ssh host> the same there; the screenshots come back here
 
 GO            ?= go
 GOLANGCI_LINT ?= golangci-lint
@@ -23,7 +25,7 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e scale lab lab-down remote-sync remote-check remote-e2e remote-scale clean
+.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e scale lab lab-down screens remote-sync remote-check remote-e2e remote-scale remote-screens clean
 
 build:
 	@for arch in amd64 arm arm64; do \
@@ -99,12 +101,21 @@ scale:
 	@sudo -n $(if $(PROFILE),PROFILE=$(CURDIR)/bin/scale/leader.cpu) test/scale.sh bin/scale/thelb $(N)
 	@$(if $(PROFILE),$(GO) tool pprof -top -nodecount=35 bin/scale/thelb bin/scale/leader.cpu 2>/dev/null | head -45)
 
+# The lab's own binary, like e2e's and scale's: never a bin/thelb someone runs.
 lab:
-	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/thelb ./cmd/thelb
-	@sudo test/lab.sh up bin/thelb
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/lab/thelb ./cmd/thelb
+	@sudo test/lab.sh up bin/lab/thelb
 
 lab-down:
 	@sudo test/lab.sh down
+
+# screens: the documentation's screenshots - the real output of a build of this
+# tree, versioned as the changelog's newest release, in the lab - as
+# docs/screens/*.txt; python3 docs/build.py draws them (docs/src/tech-docs.md).
+screens: VERSION = $(shell sed -n 's/^## v\([0-9][0-9.]*\) .*/\1/p' CHANGELOG.md | head -1)
+screens:
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/screens/thelb ./cmd/thelb
+	@sudo -n docs/screens/capture.sh bin/screens/thelb
 
 remote-sync:
 	@[ -n "$(REMOTE)" ] || { echo "say where: make $@ REMOTE=<ssh host>"; exit 1; }
@@ -118,6 +129,11 @@ remote-e2e: remote-sync
 
 remote-scale: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make scale N=$(N) PROFILE=$(PROFILE) COMMIT=$(COMMIT)'
+
+remote-screens: remote-sync
+	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make screens COMMIT=$(COMMIT)'
+	@rsync -a --delete $(REMOTE):$(REMOTE_DIR)/docs/screens/ docs/screens/
+	@python3 docs/build.py
 
 clean:
 	rm -rf bin dist

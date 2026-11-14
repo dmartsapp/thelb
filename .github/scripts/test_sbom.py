@@ -162,7 +162,9 @@ class Binaries(unittest.TestCase):
             cdx = json.load(f)
         with open(out + ".spdx.json") as f:
             spd = json.load(f)
-        goversion = subprocess.run([os.environ.get("GO", "go"), "env", "GOVERSION"], capture_output=True, text=True).stdout.split()[0]
+        # Asked where it was built: a go.mod's go line can select another toolchain.
+        goversion = subprocess.run([os.environ.get("GO", "go"), "env", "GOVERSION"], cwd=work, env=env,
+                                   capture_output=True, text=True).stdout.split()[0]
         self.assertEqual(cdx["components"][0]["version"], goversion)
         self.assertEqual(spd["packages"][1]["versionInfo"], goversion)
         self.assertEqual(cdx["metadata"]["component"]["purl"], "pkg:golang/example.com/hello@v9.9.9")
