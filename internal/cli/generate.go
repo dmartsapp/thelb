@@ -89,7 +89,7 @@ func systemdUnit(role, bin string, flags, paths, writable []string, restart stri
 	}
 	w("[Unit]")
 	w("Description=theLB %s", role)
-	w("Documentation=https://github.com/dmartsapp/thelb/blob/main/docs/manual.md")
+	w("Documentation=https://dmartsapp.github.io/thelb/docs/systemd.html")
 	w("After=network-online.target")
 	w("Wants=network-online.target")
 	w("")
@@ -102,7 +102,7 @@ func systemdUnit(role, bin string, flags, paths, writable []string, restart stri
 		w("# Longer than the other of two directors takes to stand alone after a crash -")
 		w("# the control VIP's lease (6 s unless set) and about 15 s more: back sooner,")
 		w("# with --bootstrap it could create a cluster of its own first. With a longer")
-		w("# lease, lengthen it (manual, section 5).")
+		w("# lease, lengthen it: https://dmartsapp.github.io/thelb/docs/directors.html#two-directors")
 	}
 	w("RestartSec=%s", restart)
 	w("WatchdogSec=30")

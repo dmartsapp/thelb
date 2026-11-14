@@ -11,9 +11,10 @@ Commands:
   status     show the cluster, from the theLB running on this node
   doctor     check this node for theLB, and say what to do
   offer      on a backend: offer an application to the cluster, or withdraw it
-  generate   print a file's content, and write nothing: secret, commands
+  generate   print a file's content, and write nothing: secret, commands,
+             systemd, sysctl, modules
   admin      change the cluster, on a director: approve, refuse, remove,
-             pool, service, assign, unassign, secret show
+             pool, service, assign, unassign, lease, secret show
 
 Every command runs only as root (effective user ID 0); this help and --version
 run for anyone.
@@ -21,7 +22,7 @@ run for anyone.
   thelb <command> --help   a command's flags
   thelb --version          the version, the commit, Go and the platform
 
-The design: https://github.com/dmartsapp/thelb
+The documentation: https://dmartsapp.github.io/thelb/
 `
 
 var commandHelps = map[string]string{

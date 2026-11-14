@@ -237,18 +237,26 @@ func bootSysctls() map[string]bootValue {
 	return out
 }
 
-// processes is the processes whose name is comm, by PID.
+// processes is this node's processes whose name is comm, by PID: those in
+// doctor's own network namespace. A process in another one - a container, a
+// namespace of the lab's - is another node's, whatever this machine's process
+// table shows; one whose namespace cannot be read is counted.
 func processes(comm string) []int {
 	var out []int
+	self, _ := os.Readlink("/proc/self/ns/net")
 	entries, _ := os.ReadDir("/proc")
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		if b, err := os.ReadFile("/proc/" + e.Name() + "/comm"); err == nil && strings.TrimSpace(string(b)) == comm {
-			out = append(out, pid)
+		if b, err := os.ReadFile("/proc/" + e.Name() + "/comm"); err != nil || strings.TrimSpace(string(b)) != comm {
+			continue
 		}
+		if ns, err := os.Readlink("/proc/" + e.Name() + "/ns/net"); err == nil && self != "" && ns != self {
+			continue
+		}
+		out = append(out, pid)
 	}
 	return out
 }
