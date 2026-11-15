@@ -119,8 +119,15 @@ spec:
               path: /readyz
             periodSeconds: 2
           volumeMounts:
+            # Each secret file mounted as itself (subPath): a Secret's files are
+            # symbolic links otherwise, which theLB refuses to read.
             - name: secrets
-              mountPath: "/etc/thelb"
+              mountPath: "/etc/thelb/director.secret"
+              subPath: "director.secret"
+              readOnly: true
+            - name: secrets
+              mountPath: "/etc/thelb/backend.secret"
+              subPath: "backend.secret"
               readOnly: true
             - name: machine-id
               mountPath: /etc/machine-id

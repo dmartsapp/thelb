@@ -125,6 +125,8 @@ screens: VERSION = $(shell sed -n 's/^## v\([0-9][0-9.]*\) .*/\1/p' CHANGELOG.md
 screens:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/screens/thelb ./cmd/thelb
 	@sudo -n docs/screens/capture.sh bin/screens/thelb
+	@CGO_ENABLED=0 $(GO) build -trimpath -o bin/screens/kubeapi ./test/kubeapi
+	@sudo -n SCREENS=$(CURDIR)/docs/screens test/e2e-k8s.sh bin/screens/thelb bin/screens/kubeapi
 
 remote-sync:
 	@[ -n "$(REMOTE)" ] || { echo "say where: make $@ REMOTE=<ssh host>"; exit 1; }

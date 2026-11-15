@@ -123,6 +123,7 @@ What the pod needs, and why:
 
 - **`hostNetwork`**: the VIPs, IPVS and the control port are the node's.
 - **`privileged`**: theLB writes kernel settings in `/proc/sys/net`, which is read-only in a container otherwise.
+- **The secret files, each mounted as itself** (`subPath`): theLB reads a secret file only if it is a regular file, and a Secret's files are symbolic links otherwise.
 - **The node's `/etc/machine-id`**: it is part of the [node fingerprint](approval.md), so a restarted pod rejoins without approval.
 - **The node's `/run/thelb`**: `sudo thelb status` works on the node, as on any director.
 - **A readiness probe** on `/readyz`, served with `--metrics`: a pod is ready once it votes and has caught up with the leader. A rolling update then replaces the next director only after that.
@@ -261,7 +262,17 @@ kubectl -n kube-system patch daemonset kube-proxy --type=strategic -p \
   '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"dmarts.app/thelb-director","operator":"DoesNotExist"}]}]}}}}}}}'
 ```
 
-Pods on a node without kube-proxy reach no Service at all - one more reason to keep these nodes for theLB.
+Pods on a node without kube-proxy reach no Service at all - one more reason to keep these nodes for theLB. That includes the API server's own Service, which a director in a pod finds with `--kubeconfig in-cluster`: give the DaemonSet's container the API server's real address instead, which its certificate names:
+
+```yaml
+          env:
+            - name: KUBERNETES_SERVICE_HOST
+              value: "10.0.0.21"     # the API server's own address
+            - name: KUBERNETES_SERVICE_PORT
+              value: "6443"
+```
+
+Or run the directors on these nodes under systemd, with a kubeconfig.
 
 ## When something is wrong
 

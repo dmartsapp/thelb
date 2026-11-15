@@ -5,6 +5,9 @@
 #
 #   sudo test/e2e-k8s.sh bin/thelb bin/kubeapi
 #
+# With SCREENS=<dir>, it also writes the documentation's screenshots of
+# Kubernetes there (make screens).
+#
 # A node here does what a cluster node's proxy does for a Service of
 # externalTrafficPolicy Local - kube-proxy or Cilium: it takes packets for the
 # Service's VIP (the VIP on its loopback, answering no ARP for it), hands them
@@ -181,6 +184,10 @@ in_ipvs() { ipvs_on "$1" | grep -qF -- "-> ${addr[$2]}:"; }
 answers() { # n vip
 	for _ in $(seq 1 "$1"); do ip netns exec $P-c curl -s --max-time 2 "http://$2/" || echo none; done | sort | uniq -c | awk '{print $2 "=" $1}' | xargs
 }
+# shot <name> <title>: start a screenshot, when SCREENS says where; then
+# shown <command line> <command...> adds a command and what it printed.
+shot() { [ -n "${SCREENS:-}" ] && printf '%s\n' "$2" >"$SCREENS/$1.txt" && cur="$SCREENS/$1.txt"; }
+shown() { [ -n "${SCREENS:-}" ] || return 0; local line=$1; shift; printf '$ %s\n' "$line" >>"$cur"; "$@" >>"$cur" 2>&1 || true; }
 status_is() { [ "$(status_of "$1")" = "$2" ]; }
 shared_same() { local a; a=$(status_of default/api); [ -n "$a" ] && [ "$a" = "$(status_of default/admin)" ]; }
 unset_status() { [ -z "$(status_of "$1")" ]; }
@@ -224,6 +231,11 @@ check "status on a follower: the Service, two backends, both up" \
 	"within 10 is d2 \"[(v['service'], v['vip'], v['backends'], v['backends_up']) for v in s['services']]\" \"[('default/web', '$NET.50', 2, 2)]\""
 check "status: the VIP, a Kubernetes one, held by the leader" "is d2 \"[(v['vip'], v['purpose'], v['held_by']) for v in s['vips'] if v['purpose'] == 'kubernetes']\" \"[('$NET.50', 'kubernetes', 'd1')]\""
 check "status: the cluster's watch of Kubernetes" "is d2 \"s['cluster']['kubernetes']\" '1 Services'"
+if shot k8s-status "d1 - a Kubernetes Service, and the nodes serving it"; then
+	shown "sudo thelb status vips" on d1 "$bin" status vips
+	shown "sudo thelb status services" on d1 "$bin" status services
+	shown "sudo thelb status backends" on d1 "$bin" status backends
+fi
 
 echo "== the nodes come and go"
 echo 503 >"$tmp/n2/health"
@@ -231,6 +243,9 @@ check "n2's health port says 503: weight 0" "within 20 weight_is d1 $NET.50 80 n
 check "only n1 answers" "within 10 answers_match $NET.50 6 '^n1=6$'"
 echo 200 >"$tmp/n2/health"
 check "n2 healthy again: back" "within 20 weight_is d1 $NET.50 80 n2 1"
+if shot k8s-log "d1 - the leader's log: a Service gets its VIP; n2 loses its pod, and gets it back"; then
+	shown "journalctl -u thelb-director -o cat" grep -E 'Kubernetes Service given its VIPs|node (not )?serving' "$tmp/d1.log"
+fi
 
 echo "== other Services"
 THEIRS=$(service theirs u-theirs '[{"protocol":"TCP","port":80}]' '{}' example.com/other)
@@ -263,6 +278,7 @@ kill -TERM "${pid[d2]}"
 check "d2 stops" "within 30 stopped d2"
 check "no VIP, no IPVS service on d2" "nothing_left d2"
 
+[ -n "${SCREENS:-}" ] && [ -n "${SUDO_UID:-}" ] && chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$SCREENS"/k8s-*.txt
 if [ "$failures" -gt 0 ]; then
 	echo "e2e-k8s: $failures failed"
 	for f in d1 d2 d3; do echo "--- $f"; tail -30 "$tmp/$f.log"; done

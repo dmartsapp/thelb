@@ -287,8 +287,15 @@
 <span class="tok-key">              path</span>: /readyz
 <span class="tok-key">            periodSeconds</span>: 2
 <span class="tok-key">          volumeMounts</span>:
+            <span class="tok-com"># Each secret file mounted as itself (subPath): a Secret's files are</span>
+            <span class="tok-com"># symbolic links otherwise, which theLB refuses to read.</span>
 <span class="tok-key">            - name</span>: secrets
-<span class="tok-key">              mountPath</span>: <span class="tok-str">"/etc/thelb"</span>
+<span class="tok-key">              mountPath</span>: <span class="tok-str">"/etc/thelb/director.secret"</span>
+<span class="tok-key">              subPath</span>: <span class="tok-str">"director.secret"</span>
+<span class="tok-key">              readOnly</span>: <span class="tok-lit">true</span>
+<span class="tok-key">            - name</span>: secrets
+<span class="tok-key">              mountPath</span>: <span class="tok-str">"/etc/thelb/backend.secret"</span>
+<span class="tok-key">              subPath</span>: <span class="tok-str">"backend.secret"</span>
 <span class="tok-key">              readOnly</span>: <span class="tok-lit">true</span>
 <span class="tok-key">            - name</span>: machine-id
 <span class="tok-key">              mountPath</span>: /etc/machine-id
@@ -319,7 +326,7 @@
 <span class="tok-key">            path</span>: /run/thelb
 <span class="tok-key">            type</span>: DirectoryOrCreate</code></pre></div><p class="example-file"><a href="examples/thelb-director.yaml" download>thelb-director.yaml</a></p></div>
 <p>What the pod needs, and why:</p>
-<ul><li><strong><code>hostNetwork</code></strong>: the VIPs, IPVS and the control port are the node's.</li><li><strong><code>privileged</code></strong>: theLB writes kernel settings in <code>/proc/sys/net</code>, which is read-only in a container otherwise.</li><li><strong>The node's <code>/etc/machine-id</code></strong>: it is part of the <a href="approval.html">node fingerprint</a>, so a restarted pod rejoins without approval.</li><li><strong>The node's <code>/run/thelb</code></strong>: <code>sudo thelb status</code> works on the node, as on any director.</li><li><strong>A readiness probe</strong> on <code>/readyz</code>, served with <code>--metrics</code>: a pod is ready once it votes and has caught up with the leader. A rolling update then replaces the next director only after that.</li><li><strong><code>--kubeconfig in-cluster</code></strong>: the pod uses its own ServiceAccount; no kubeconfig file.</li></ul>
+<ul><li><strong><code>hostNetwork</code></strong>: the VIPs, IPVS and the control port are the node's.</li><li><strong><code>privileged</code></strong>: theLB writes kernel settings in <code>/proc/sys/net</code>, which is read-only in a container otherwise.</li><li><strong>The secret files, each mounted as itself</strong> (<code>subPath</code>): theLB reads a secret file only if it is a regular file, and a Secret's files are symbolic links otherwise.</li><li><strong>The node's <code>/etc/machine-id</code></strong>: it is part of the <a href="approval.html">node fingerprint</a>, so a restarted pod rejoins without approval.</li><li><strong>The node's <code>/run/thelb</code></strong>: <code>sudo thelb status</code> works on the node, as on any director.</li><li><strong>A readiness probe</strong> on <code>/readyz</code>, served with <code>--metrics</code>: a pod is ready once it votes and has caught up with the leader. A rolling update then replaces the next director only after that.</li><li><strong><code>--kubeconfig in-cluster</code></strong>: the pod uses its own ServiceAccount; no kubeconfig file.</li></ul>
 <p>The new director waits for approval. On a director:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending
 <span class="tok-cmd">sudo</span> thelb admin approve cp1</code></pre></div>
@@ -401,7 +408,13 @@
 <p><strong>A director on a node</strong> needs kube-proxy kept off that node, and the node rebooted to clear the rules kube-proxy left. <code>kubeadm upgrade</code> rewrites kube-proxy's DaemonSet: patch it again after an upgrade.</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> kube-system patch daemonset kube-proxy <span class="tok-flag">--type</span>=strategic <span class="tok-flag">-p</span> \
   <span class="tok-str">'{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"dmarts.app/thelb-director","operator":"DoesNotExist"}]}]}}}}}}}'</span></code></pre></div>
-<p>Pods on a node without kube-proxy reach no Service at all - one more reason to keep these nodes for theLB.</p>
+<p>Pods on a node without kube-proxy reach no Service at all - one more reason to keep these nodes for theLB. That includes the API server's own Service, which a director in a pod finds with <code>--kubeconfig in-cluster</code>: give the DaemonSet's container the API server's real address instead, which its certificate names:</p>
+<div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-key">          env</span>:
+<span class="tok-key">            - name</span>: KUBERNETES_SERVICE_HOST
+<span class="tok-key">              value</span>: <span class="tok-str">"10.0.0.21"</span>     <span class="tok-com"># the API server's own address</span>
+<span class="tok-key">            - name</span>: KUBERNETES_SERVICE_PORT
+<span class="tok-key">              value</span>: <span class="tok-str">"6443"</span></code></pre></div>
+<p>Or run the directors on these nodes under systemd, with a kubeconfig.</p>
 <h2 id="when-something-is-wrong">When something is wrong<a class="anchor" href="#when-something-is-wrong" aria-label="Link to this section">#</a></h2>
 <ul><li><strong>The director does not start.</strong> It says why: the API server does not answer, it runs a Kubernetes release older than 1.35, the credential lacks a permission (each one is named - apply step 1 again), or its node is not labelled.</li><li><strong>A Service has no <code>EXTERNAL-IP</code>.</strong> <code>kubectl describe service &lt;name&gt;</code> shows theLB's events: <code>AllocationFailed</code> says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.</li><li><strong>A warning <code>NoDirectorExclusion</code>.</strong> Directors run on labelled nodes, and the Service lacks the Cilium annotation.</li><li><strong>Nodes get no traffic.</strong> <code>sudo thelb status backends</code> shows each node's check and weight. With <code>Local</code>, a node without a ready pod has weight 0 - by design.</li><li><strong><code>thelb status</code></strong> shows, in the cluster table, how the director's watch of Kubernetes goes: the number of theLB Services, or what is wrong.</li></ul>
 <p>The design behind all this - the choices and their reasons - is in <a href="https://github.com/dmartsapp/thelb/blob/main/docs/design.md#kubernetes">docs/design.md</a>.</p>

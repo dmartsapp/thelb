@@ -115,8 +115,8 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 		return usagef("thelb %s: each director is named after its node: leave out --name", cmd)
 	case cfg.Metrics == "":
 		return usagef("thelb %s: give --metrics 127.0.0.1:<port>: the pod's readiness probe asks it, at /readyz", cmd)
-	case filepath.Dir(cfg.SecretFile) != filepath.Dir(cfg.BackendSecretFile):
-		return usagef("thelb %s: the two secret files come from one Secret, mounted in one folder: put them in the same one", cmd)
+	case filepath.Base(cfg.SecretFile) == filepath.Base(cfg.BackendSecretFile):
+		return usagef("thelb %s: the two secret files are two keys of one Secret, named after the files: give them different names", cmd)
 	case cfg.Bootstrap && cfg.BootstrapWait < 31*time.Second:
 		return usagef("thelb %s: a crashed pod is restarted after 10 seconds, sooner than the other of two directors stands alone: with --bootstrap, give --bootstrap-wait 31s (the control VIP's lease plus 25 seconds) or more", cmd)
 	}
@@ -128,7 +128,6 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	metricsAt := netip.MustParseAddrPort(cfg.Metrics)
 	host, port := metricsAt.Addr().String(), metricsAt.Port()
-	dir := filepath.Dir(cfg.SecretFile)
 	ds := fmt.Sprintf(`---
 # The directors, on the nodes labelled for them:
 #   kubectl label node <node> dmarts.app/thelb-director=true
@@ -185,8 +184,15 @@ spec:
               path: /readyz
             periodSeconds: 2
           volumeMounts:
+            # Each secret file mounted as itself (subPath): a Secret's files are
+            # symbolic links otherwise, which theLB refuses to read.
             - name: secrets
               mountPath: %s
+              subPath: %s
+              readOnly: true
+            - name: secrets
+              mountPath: %s
+              subPath: %s
               readOnly: true
             - name: machine-id
               mountPath: /etc/machine-id
@@ -216,7 +222,8 @@ spec:
           hostPath:
             path: /run/thelb
             type: DirectoryOrCreate
-`, filepath.Base(cfg.SecretFile), filepath.Base(cfg.BackendSecretFile), image(), argLines.String(), q(host), port, q(dir))
+`, filepath.Base(cfg.SecretFile), filepath.Base(cfg.BackendSecretFile), image(), argLines.String(), q(host), port,
+		q(cfg.SecretFile), q(filepath.Base(cfg.SecretFile)), q(cfg.BackendSecretFile), q(filepath.Base(cfg.BackendSecretFile)))
 	_, _ = fmt.Fprint(stdout, head+k8sIdentity+ds)
 	return nil
 }

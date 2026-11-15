@@ -548,7 +548,7 @@ func TestGenerateK8s(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"kind: ClusterRole", "kind: DaemonSet", `- "--vip"`, `- "10.0.0.10"`, `- "--bootstrap-wait"`, "port: 9180", `host: "127.0.0.1"`, `mountPath: "/etc/thelb"`, "--from-file=director.secret=", "image: ghcr.io/dmartsapp/thelb:"} {
+	for _, want := range []string{"kind: ClusterRole", "kind: DaemonSet", `- "--vip"`, `- "10.0.0.10"`, `- "--bootstrap-wait"`, "port: 9180", `host: "127.0.0.1"`, `mountPath: "/etc/thelb/director.secret"`, `subPath: "director.secret"`, `mountPath: "/etc/thelb/backend.secret"`, "--from-file=director.secret=", "image: ghcr.io/dmartsapp/thelb:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the DaemonSet lacks %q:\n%s", want, out)
 		}

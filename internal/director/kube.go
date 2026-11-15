@@ -594,6 +594,9 @@ func (p *plane) kubePlan(ctx context.Context, plan *Plan, vips *[]PlanVIP, seenV
 	s := p.s
 	k := s.n.kube
 	live := map[string]kubeLive{}
+	p.mu.Lock()
+	before := p.kube
+	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
 		p.kube = live
@@ -694,7 +697,21 @@ func (p *plane) kubePlan(ctx context.Context, plan *Plan, vips *[]PlanVIP, seenV
 					}
 					ps.Dests = append(ps.Dests, ipvs.Dest{Addr: addr, Port: uint16(sp.Port), Weight: uint32(w)})
 					name := kubeLiveName(a.Key, vip, proto, sp.Port)
-					live[name+"/"+t.name] = kubeLive{service: a.Key, vip: vip, proto: proto, port: sp.Port, node: t.name, addr: addr, weight: w, check: key}
+					l := kubeLive{service: a.Key, vip: vip, proto: proto, port: sp.Port, node: t.name, addr: addr, weight: w, check: key}
+					live[name+"/"+t.name] = l
+					if old, seen := before[name+"/"+t.name]; !seen || (old.weight > 0) != (w > 0) {
+						at := netip.AddrPortFrom(addr, uint16(sp.Port))
+						switch {
+						case w > 0:
+							s.log.OK("node serving", "service", a.Key, "vip", vip, "port", proto+"/"+fmt.Sprint(sp.Port), "node", t.name, "at", at, "weight", w)
+						case seen || !local || counts[t.name] > 0:
+							why := "its health port answers no 200: no ready pod of the Service there"
+							if !local {
+								why = "its node port does not answer"
+							}
+							s.log.Warn("node not serving: weight 0", "service", a.Key, "vip", vip, "port", proto+"/"+fmt.Sprint(sp.Port), "node", t.name, "at", at, "reason", why)
+						}
+					}
 				}
 				plan.Services = append(plan.Services, ps)
 			}
