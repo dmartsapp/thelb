@@ -84,7 +84,7 @@ Then decisions for the user: **BGP with ECMP**, beside or instead of ARP. **NAT 
 
 
 - **Kubernetes**: decided on 2026-11-15 - see [Now](#now-kubernetes-then-v010). To ask before testing on the user's cluster: running the directors there (JH outside, cp as a DaemonSet).
-- **Docker**: a Docker host as a backend is untested; a test on JH needs the user's OK (it runs Docker).
+- **Docker**: on hold (the user, 2026-11-15: "wait on docker"). A Docker host as a backend is untested; a test on JH would need the user's OK (it runs Docker).
 - **BGP**: see above. NAT: set aside, see above.
 
 ## Known limits of the two-director takeover (told the user)
