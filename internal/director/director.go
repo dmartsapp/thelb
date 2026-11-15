@@ -25,6 +25,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
+	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/metrics"
@@ -34,6 +35,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/version"
 	"github.com/dmartsapp/thelb/internal/wire"
+	"github.com/hashicorp/raft"
 )
 
 // Config is how a director was started.
@@ -49,6 +51,13 @@ type Config struct {
 	Interface         string
 	Metrics           string // where to serve metrics, address:port; "" for nowhere
 	Debug             bool   // DEBUG lines: on the leader, each connection forwarded
+	// BootstrapWait is how long a director with --bootstrap looks for the cluster
+	// before it creates one; 0: the default, 5 s. A pod, restarted 10 s after a
+	// crash where systemd waits 30, looks for longer.
+	BootstrapWait time.Duration
+	// Kubeconfig is where the Kubernetes credential is - a kubeconfig file, or
+	// kube.InCluster for a pod's ServiceAccount; "": no Kubernetes.
+	Kubeconfig string
 }
 
 // Network is how a director reaches the control VIP and the other directors.
@@ -106,6 +115,9 @@ type Deps struct {
 	// needs, and says what it found and what it can do without; nil: none
 	// (tests).
 	Preflight func() (preflight.Result, error)
+	// Kube is the client for the Kubernetes API, from Config.Kubeconfig; nil:
+	// kube.Load and kube.New.
+	Kube func(path string) (*kube.Client, error)
 }
 
 // Timing. Variables, so that tests can shorten them.
@@ -212,6 +224,9 @@ type node struct {
 	joining *wire.Cluster
 	joinID  string
 	sess    *session
+
+	// kube is the Kubernetes cluster, watched, when this director serves one.
+	kube *kubeView
 }
 
 // Run runs the director until ctx is done.
@@ -247,7 +262,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	defer srv.Close()
 	if cfg.Metrics != "" {
 		gather := func() string { return metrics.Director(n.statusOf(false), cfg.Name, n.takeovers.Load()) }
-		if err := metrics.Serve(ctx, cfg.Metrics, gather, d.Log.Module("metrics")); err != nil {
+		if err := metrics.Serve(ctx, cfg.Metrics, gather, n.readiness, d.Log.Module("metrics")); err != nil {
 			return err
 		}
 	}
@@ -274,6 +289,25 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 	if err := n.net.Cleanup(); err != nil {
 		return err
+	}
+	if cfg.Kubeconfig != "" {
+		newKube := d.Kube
+		if newKube == nil {
+			newKube = func(path string) (*kube.Client, error) {
+				c, err := kube.Load(path)
+				if err != nil {
+					return nil, err
+				}
+				return kube.New(c), nil
+			}
+		}
+		c, err := newKube(cfg.Kubeconfig)
+		if err != nil {
+			return err
+		}
+		if err := n.kubeStart(ctx, c, addr.Prefix.Addr()); err != nil {
+			return err
+		}
 	}
 	if cfg.ControlVIPName != "" {
 		log.OK("control VIP resolved", "name", cfg.ControlVIPName, "vip", cfg.ControlVIP)
@@ -624,4 +658,39 @@ func (n *node) Admin(c api.Change) (api.Result, error) {
 		return api.Result{}, errors.New("this director is not a member of a cluster yet")
 	}
 	return s.admin(c)
+}
+
+// readiness is whether this director is a voting member of a cluster that has
+// a leader, and has caught up with it - for a readiness probe: a rolling update
+// replaces the next director only after this one is back, since the cluster's
+// state lives only in the directors' memory.
+func (n *node) readiness() (bool, string) {
+	n.mu.Lock()
+	s := n.sess
+	n.mu.Unlock()
+	if s == nil {
+		return false, "not a member of a cluster yet"
+	}
+	s.mu.Lock()
+	member := s.member
+	s.mu.Unlock()
+	if !member {
+		return false, "not admitted yet"
+	}
+	if !s.hasLeader() {
+		return false, "the cluster has no leader"
+	}
+	f := s.r.GetConfiguration()
+	if f.Error() != nil {
+		return false, f.Error().Error()
+	}
+	for _, srv := range f.Configuration().Servers {
+		if string(srv.ID) == s.raftID {
+			if srv.Suffrage == raft.Voter {
+				return true, ""
+			}
+			return false, "catching up with the leader"
+		}
+	}
+	return false, "not in the vote yet"
 }

@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,8 @@ const (
 	TypeUnassign      = "unassign"       // a director took one back
 	TypeHealth        = "health"         // an assignment became ready to serve, or stopped being
 	TypeLease         = "lease"          // a director set how long the kernel keeps the control VIP without its leader
+	TypeKubeAlloc     = "kube.alloc"     // the leader gave a Kubernetes Service its VIPs, or new ones
+	TypeKubeRelease   = "kube.release"   // the leader took them back
 )
 
 // The control VIP's lease: the leader adds the VIP with this lifetime, and
@@ -313,6 +316,46 @@ type Assignment struct {
 	At      time.Time `json:"at"`
 }
 
+// KubeService is a Kubernetes Service of theLB's class, and the VIPs the leader
+// gave it: one for each of its IP families. What else the Service has - its
+// ports, its nodes, their health - the directors read from the API.
+type KubeService struct {
+	Key   string    `json:"key"` // namespace/name
+	UID   string    `json:"uid"` // a Service deleted and created again is another
+	VIPs  []KubeVIP `json:"vips"`
+	Share string    `json:"share,omitempty"` // dmarts.app/thelb-shared-vip: Services with the same one share their VIPs
+	By    string    `json:"by"`
+	At    time.Time `json:"at"`
+}
+
+// KubeVIP is one of a Kubernetes Service's VIPs, and its pool.
+type KubeVIP struct {
+	Pool string `json:"pool"`
+	VIP  string `json:"vip"`
+}
+
+// VIPOwner is what holds a service VIP: "the service web", "the Kubernetes
+// Service default/web", or "" for nothing. A Kubernetes Service named in
+// except is not counted.
+func (s *State) VIPOwner(vip string, except ...string) string {
+	for _, v := range s.Services {
+		if v.VIP == vip {
+			return "the service " + v.Name
+		}
+	}
+	for _, k := range Sorted(s.Kube) {
+		if slices.Contains(except, k) {
+			continue
+		}
+		for _, x := range s.Kube[k].VIPs {
+			if x.VIP == vip {
+				return "the Kubernetes Service " + k
+			}
+		}
+	}
+	return ""
+}
+
 // AssignmentKey is an assignment's key in the state.
 func AssignmentKey(service, node string) string { return service + "/" + node }
 
@@ -351,17 +394,18 @@ func (s *State) endAssignments(node, proto string, port int) {
 
 // State is the cluster's state.
 type State struct {
-	Cluster     *Info                  `json:"cluster"`
-	Leader      *Leader                `json:"leader"`
-	Nodes       map[string]*Node       `json:"nodes"`   // approved, by name
-	Pending     map[string]*Pending    `json:"pending"` // by name
-	Refused     map[string]*Refusal    `json:"refused"` // by name, for RefusalMemory
-	Certs       map[string]*Cert       `json:"certs"`   // the latest of each node, by name
-	Revoked     map[string]time.Time   `json:"revoked"` // serial -> when it would have expired
-	Pools       map[string]*Pool       `json:"pools"`
-	Services    map[string]*Service    `json:"services"`
-	Offers      map[string]*Offers     `json:"offers"`      // by backend
-	Assignments map[string]*Assignment `json:"assignments"` // by AssignmentKey
+	Cluster     *Info                   `json:"cluster"`
+	Leader      *Leader                 `json:"leader"`
+	Nodes       map[string]*Node        `json:"nodes"`   // approved, by name
+	Pending     map[string]*Pending     `json:"pending"` // by name
+	Refused     map[string]*Refusal     `json:"refused"` // by name, for RefusalMemory
+	Certs       map[string]*Cert        `json:"certs"`   // the latest of each node, by name
+	Revoked     map[string]time.Time    `json:"revoked"` // serial -> when it would have expired
+	Pools       map[string]*Pool        `json:"pools"`
+	Services    map[string]*Service     `json:"services"`
+	Offers      map[string]*Offers      `json:"offers"`         // by backend
+	Assignments map[string]*Assignment  `json:"assignments"`    // by AssignmentKey
+	Kube        map[string]*KubeService `json:"kube,omitempty"` // by namespace/name
 	// Applied is the index of the last entry applied: a director that stands
 	// alone replays its log past it.
 	Applied uint64 `json:"applied,omitempty"`
@@ -378,6 +422,7 @@ func newState() *State {
 		Services:    map[string]*Service{},
 		Offers:      map[string]*Offers{},
 		Assignments: map[string]*Assignment{},
+		Kube:        map[string]*KubeService{},
 	}
 }
 
@@ -635,6 +680,13 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 				return fmt.Errorf("the pool %s holds the VIP of the service %s", d.Name, v.Name)
 			}
 		}
+		for _, k := range Sorted(s.Kube) {
+			for _, x := range s.Kube[k].VIPs {
+				if x.Pool == d.Name {
+					return fmt.Errorf("the pool %s holds the VIP of the Kubernetes Service %s", d.Name, k)
+				}
+			}
+		}
 		delete(s.Pools, d.Name)
 		return nil
 	case TypeServiceAdd:
@@ -652,6 +704,9 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 			if v.VIP == d.VIP && v.Proto == d.Proto && v.Port == d.Port {
 				return fmt.Errorf("%s %s/%d is the service %s's", d.VIP, d.Proto, d.Port, v.Name)
 			}
+		}
+		if owner := s.VIPOwner(d.VIP); strings.HasPrefix(owner, "the Kubernetes") {
+			return fmt.Errorf("%s is %s's", d.VIP, owner)
 		}
 		d.By, d.At = e.By, e.At
 		s.Services[d.Name] = &d
@@ -838,6 +893,48 @@ func (f *FSM) apply(s *State, e Entry, index uint64) error {
 		}
 		a.Healthy = d.Healthy
 		return nil
+	case TypeKubeAlloc:
+		var d KubeService
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if d.Key == "" || len(d.VIPs) == 0 {
+			return errors.New("a Kubernetes Service without a name or a VIP")
+		}
+		for _, x := range d.VIPs {
+			p := s.Pools[x.Pool]
+			a, err := netip.ParseAddr(x.VIP)
+			if p == nil || err != nil || !p.Contains(a) {
+				return fmt.Errorf("%s is not an address of the pool %s", x.VIP, x.Pool)
+			}
+			owner := s.VIPOwner(x.VIP, d.Key)
+			if owner == "" {
+				continue
+			}
+			// A VIP held by another Kubernetes Service is shared only between
+			// Services that say they share it.
+			shared := false
+			if d.Share != "" && strings.HasPrefix(owner, "the Kubernetes Service ") {
+				other := s.Kube[strings.TrimPrefix(owner, "the Kubernetes Service ")]
+				shared = other != nil && other.Share == d.Share
+			}
+			if !shared {
+				return fmt.Errorf("%s is %s's", x.VIP, owner)
+			}
+		}
+		d.By, d.At = e.By, e.At
+		s.Kube[d.Key] = &d
+		return nil
+	case TypeKubeRelease:
+		var d Name
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnknownEntry, e.Type, err)
+		}
+		if _, ok := s.Kube[d.Name]; !ok {
+			return fmt.Errorf("no Kubernetes Service %s has VIPs", d.Name)
+		}
+		delete(s.Kube, d.Name)
+		return nil
 	default:
 		return fmt.Errorf("%w: %q at index %d", ErrUnknownEntry, e.Type, index)
 	}
@@ -897,6 +994,9 @@ func (f *FSM) Restore(r io.ReadCloser) error {
 	}
 	if s.Assignments == nil {
 		s.Assignments = fresh.Assignments
+	}
+	if s.Kube == nil {
+		s.Kube = fresh.Kube
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

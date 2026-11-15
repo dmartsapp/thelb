@@ -1,9 +1,15 @@
 package metrics
 
 import (
+	"context"
+	"io"
+	"net"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/status"
 )
 
@@ -70,5 +76,39 @@ func TestLabelValuesAreEscaped(t *testing.T) {
 	s.add("x", "gauge", "x").put(1, "name", "a\"b\\c\nd")
 	if got := s.text(); !strings.Contains(got, `x{name="a\"b\\c\nd"} 1`) {
 		t.Errorf("escaped: %s", got)
+	}
+}
+
+func TestReadyz(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	ready, why := false, "not admitted yet"
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	if err := Serve(ctx, addr, func() string { return "" }, func() (bool, string) { mu.Lock(); defer mu.Unlock(); return ready, why }, logx.New(io.Discard, "t")); err != nil {
+		t.Fatal(err)
+	}
+	get := func() (int, string) {
+		resp, err := http.Get("http://" + addr + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get(); code != http.StatusServiceUnavailable || body != "not ready: not admitted yet\n" {
+		t.Fatalf("%d %q", code, body)
+	}
+	mu.Lock()
+	ready = true
+	mu.Unlock()
+	if code, body := get(); code != http.StatusOK || body != "ready\n" {
+		t.Fatalf("%d %q", code, body)
 	}
 }

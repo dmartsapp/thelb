@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -106,7 +107,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestNotYetExitsOne(t *testing.T) {
-	for _, args := range [][]string{{"generate", "k8s"}, {"admin", "secret", "rotate"}} {
+	for _, args := range [][]string{{"admin", "secret", "rotate"}} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 1 || !strings.Contains(errOut, "not in this build") {
 			t.Errorf("%v: exit %d, %q", args, code, errOut)
@@ -518,5 +519,51 @@ func TestOfferAsksTheBackend(t *testing.T) {
 		if code, _, _ := as(t, 0, args...); code != 2 || len(offerCalls) != 0 {
 			t.Errorf("%v: exit %d, calls %v", args, code, offerCalls)
 		}
+	}
+}
+
+func TestGenerateK8s(t *testing.T) {
+	code, out, errOut := as(t, 0, "generate", "k8s")
+	if code != 0 || !strings.Contains(out, "kind: ClusterRole") || !strings.Contains(out, `resources: ["services/status"]`) || strings.Contains(out, "DaemonSet") {
+		t.Fatalf("exit %d: %s%s", code, out, errOut)
+	}
+	base := []string{"generate", "k8s", "director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/director.secret", "--backend-secret-file", "/etc/thelb/backend.secret"}
+	for _, bad := range []struct {
+		extra []string
+		says  string
+	}{
+		{[]string{"--metrics", "127.0.0.1:9180"}, "--kubeconfig in-cluster"},
+		{[]string{"--kubeconfig", "in-cluster"}, "--metrics"},
+		{[]string{"--kubeconfig", "in-cluster", "--metrics", "127.0.0.1:9180", "--name", "x"}, "leave out --name"},
+		{[]string{"--kubeconfig", "in-cluster", "--metrics", "127.0.0.1:9180", "--bootstrap"}, "--bootstrap-wait 31s"},
+		{[]string{"--kubeconfig", "in-cluster", "--metrics", "127.0.0.1:9180", "--bootstrap", "--bootstrap-wait", "10s"}, "--bootstrap-wait 31s"},
+		{[]string{"--kubeconfig", "relative/kubeconfig", "--metrics", "127.0.0.1:9180"}, "absolute path"},
+	} {
+		code, _, errOut := as(t, 0, append(slices.Clone(base), bad.extra...)...)
+		if code != 2 || !strings.Contains(errOut, bad.says) {
+			t.Errorf("%v: exit %d, %q - want it to say %q", bad.extra, code, errOut, bad.says)
+		}
+	}
+	code, out, errOut = as(t, 0, append(slices.Clone(base), "--kubeconfig", "in-cluster", "--metrics", "127.0.0.1:9180", "--bootstrap", "--bootstrap-wait", "31s")...)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"kind: ClusterRole", "kind: DaemonSet", `- "--vip"`, `- "10.0.0.10"`, `- "--bootstrap-wait"`, "port: 9180", `host: "127.0.0.1"`, `mountPath: "/etc/thelb"`, "--from-file=director.secret=", "image: ghcr.io/dmartsapp/thelb:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the DaemonSet lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDirectorKubeFlags(t *testing.T) {
+	cfg, err := directorConfig(context.Background(), "director", []string{"--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d", "--backend-secret-file", "/etc/thelb/b", "--kubeconfig", "/etc/thelb/../thelb/kubeconfig", "--bootstrap", "--bootstrap-wait", "40s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Kubeconfig != "/etc/thelb/kubeconfig" || cfg.BootstrapWait != 40*time.Second {
+		t.Fatalf("%+v", cfg)
+	}
+	if _, err := directorConfig(context.Background(), "director", []string{"--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d", "--backend-secret-file", "/etc/thelb/b", "--bootstrap-wait", "40s"}); err == nil || !strings.Contains(err.Error(), "give --bootstrap too") {
+		t.Fatalf("--bootstrap-wait without --bootstrap: %v", err)
 	}
 }

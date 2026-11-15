@@ -57,6 +57,11 @@ Flags:
                                  monitoring reaches; not 0.0.0.0, which would include the VIPs
   --debug                        DEBUG lines too: while it leads, each connection forwarded -
                                  the client, the service, the backend, when
+  --kubeconfig <file|in-cluster> serve Kubernetes Services of class dmarts.app/thelb, with
+                                 this credential: a kubeconfig file (absolute path), or
+                                 in-cluster for a pod's ServiceAccount - see thelb generate k8s
+  --bootstrap-wait <duration>    with --bootstrap: look for the cluster this long before creating
+                                 one (default 5s); 31s or more for a pod, restarted after 10 s
 `,
 	"backend": `Usage:
   thelb backend --join <control VIP:port> --secret-file <file> [--offer <offer> ...] [flags]
@@ -159,6 +164,7 @@ work.
   thelb generate systemd director|backend <the flags it runs with>
   thelb generate sysctl director|backend
   thelb generate modules director|backend
+  thelb generate k8s [director <the flags it runs with>]
 
 Prints a file's content, and writes nothing.
 
@@ -177,6 +183,11 @@ Prints a file's content, and writes nothing.
   sysctl      a sysctl.d file with the kernel parameters theLB sets while it
               runs, for them from boot
   modules     a modules-load.d file with the modules it uses
+  k8s         the directors' identity and permissions in a Kubernetes cluster, to
+              apply with kubectl; with director and its flags, also a DaemonSet that
+              runs directors on the nodes labelled dmarts.app/thelb-director:
+              thelb generate k8s director --vip 10.0.0.10 --port 7443 ... \
+                --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml
 
 k8s comes later.
 `,

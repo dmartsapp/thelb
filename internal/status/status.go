@@ -38,6 +38,9 @@ type Cluster struct {
 	Term        *uint64   `json:"term"`
 	LeaderSince time.Time `json:"leader_since"`
 	Lease       int       `json:"vip_lease_seconds,omitempty"` // the control VIP's lease
+	// Kubernetes is how the director's watch of a Kubernetes cluster goes, when
+	// it serves one: "N Services", or what is wrong.
+	Kubernetes string `json:"kubernetes,omitempty"`
 }
 
 // Node is a director or a backend.
@@ -435,6 +438,10 @@ func (s Status) render(name string, now time.Time) string {
 				lease = strconv.Itoa(c.Lease) + "s"
 			}
 			rows = append(rows, []string{c.Name, dash(c.ID), stamp(c.Created), dash(c.Leader), term(c.Term), stamp(c.LeaderSince), lease})
+			if c.Kubernetes != "" {
+				rows[0] = append(rows[0], c.Kubernetes)
+				return table.Render([]string{"cluster", "id", "created", "leader", "term", "leader since", "vip lease", "kubernetes"}, rows, 4, 6)
+			}
 		}
 		return table.Render([]string{"cluster", "id", "created", "leader", "term", "leader since", "vip lease"}, rows, 4, 6)
 	case "nodes":

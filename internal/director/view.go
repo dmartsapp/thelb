@@ -1,6 +1,7 @@
 package director
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/ca"
 	"github.com/dmartsapp/thelb/internal/check"
 	"github.com/dmartsapp/thelb/internal/cluster"
+	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/hashicorp/raft"
 )
@@ -33,12 +35,31 @@ func (s *session) status(brief bool) status.Status {
 	lv := s.leaderLive(brief)
 	checkIns, live, known := lv.checkIns, lv.live, lv.known
 	now := time.Now()
+	var kubeServices map[string]*kube.Service
+	kubeSays := ""
+	if k := s.n.kube; k != nil {
+		kubeServices = k.services.Items()
+		switch {
+		case k.services.Err() != "" || k.nodes.Err() != "" || k.slices.Err() != "":
+			kubeSays = "not watching: " + firstNonEmpty(k.services.Err(), k.nodes.Err(), k.slices.Err())
+		case !k.services.Synced() || !k.nodes.Synced() || !k.slices.Synced():
+			kubeSays = "listing"
+		default:
+			n := 0
+			for _, svc := range kubeServices {
+				if eligible(svc) {
+					n++
+				}
+			}
+			kubeSays = fmt.Sprintf("%d Services", n)
+		}
+	}
 
 	s.fsm.Read(func(cs *cluster.State) {
 		if cs.Cluster == nil {
 			return
 		}
-		c := &status.Cluster{Name: cs.Cluster.Name, ID: cs.Cluster.ID, Created: cs.Cluster.Created, Term: &term, Lease: int(cs.VIPLease() / time.Second)}
+		c := &status.Cluster{Name: cs.Cluster.Name, ID: cs.Cluster.ID, Created: cs.Cluster.Created, Term: &term, Lease: int(cs.VIPLease() / time.Second), Kubernetes: kubeSays}
 		if n := cs.NodeByRaftID(string(leaderID)); n != nil {
 			c.Leader = n.Name
 		}
@@ -109,6 +130,13 @@ func (s *session) status(brief bool) status.Status {
 			for _, v := range cs.Services {
 				if v.Pool == name {
 					used[v.VIP] = true
+				}
+			}
+			for _, k := range cs.Kube {
+				for _, x := range k.VIPs {
+					if x.Pool == name {
+						used[x.VIP] = true
+					}
 				}
 			}
 			st.Pools = append(st.Pools, status.Pool{Pool: name, Network: netip.PrefixFrom(first, p.Bits).Masked().String(), First: p.First, Count: p.Count, Interface: ifc, Used: len(used)})
@@ -215,7 +243,70 @@ func (s *session) status(brief bool) status.Status {
 			}
 			st.Services = append(st.Services, row)
 		}
+
+		// Kubernetes Services: their VIPs, each port on each, and the nodes
+		// serving them - as the leader programs them.
+		kubeServing := map[string]bool{}
+		var liveKeys []string
+		for key, l := range live {
+			if f := strings.Fields(l.Service); len(f) == 3 && strings.Contains(f[0], "/") {
+				liveKeys = append(liveKeys, key)
+				if l.Weight > 0 {
+					kubeServing[f[1]] = true
+				}
+			}
+		}
+		sort.Strings(liveKeys)
+		for _, key := range sortedNames(cs.Kube) {
+			a := cs.Kube[key]
+			svc := kubeServices[key]
+			for _, x := range a.VIPs {
+				if !seen[x.VIP] {
+					seen[x.VIP] = true
+					row := status.VIP{VIP: x.VIP, Purpose: "kubernetes", Pool: x.Pool, Interface: poolIfc[x.Pool], HeldBy: c.Leader, Since: a.At}
+					if leaderSince.After(a.At) {
+						row.Since = leaderSince
+					}
+					if c.Leader == "" || !kubeServing[x.VIP] {
+						row.HeldBy, row.Since = "-", time.Time{}
+					}
+					st.VIPs = append(st.VIPs, row)
+				}
+				if svc == nil || svc.Meta.UID != a.UID {
+					continue
+				}
+				vip, _ := netip.ParseAddr(x.VIP)
+				for _, sp := range svc.Spec.Ports {
+					proto := protoName(sp.Protocol)
+					name := kubeLiveName(key, vip, proto, sp.Port)
+					row := status.Service{Service: key, VIP: x.VIP, Protocol: proto, Port: sp.Port, Scheduler: "wrr", Method: "direct"}
+					for _, lk := range liveKeys {
+						l := live[lk]
+						if l.Service != name {
+							continue
+						}
+						row.Backends++
+						if l.Weight > 0 {
+							row.BackendsUp++
+						}
+						st.Backends = append(st.Backends, status.Backend{Service: key, VIP: x.VIP, Port: sp.Port, Backend: l.Node, Address: l.Address, AppPort: sp.Port,
+							OwnCheck: "-", DirectorCheck: l.Director, CheckedBy: l.By, Weight: l.Weight, Connections: l.Conns, Packets: l.Packets, Bytes: l.Bytes,
+							ActiveConnections: l.Active, InactiveConns: l.Inactive, LastCheckInSeconds: -1})
+					}
+					st.Services = append(st.Services, row)
+				}
+			}
+		}
 	})
 	sort.Slice(st.Pending, func(i, j int) bool { return st.Pending[i].WaitingSeconds > st.Pending[j].WaitingSeconds })
 	return st
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

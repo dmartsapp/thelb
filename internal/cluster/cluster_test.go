@@ -380,3 +380,82 @@ func TestTheControlVIPsLease(t *testing.T) {
 		}
 	})
 }
+
+func TestKubeAllocations(t *testing.T) {
+	a := created(t)
+	at := t0.Add(time.Minute)
+	if err := a.apply(TypePoolAdd, "lb-1", at, Pool{Name: "k8s", First: "10.0.0.50", Bits: 24, Count: 4, Default: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.apply(TypeServiceAdd, "lb-1", at, Service{Name: "plain", Pool: "k8s", VIP: "10.0.0.50", Proto: "tcp", Port: 80, Scheduler: "wrr"}); err != nil {
+		t.Fatal(err)
+	}
+	web := KubeService{Key: "default/web", UID: "u1", VIPs: []KubeVIP{{Pool: "k8s", VIP: "10.0.0.51"}}}
+	for _, bad := range []struct {
+		k    KubeService
+		says string
+	}{
+		{KubeService{Key: "default/x", UID: "u", VIPs: []KubeVIP{{Pool: "k8s", VIP: "10.0.0.50"}}}, "the service plain's"},
+		{KubeService{Key: "default/x", UID: "u", VIPs: []KubeVIP{{Pool: "k8s", VIP: "10.0.0.60"}}}, "not an address of the pool"},
+		{KubeService{Key: "default/x", UID: "u", VIPs: []KubeVIP{{Pool: "nope", VIP: "10.0.0.51"}}}, "not an address of the pool"},
+		{KubeService{Key: "default/x", UID: "u"}, "without"},
+	} {
+		if err := a.apply(TypeKubeAlloc, "lb-1", at, bad.k); err == nil || !strings.Contains(err.Error(), bad.says) {
+			t.Errorf("%+v: %v, want %q", bad.k, err, bad.says)
+		}
+	}
+	if err := a.apply(TypeKubeAlloc, "lb-1", at, web); err != nil {
+		t.Fatal(err)
+	}
+	// Another Service on the same VIP: only when both share it.
+	other := KubeService{Key: "default/api", UID: "u2", VIPs: []KubeVIP{{Pool: "k8s", VIP: "10.0.0.51"}}}
+	if err := a.apply(TypeKubeAlloc, "lb-1", at, other); err == nil || !strings.Contains(err.Error(), "Kubernetes Service default/web's") {
+		t.Fatalf("an unshared VIP taken twice: %v", err)
+	}
+	web.Share, other.Share = "front", "front"
+	if err := a.apply(TypeKubeAlloc, "lb-1", at, web); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.apply(TypeKubeAlloc, "lb-1", at, other); err != nil {
+		t.Fatal(err)
+	}
+	// A plain service cannot take a Kubernetes VIP, nor the pool go.
+	if err := a.apply(TypeServiceAdd, "lb-1", at, Service{Name: "p2", Pool: "k8s", VIP: "10.0.0.51", Proto: "tcp", Port: 81, Scheduler: "wrr"}); err == nil || !strings.Contains(err.Error(), "Kubernetes Service") {
+		t.Fatalf("a plain service on a Kubernetes VIP: %v", err)
+	}
+	if err := a.apply(TypeServiceRemove, "lb-1", at, Name{Name: "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.apply(TypePoolRemove, "lb-1", at, Name{Name: "k8s"}); err == nil || !strings.Contains(err.Error(), "Kubernetes Service") {
+		t.Fatalf("removing a pool with a Kubernetes VIP: %v", err)
+	}
+	var owner string
+	a.f.Read(func(s *State) { owner = s.VIPOwner("10.0.0.51") })
+	if owner != "the Kubernetes Service default/api" {
+		t.Fatalf("owner %q", owner)
+	}
+	// Released, and survives a snapshot.
+	if err := a.apply(TypeKubeRelease, "lb-1", at, Name{Name: "default/api"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.apply(TypeKubeRelease, "lb-1", at, Name{Name: "default/api"}); err == nil {
+		t.Fatal("released twice")
+	}
+	snap, err := a.f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out sink
+	if err := snap.Persist(&out); err != nil {
+		t.Fatal(err)
+	}
+	f := New()
+	if err := f.Restore(io.NopCloser(&out.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	f.Read(func(s *State) {
+		if len(s.Kube) != 1 || s.Kube["default/web"].VIPs[0].VIP != "10.0.0.51" || s.Kube["default/web"].By != "lb-1" {
+			t.Fatalf("restored %+v", s.Kube)
+		}
+	})
+}

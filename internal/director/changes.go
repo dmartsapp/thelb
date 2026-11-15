@@ -253,7 +253,7 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 	}
 	var pool *cluster.Pool
 	used := map[netip.Addr]bool{}
-	taken := ""
+	taken, kubeOwner := "", ""
 	var want netip.Addr
 	if c.VIP != "" {
 		a, err := netip.ParseAddr(c.VIP)
@@ -283,7 +283,19 @@ func (s *session) serviceAdd(by string, c api.Change) (api.Result, error) {
 				taken = v.Name
 			}
 		}
+		for _, k := range st.Kube {
+			for _, x := range k.VIPs {
+				a, _ := netip.ParseAddr(x.VIP)
+				used[a] = true
+				if a == want {
+					kubeOwner = k.Key
+				}
+			}
+		}
 	})
+	if kubeOwner != "" {
+		return api.Result{}, fmt.Errorf("%s is the Kubernetes Service %s's", want, kubeOwner)
+	}
 	if pool == nil {
 		if c.Pool != "" {
 			return api.Result{}, fmt.Errorf("no pool named %s", c.Pool)

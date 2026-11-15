@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dmartsapp/thelb/internal/doctor"
+	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 )
 
@@ -32,6 +33,9 @@ func generateSystemd(ctx context.Context, args []string, stdout io.Writer) error
 			return err
 		}
 		paths = []string{cfg.SecretFile, cfg.BackendSecretFile}
+		if cfg.Kubeconfig != "" && cfg.Kubeconfig != kube.InCluster {
+			paths = append(paths, cfg.Kubeconfig)
+		}
 		if cfg.Bootstrap { // the first bootstrap writes the secret files that are missing
 			for _, p := range paths {
 				if d := filepath.Dir(p); !slices.Contains(writable, d) {

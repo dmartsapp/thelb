@@ -200,7 +200,10 @@ func sortedKeys(m map[[2]string]int) [][2]string {
 }
 
 // Serve answers GET /metrics on addr with what gather returns, until ctx ends.
-func Serve(ctx context.Context, addr string, gather func() string, log *logx.Logger) error {
+//
+// ready, when not nil, answers /readyz too: 200 when it says ready, 503 with
+// why not otherwise - for a Kubernetes readiness probe.
+func Serve(ctx context.Context, addr string, gather func() string, ready func() (bool, string), log *logx.Logger) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("--metrics %s: %w", addr, err)
@@ -210,6 +213,18 @@ func Serve(ctx context.Context, addr string, gather func() string, log *logx.Log
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = w.Write([]byte(gather()))
 	})
+	if ready != nil {
+		mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			ok, why := ready()
+			if !ok {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("not ready: " + why + "\n"))
+				return
+			}
+			_, _ = w.Write([]byte("ready\n"))
+		})
+	}
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
 	go func() {
 		<-ctx.Done()

@@ -30,6 +30,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
+	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/preflight"
@@ -186,8 +187,9 @@ func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error 
 			}
 			return n, nil
 		},
-		Dataplane: func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
-		Preflight: func() (preflight.Result, error) { return preflightDirector(cfg.ControlVIP) },
+		Dataplane:   func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
+		Preflight:   func() (preflight.Result, error) { return preflightDirector(cfg.ControlVIP) },
+		ProbeWindow: cfg.BootstrapWait,
 	})
 }
 
@@ -208,6 +210,8 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 	iface := fs.String("interface", "", "")
 	metricsAt := fs.String("metrics", "", "")
 	debug := fs.Bool("debug", false, "")
+	kubeconfig := fs.String("kubeconfig", "", "")
+	bootstrapWait := fs.Duration("bootstrap-wait", 0, "")
 	var cfg director.Config
 	if err := parse(fs, args); err != nil {
 		return cfg, err
@@ -270,6 +274,23 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 			return cfg, usagef("thelb director: --metrics is an address and port to serve metrics on, as 127.0.0.1:9732 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)
 		}
 		cfg.Metrics = *metricsAt
+	}
+	switch k := *kubeconfig; {
+	case k == "" || k == kube.InCluster:
+	case !filepath.IsAbs(k):
+		return cfg, usagef("thelb director: --kubeconfig is an absolute path, or %s for a pod's ServiceAccount: %q", kube.InCluster, k)
+	default:
+		*kubeconfig = filepath.Clean(k)
+	}
+	cfg.Kubeconfig = *kubeconfig
+	if *bootstrapWait != 0 {
+		if !*bootstrap {
+			return cfg, usagef("thelb director: --bootstrap-wait is how long a director with --bootstrap looks for the cluster before creating one: give --bootstrap too")
+		}
+		if *bootstrapWait < 5*time.Second || *bootstrapWait > 10*time.Minute {
+			return cfg, usagef("thelb director: --bootstrap-wait is 5s to 10m, not %s", *bootstrapWait)
+		}
+		cfg.BootstrapWait = *bootstrapWait
 	}
 	return cfg, nil
 }
@@ -586,7 +607,7 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 
 func generateCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usagef("thelb generate: say what to generate: secret or commands (systemd, sysctl, modules and k8s come later)")
+		return usagef("thelb generate: say what to generate: secret, commands, systemd, sysctl, modules or k8s")
 	}
 	switch args[0] {
 	case "secret":
@@ -614,7 +635,7 @@ func generateCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	case "sysctl", "modules":
 		return generateBoot(args[0], args[1:], stdout)
 	case "k8s":
-		return notYet("thelb generate " + args[0])
+		return generateK8s(ctx, args[1:], stdout)
 	default:
 		return usagef("thelb generate: %q is not something theLB generates", args[0])
 	}

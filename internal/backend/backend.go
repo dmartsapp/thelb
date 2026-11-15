@@ -203,7 +203,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 	defer srv.Close()
 	if cfg.Metrics != "" {
-		if err := metrics.Serve(ctx, cfg.Metrics, func() string { return metrics.Backend(b.Status()) }, d.Log.Module("metrics")); err != nil {
+		if err := metrics.Serve(ctx, cfg.Metrics, func() string { return metrics.Backend(b.Status()) }, nil, d.Log.Module("metrics")); err != nil {
 			return err
 		}
 	}

@@ -124,10 +124,11 @@ type CheckIn struct {
 type Live struct {
 	Service  string `json:"service"`
 	Node     string `json:"node"`
-	Own      string `json:"own"`          // the backend's own check: ok, fail, or "-" without a heartbeat
-	Director string `json:"director"`     // the director's check
-	By       string `json:"by,omitempty"` // the director that makes it
-	Weight   int    `json:"weight"`       // what IPVS has
+	Address  string `json:"address,omitempty"` // a Kubernetes node's: it is no node of theLB's
+	Own      string `json:"own"`               // the backend's own check: ok, fail, or "-" without a heartbeat
+	Director string `json:"director"`          // the director's check
+	By       string `json:"by,omitempty"`      // the director that makes it
+	Weight   int    `json:"weight"`            // what IPVS has
 	Conns    uint64 `json:"conns"`
 	Packets  uint64 `json:"packets"`
 	Bytes    uint64 `json:"bytes"`

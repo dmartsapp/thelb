@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -236,6 +237,8 @@ type plane struct {
 	answered  map[netip.Addr]time.Time // a VIP to take: since when another machine answers for it
 	said      map[netip.Addr]string    // the last warning about a VIP to take
 	probeErr  string
+
+	kube map[string]kubeLive // the Kubernetes Services' nodes, as programmed: by kubeLiveName + "/" + node
 }
 
 func (s *session) dp() Dataplane { return s.n.plane }
@@ -267,6 +270,9 @@ func (s *session) serve(ctx context.Context) {
 	s.syncDaemons(false) // the master too, now that it leads
 	if s.log.Debugging() {
 		go s.watchConns(ctx)
+	}
+	if s.n.kube != nil {
+		go s.kubeController(ctx)
 	}
 	defer func() {
 		s.mu.Lock()
@@ -326,7 +332,13 @@ func (p *plane) step(ctx context.Context) error {
 	var assignments []cluster.Assignment
 	nodes := map[string]cluster.Node{}
 	offers := map[string][]cluster.Offer{}
+	var allocs []cluster.KubeService
 	s.fsm.Read(func(st *cluster.State) {
+		for _, k := range st.Kube {
+			cp := *k
+			cp.VIPs = append([]cluster.KubeVIP(nil), k.VIPs...)
+			allocs = append(allocs, cp)
+		}
 		for _, v := range st.Services {
 			services = append(services, *v)
 		}
@@ -367,6 +379,19 @@ func (p *plane) step(ctx context.Context) error {
 	byKey := map[string]int{}
 	// Each pool's interface, found once: finding one reads every address.
 	ifcOf := map[string]string{}
+	ifaceOf := func(pool cluster.Pool) string {
+		ifname, ok := ifcOf[pool.Name]
+		if !ok {
+			first, _ := netip.ParseAddr(pool.First)
+			if ifc, err := s.n.local(first, pool.Interface); err != nil {
+				s.log.Warn("this director cannot hold a pool's VIPs", "pool", pool.Name, "error", err)
+			} else {
+				ifname = ifc.Interface
+			}
+			ifcOf[pool.Name] = ifname
+		}
+		return ifname
+	}
 	for _, v := range services {
 		vip, err := netip.ParseAddr(v.VIP)
 		if err != nil {
@@ -375,16 +400,7 @@ func (p *plane) step(ctx context.Context) error {
 		pool := pools[v.Pool]
 		if !seenVIP[vip] {
 			seenVIP[vip] = true
-			ifname, ok := ifcOf[pool.Name]
-			if !ok {
-				first, _ := netip.ParseAddr(pool.First)
-				if ifc, err := s.n.local(first, pool.Interface); err != nil {
-					s.log.Warn("this director cannot hold a pool's VIPs", "pool", pool.Name, "error", err)
-				} else {
-					ifname = ifc.Interface
-				}
-				ifcOf[pool.Name] = ifname
-			}
+			ifname := ifaceOf(pool)
 			if ifname == "" {
 				continue
 			}
@@ -458,6 +474,7 @@ func (p *plane) step(ctx context.Context) error {
 			}
 		}
 	}
+	p.kubePlan(ctx, &plan, &vips, seenVIP, serving, ifaceOf, pools, allocs, nodes, checkers, wantProbers, given)
 	var serve []PlanVIP
 	for _, v := range vips {
 		if serving[v.Addr] {
@@ -770,6 +787,40 @@ func (s *session) liveNow(brief bool) ([]api.CheckIn, []api.Live, []api.Own) {
 		proto, _ := ipvs.ProtoNumber(v.Proto)
 		addr, _ := netip.ParseAddr(nodes[a.Node].Address)
 		st := stats[DestKey(ipvs.Service{Addr: vip, Protocol: proto, Port: uint16(v.Port)}, netip.AddrPortFrom(addr, uint16(v.Port)))]
+		l.Conns, l.Packets, l.Bytes, l.Active, l.Inactive = st.Conns, st.Packets, st.Bytes, st.Active, st.Inactive
+		live = append(live, l)
+	}
+	p.mu.Lock()
+	kl := make([]kubeLive, 0, len(p.kube))
+	for _, v := range p.kube {
+		kl = append(kl, v)
+	}
+	p.mu.Unlock()
+	sort.Slice(kl, func(i, j int) bool {
+		a, b := kl[i], kl[j]
+		if x, y := kubeLiveName(a.service, a.vip, a.proto, a.port), kubeLiveName(b.service, b.vip, b.proto, b.port); x != y {
+			return x < y
+		}
+		return a.node < b.node
+	})
+	for _, v := range kl {
+		l := api.Live{Service: kubeLiveName(v.service, v.vip, v.proto, v.port), Node: v.node, Address: v.addr.String(), Own: "-", Director: "-", Weight: v.weight}
+		p.mu.Lock()
+		l.By = p.checkBy[v.check]
+		if strings.HasPrefix(v.check, "none ") {
+			l.Director = "none"
+		} else if r, ok := p.remote[v.check]; ok && l.By != s.n.cfg.Name && r.by == l.By {
+			l.Director = map[bool]string{true: "ok", false: "fail"}[r.res.Healthy]
+		} else if pr := p.probers[v.check]; pr != nil {
+			pr.mu.Lock()
+			if pr.seen || pr.state.Healthy {
+				l.Director = pr.state.Word()
+			}
+			pr.mu.Unlock()
+		}
+		p.mu.Unlock()
+		pnum, _ := ipvs.ProtoNumber(v.proto)
+		st := stats[DestKey(ipvs.Service{Addr: v.vip, Protocol: pnum, Port: uint16(v.port)}, netip.AddrPortFrom(v.addr, uint16(v.port)))]
 		l.Conns, l.Packets, l.Bytes, l.Active, l.Inactive = st.Conns, st.Packets, st.Bytes, st.Active, st.Inactive
 		live = append(live, l)
 	}

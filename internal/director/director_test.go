@@ -19,6 +19,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
+	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/preflight"
@@ -169,6 +170,7 @@ type world struct {
 	machine string
 	plane   Dataplane         // nil: none
 	lacks   map[string]string // what preflight says the node lacks; nil: no preflight
+	kube    *kube.Client      // the Kubernetes API, when cfg.Kubeconfig is set
 	logs    *syncBuffer
 	started chan struct{}
 	stop    context.CancelFunc
@@ -231,6 +233,7 @@ func (w *world) deps() Deps {
 			return w.plane, nil
 		},
 		Preflight: w.preflight(),
+		Kube:      func(string) (*kube.Client, error) { return w.kube, nil },
 	}
 }
 
