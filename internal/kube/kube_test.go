@@ -396,3 +396,34 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+// The kubeconfig thelb generate k8s kubeconfig prints, as theLB reads it.
+func TestTheGeneratedKubeconfig(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	in := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+  - name: cluster
+    cluster:
+      server: %s
+      certificate-authority-data: %s
+users:
+  - name: thelb-director
+    user:
+      token: eyJhbGciOi.payload.sig
+contexts:
+  - name: thelb
+    context:
+      cluster: cluster
+      user: thelb-director
+current-context: thelb
+`, srv.URL, base64.StdEncoding.EncodeToString(testCA(t, srv)))
+	c, err := parseKubeconfig([]byte(in), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "eyJhbGciOi.payload.sig" || c.Server.String() != srv.URL {
+		t.Fatalf("%+v", c)
+	}
+}

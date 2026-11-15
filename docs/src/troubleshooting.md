@@ -3,7 +3,7 @@ title: Troubleshooting
 lead: Start with thelb doctor. It checks the machine, changes nothing, and tells you what to fix.
 description: Find and fix problems with theLB - thelb doctor, and the most common problems with their fixes.
 section: Guides
-order: 8
+order: 9
 nav: Troubleshooting
 ---
 

@@ -3,7 +3,7 @@ title: Status, logs and metrics
 lead: Three ways to see what theLB is doing - thelb status for now, the log for what happened, and Prometheus metrics for your dashboards.
 description: Watch theLB - thelb status and its views, the log format, --debug connection logs, and the Prometheus metrics endpoint.
 section: Guides
-order: 7
+order: 8
 nav: Status, logs, metrics
 ---
 

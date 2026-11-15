@@ -411,14 +411,16 @@ func selinux() []Finding {
 // inTheWay is other software that would fight theLB for VIPs, ARP or IPVS.
 func inTheWay(f Facts) []Finding {
 	var out []Finding
-	for _, p := range []struct{ comm, why string }{
-		{"keepalived", "keepalived moves VIPs and programs IPVS too: the two would undo each other's work"},
-		{"kube-proxy", "kube-proxy's rules catch VIP traffic before IPVS does: a director must not run it (design: Kubernetes)"},
-		{"cilium-agent", "Cilium's kube-proxy replacement catches VIP traffic before IPVS does on a director"},
-		{"kube-router", "kube-router programs IPVS too"},
+	for _, p := range []struct{ comm, why, fix string }{
+		{"keepalived", "keepalived moves VIPs and programs IPVS too: the two would undo each other's work", "stop it on this node, or run theLB elsewhere"},
+		{"kube-proxy", "kube-proxy's rules catch VIP traffic before IPVS does: a director must not run it",
+			"keep kube-proxy off this node - a node affinity on its DaemonSet - and reboot it to clear its rules; or run the director elsewhere"},
+		{"cilium-agent", "Cilium catches the VIPs' traffic before IPVS does, unless it leaves theLB's Services to this node",
+			"label this node dmarts.app/thelb-director=true, and give theLB's Services the annotation service.cilium.io/node-selector: \"!dmarts.app/thelb-director\" - the director checks the label when it starts"},
+		{"kube-router", "kube-router programs IPVS too", "stop it on this node, or run theLB elsewhere"},
 	} {
 		if len(processes(p.comm)) > 0 && (has(f, "director") || p.comm == "keepalived") {
-			out = append(out, Finding{Area: "in the way", Check: p.comm, State: Warn, Detail: "running: " + p.why, Fix: "stop it on this node, or run theLB elsewhere"})
+			out = append(out, Finding{Area: "in the way", Check: p.comm, State: Warn, Detail: "running: " + p.why, Fix: p.fix})
 		}
 	}
 	if has(f, "director") && module("ip_vs") == "loaded" {

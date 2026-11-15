@@ -84,8 +84,18 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 		_, _ = fmt.Fprint(stdout, head+k8sIdentity)
 		return nil
 	}
-	if args[0] != "director" {
-		return usagef("thelb generate k8s [director <the flags it runs with>]: the directors' identity, and a DaemonSet that runs them")
+	switch args[0] {
+	case "kubeconfig":
+		if len(args) > 1 {
+			return usagef("thelb generate k8s kubeconfig: unexpected %q", args[1])
+		}
+		_, _ = fmt.Fprintf(stdout, kubeconfigScript, version.Version)
+		return nil
+	case "service":
+		return generateK8sService(args[1:], stdout)
+	case "director":
+	default:
+		return usagef("thelb generate k8s [director <the flags it runs with> | kubeconfig | service <name> [flags]]")
 	}
 	flags := args[1:]
 	cmd := "generate k8s director"

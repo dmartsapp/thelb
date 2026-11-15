@@ -1,0 +1,27 @@
+# theLB 0.1.0, as `thelb generate k8s service` printed it: a Service of theLB's
+# class. Apply it: kubectl apply -f <this file>
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    # With directors on nodes of the cluster, and Cilium: Cilium leaves this
+    # Service to the directors there. Harmless anywhere else.
+    service.cilium.io/node-selector: "!dmarts.app/thelb-director"
+    # dmarts.app/thelb-pool: <pool>   a pool other than the default
+    # dmarts.app/thelb-ip: <address>   a particular address of the pool
+    # dmarts.app/thelb-shared-vip: <key>   one VIP for the Services that give the same key, their ports apart
+spec:
+  type: LoadBalancer
+  loadBalancerClass: dmarts.app/thelb
+  # Local: only the nodes with a ready pod of the Service get its traffic,
+  # weighted by their pods, and the pods see each client's own address.
+  externalTrafficPolicy: Local
+  selector:
+    app: "web"
+  ports:
+    - name: tcp-80
+      protocol: TCP
+      port: 80
+      targetPort: 80

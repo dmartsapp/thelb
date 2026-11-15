@@ -17,6 +17,9 @@ The Markdown dialect is a small, deliberate subset (see docs/src/tech-docs.md):
     ```bash / text / json     fenced code, with light syntax colouring
     :::note Title  ...  :::   callouts: note, tip, warning
     :::html ... :::           raw HTML passthrough (diagrams, cards)
+    :::example <file>         a file the binary wrote - docs/examples/<file>, from
+    caption                   thelb generate k8s (internal/cli's test keeps it so) - as a code
+    :::                       block, with a link to the file itself
     :::screen <name>          a screenshot: docs/screens/<name>.txt - captured from the real
     caption                   binary by docs/screens/capture.sh - drawn as a terminal window,
     :::                       docs/assets/screens/<name>.svg (screen_svg)
@@ -254,6 +257,8 @@ def render_blocks(lines, headings, used_ids):
                 out.append("\n".join(inner))
             elif kind == "screen":
                 out.append(screen_html(title, " ".join(x.strip() for x in inner if x.strip())))
+            elif kind == "example":
+                out.append(example_html(title, " ".join(x.strip() for x in inner if x.strip())))
             elif kind in CALLOUT_TITLES:
                 body = render_blocks(inner, [], used_ids)
                 out.append('<div class="callout callout-%s"><p class="callout-title">%s</p>%s</div>'
@@ -500,6 +505,28 @@ def screen_html(name, caption):
 
 
 # --------------------------------------------------------------------------
+# Examples: files the binary wrote - docs/examples/<file> - shown and offered
+# --------------------------------------------------------------------------
+
+EXAMPLES_DIR = DOCS / "examples"
+EXAMPLES = set()  # every file a :::example uses; main() checks none is left unused
+EXAMPLE_LANG = {".yaml": "yaml", ".yml": "yaml", ".sh": "bash", ".json": "json"}
+
+
+def example_html(name, caption):
+    """A :::example block: the file as a code block, its caption, and a link to it -
+    the file itself is published beside the pages, for curl or a browser."""
+    src = EXAMPLES_DIR / name
+    if not src.exists():
+        raise ValueError("no example %s - write them: THELB_WRITE_EXAMPLES=1 go test ./internal/cli -run TestTheDocsShowWhatGenerateK8sPrints"
+                         % src.relative_to(ROOT))
+    EXAMPLES.add(name)
+    cap = ('<p class="example-caption">%s</p>' % inline(caption)) if caption else ""
+    link = '<p class="example-file"><a href="examples/%s" download>%s</a></p>' % (html.escape(name, quote=True), html.escape(name))
+    return '<div class="example">%s%s%s</div>' % (cap, render_code(src.read_text().rstrip("\n"), EXAMPLE_LANG.get(src.suffix, "text")), link)
+
+
+# --------------------------------------------------------------------------
 # Page assembly
 # --------------------------------------------------------------------------
 
@@ -674,9 +701,9 @@ def check_links(rendered):
                 if frag and frag not in ids[name]:
                     problems.append("%s: #%s has no matching id" % (name, frag))
                 continue
-            if target.startswith("assets/"):
+            if target.startswith(("assets/", "examples/")):
                 if not (DOCS / target).exists():
-                    problems.append("%s: missing asset %s" % (name, target))
+                    problems.append("%s: missing file %s" % (name, target))
                 continue
             if target not in rendered:
                 problems.append("%s: link to missing page %s" % (name, target))
@@ -741,6 +768,9 @@ def main():
     rendered = {"%s.html" % p["slug"]: render_page(p, pages, version) for p in pages}
 
     problems = check_links(rendered) + check_site_urls(site_url_sources(), rendered)
+    if EXAMPLES_DIR.exists():
+        problems += ["docs/examples/%s: no page shows it" % f.name
+                     for f in sorted(EXAMPLES_DIR.iterdir()) if f.is_file() and f.name not in EXAMPLES]
     svgs = {"assets/screens/%s.svg" % n: svg for n, svg in SCREENS.items()}
     unused = sorted("assets/screens/%s" % f.name for f in SCREENS_OUT.glob("*.svg")
                     if "assets/screens/%s" % f.name not in svgs) if SCREENS_OUT.exists() else []

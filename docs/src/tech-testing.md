@@ -14,6 +14,7 @@ nav: Testing
 | Format, vet, unit tests, lint, vulnerabilities | `make check` | Go, golangci-lint, govulncheck | anywhere; also in the release workflow |
 | Kernel tests | part of `make e2e` | Linux, passwordless `sudo` | on a development machine |
 | End to end | `make e2e` | Linux, passwordless `sudo`, `python3`, `curl` | on a development machine, before every release |
+| Kubernetes, end to end | `make e2e-k8s` (and part of `make e2e`) | the same | on a development machine, before every release |
 | Scale | `make scale N=1000` | the same | on a development machine, when performance matters |
 
 ## `make check`
@@ -53,6 +54,21 @@ make remote-e2e REMOTE=<host>     # on another, over ssh: syncs the tree, runs i
 ```
 
 `make e2e` builds its own binary, `bin/e2e/thelb`, so it never replaces a `bin/thelb` someone may be running. If it fails, it keeps its files in `/tmp/thelb-e2e.*` and prints where.
+
+## The Kubernetes test
+
+`test/e2e-k8s.sh` tests the Kubernetes provider the same way, in a lab of its own: two directors, three nodes standing in for a cluster's nodes, a client, and **`test/kubeapi`**, a stand-in Kubernetes API server. It serves the little of the API theLB uses - lists and watches of Services, Nodes and EndpointSlices, a Service's status, access reviews, events - over TLS, from a state file the test edits; it records what theLB writes.
+
+Each node does what kube-proxy or Cilium does for a Service: it takes packets for the Service's VIP, hands them to its "pods" (a web server answering with the node's name), and answers on the Service's health port - `200`, or `503` when the test says so.
+
+It checks the directors' startup checks (a permission missing, a director on a node that is not labelled), a Service getting its VIP and status, the nodes with ready pods serving - weighted by their pods - and the others not, a node going unhealthy and coming back, addresses asked for, shared VIPs and a port clash, another provider's Service left alone, status on a follower, the leader killed, and a Service deleted.
+
+```bash
+make e2e-k8s                          # on this Linux machine
+make remote-e2e-k8s REMOTE=<host>     # on another
+```
+
+The unit tests check the rest: `internal/kube` against a fake API server; the director, in-process, against another; and `thelb generate k8s`'s output against the files the documentation shows (`docs/examples/`), so the two never differ.
 
 :::note Why not in CI?
 The end-to-end test takes several minutes of a whole machine, with root. Running it on every push in GitHub Actions would cost a lot and slow everything down. Instead, it runs on a development machine **before each release** - see [Releasing](tech-release.md).

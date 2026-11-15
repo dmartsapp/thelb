@@ -1,0 +1,199 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/netip"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/dmartsapp/thelb/internal/version"
+)
+
+// kubeconfigScript builds, where kubectl reaches the cluster, the kubeconfig of
+// directors outside it - from the thelb-director ServiceAccount's token, which
+// only the cluster knows. %s: the version.
+const kubeconfigScript = `#!/bin/sh
+# theLB %s, as ` + "`thelb generate k8s kubeconfig`" + ` printed it. Run it where kubectl
+# reaches the cluster, after applying what ` + "`thelb generate k8s`" + ` prints: it prints
+# the kubeconfig of directors outside the cluster, or under systemd on its
+# nodes - with the token of the ServiceAccount thelb-director.
+#   sh thelb-kubeconfig.sh > thelb.kubeconfig
+# Then, on each director:
+#   sudo install -D -m 600 thelb.kubeconfig /etc/thelb/kubeconfig
+# and start it with --kubeconfig /etc/thelb/kubeconfig.
+set -eu
+server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+ca=$(kubectl -n thelb get secret thelb-director-token -o jsonpath='{.data.ca\.crt}')
+token=$(kubectl -n thelb get secret thelb-director-token -o jsonpath='{.data.token}' | base64 -d)
+if [ -z "$token" ]; then
+	echo "the Secret thelb/thelb-director-token has no token yet: apply what thelb generate k8s prints, then try again" >&2
+	exit 1
+fi
+cat <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: cluster
+    cluster:
+      server: $server
+      certificate-authority-data: $ca
+users:
+  - name: thelb-director
+    user:
+      token: $token
+contexts:
+  - name: thelb
+    context:
+      cluster: cluster
+      user: thelb-director
+current-context: thelb
+EOF
+`
+
+var (
+	k8sNameRE      = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	k8sNamespaceRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	k8sLabelRE     = regexp.MustCompile(`^([a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?/)?[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?=([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?$`)
+	k8sPortRE      = regexp.MustCompile(`^(\d+)(/(tcp|udp|sctp))?(:(\d+))?$`)
+)
+
+// portFlags is a repeated --port.
+type portFlags []string
+
+func (p *portFlags) String() string     { return strings.Join(*p, ",") }
+func (p *portFlags) Set(v string) error { *p = append(*p, v); return nil }
+
+// generateK8sService prints a Service of theLB's class, for the user to apply:
+// its name, namespace, ports, the pods it selects, and theLB's annotations.
+func generateK8sService(args []string, stdout io.Writer) error {
+	const cmd = "thelb generate k8s service"
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return usagef("%s <name> [--namespace <ns>] [--port <port>[/tcp|udp|sctp][:<pods' port>] ...] [--selector <key=value>] [--pool <pool>] [--ip <address>] [--shared-vip <key>] [--policy Local|Cluster]", cmd)
+	}
+	name := args[0]
+	fs := newFlags("generate k8s service")
+	ns := fs.String("namespace", "default", "")
+	var ports portFlags
+	fs.Var(&ports, "port", "")
+	selector := fs.String("selector", "", "")
+	pool := fs.String("pool", "", "")
+	ip := fs.String("ip", "", "")
+	share := fs.String("shared-vip", "", "")
+	policy := fs.String("policy", "Local", "")
+	if err := parse(fs, args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return usagef("%s: unexpected %q", cmd, fs.Arg(0))
+	}
+	switch {
+	case !k8sNameRE.MatchString(name):
+		return usagef("%s: a Service's name is lowercase letters, digits and hyphens, beginning with a letter, up to 63: %q", cmd, name)
+	case !k8sNamespaceRE.MatchString(*ns):
+		return usagef("%s: --namespace %q is not a namespace's name", cmd, *ns)
+	case *policy != "Local" && *policy != "Cluster":
+		return usagef("%s: --policy is Local or Cluster, not %q", cmd, *policy)
+	case *pool != "" && !nameRE.MatchString(*pool):
+		return usagef("%s: --pool %q is not a pool's name", cmd, *pool)
+	case *share != "" && !k8sNamespaceRE.MatchString(*share):
+		return usagef("%s: --shared-vip is lowercase letters, digits and hyphens: %q", cmd, *share)
+	}
+	if *selector == "" {
+		*selector = "app=" + name
+	}
+	if !k8sLabelRE.MatchString(*selector) {
+		return usagef("%s: --selector is one label, key=value: %q", cmd, *selector)
+	}
+	if *ip != "" {
+		a, err := netip.ParseAddr(*ip)
+		if err != nil {
+			return usagef("%s: --ip %q is not an address", cmd, *ip)
+		}
+		*ip = a.Unmap().String()
+	}
+	if len(ports) == 0 {
+		ports = portFlags{"80"}
+	}
+	type port struct {
+		proto      string
+		port, pods int
+	}
+	var ps []port
+	seen := map[string]bool{}
+	for _, p := range ports {
+		m := k8sPortRE.FindStringSubmatch(p)
+		if m == nil {
+			return usagef("%s: --port is a port, its protocol, and the pods' port if it differs: 80, 53/udp, 80:8080 or 443/tcp:8443 - not %q", cmd, p)
+		}
+		proto := m[3]
+		if proto == "" {
+			proto = "tcp"
+		}
+		n, _ := strconv.Atoi(m[1])
+		pods := n
+		if m[5] != "" {
+			pods, _ = strconv.Atoi(m[5])
+		}
+		if n < 1 || n > 65535 || pods < 1 || pods > 65535 {
+			return usagef("%s: --port %q: ports are 1 to 65535", cmd, p)
+		}
+		k := fmt.Sprintf("%s/%d", proto, n)
+		if seen[k] {
+			return usagef("%s: --port %s twice", cmd, k)
+		}
+		seen[k] = true
+		ps = append(ps, port{proto: proto, port: n, pods: pods})
+	}
+	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
+	var b strings.Builder
+	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
+	w("# theLB %s, as `thelb generate k8s service` printed it: a Service of theLB's", version.Version)
+	w("# class. Apply it: kubectl apply -f <this file>")
+	w("apiVersion: v1")
+	w("kind: Service")
+	w("metadata:")
+	w("  name: %s", name)
+	w("  namespace: %s", *ns)
+	w("  annotations:")
+	w("    # With directors on nodes of the cluster, and Cilium: Cilium leaves this")
+	w("    # Service to the directors there. Harmless anywhere else.")
+	w(`    service.cilium.io/node-selector: "!dmarts.app/thelb-director"`)
+	for _, a := range []struct{ key, val, what, about string }{
+		{"dmarts.app/thelb-pool", *pool, "pool", "a pool other than the default"},
+		{"dmarts.app/thelb-ip", *ip, "address", "a particular address of the pool"},
+		{"dmarts.app/thelb-shared-vip", *share, "key", "one VIP for the Services that give the same key, their ports apart"},
+	} {
+		if a.val != "" {
+			w("    # %s:", strings.ToUpper(a.about[:1])+a.about[1:])
+			w("    %s: %s", a.key, q(a.val))
+		} else {
+			w("    # %s: <%s>   %s", a.key, a.what, a.about)
+		}
+	}
+	w("spec:")
+	w("  type: LoadBalancer")
+	w("  loadBalancerClass: dmarts.app/thelb")
+	if *policy == "Local" {
+		w("  # Local: only the nodes with a ready pod of the Service get its traffic,")
+		w("  # weighted by their pods, and the pods see each client's own address.")
+	} else {
+		w("  # Cluster: every ready node gets traffic, and passes it on to a pod on any")
+		w("  # node - which sees a node's address, not the client's.")
+	}
+	w("  externalTrafficPolicy: %s", *policy)
+	key, val, _ := strings.Cut(*selector, "=")
+	w("  selector:")
+	w("    %s: %s", key, q(val))
+	w("  ports:")
+	for _, p := range ps {
+		w("    - name: %s-%d", p.proto, p.port)
+		w("      protocol: %s", strings.ToUpper(p.proto))
+		w("      port: %d", p.port)
+		w("      targetPort: %d", p.pods)
+	}
+	_, _ = fmt.Fprint(stdout, b.String())
+	return nil
+}

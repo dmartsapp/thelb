@@ -236,6 +236,11 @@ td code { white-space: nowrap; }
 .screentext { margin: .35em 0 0; font-size: .82rem; }
 .screentext summary { cursor: pointer; color: var(--muted); width: max-content; }
 .screentext pre { margin: .5em 0 0; padding: 12px 14px; overflow-x: auto; background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 8px; }
+.example { margin: 1.1em 0; }
+.example pre { margin: 0; }
+.example-caption { margin: 0 0 .4em; color: var(--muted); font-size: .9rem; }
+.example-file { margin: .35em 0 0; font-size: .82rem; }
+.example-file a::before { content: "\2193\00a0"; }
 .screentext code { font: .8rem/1.55 var(--mono); color: var(--code-text); white-space: pre; }
 
 /* ---------- responsive ---------- */

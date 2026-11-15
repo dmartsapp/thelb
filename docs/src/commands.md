@@ -13,7 +13,8 @@ Every command except `--help` and `--version` runs only as root. The exit status
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
-               [--bootstrap] [--cluster <name>] [--name <name>] [--interface <name>] [--metrics <address:port>] [--debug]
+               [--bootstrap [--bootstrap-wait <duration>]] [--cluster <name>] [--name <name>] [--interface <name>]
+               [--metrics <address:port>] [--debug] [--kubeconfig <file>|in-cluster]
 thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name>=]<proto>/<port>[,check=tcp|none|http:<path>] ...]
                [--name <name>] [--interface <name>] [--metrics <address:port>]
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
@@ -25,6 +26,7 @@ thelb generate commands
 thelb generate systemd director|backend <the flags it runs with>
 thelb generate sysctl director|backend
 thelb generate modules director|backend
+thelb generate k8s [director <the flags it runs with> | kubeconfig | service <name> [flags]]
 thelb admin approve <name> ... | --match '<regex>' [--yes]
 thelb admin refuse <name>
 thelb admin remove <name>
@@ -55,6 +57,8 @@ Runs a director. See [Directors and failover](directors.md).
 | `--interface` | the control VIP's interface, when it is not the one in its network |
 | `--metrics` | serve [Prometheus metrics](monitoring.md#metrics) on this address and port; not `0.0.0.0` or `::` |
 | `--debug` | log each new connection while leading - see [`--debug`](monitoring.md#each-connection-with-debug) |
+| `--kubeconfig` | serve [Kubernetes](kubernetes.md) Services of class `dmarts.app/thelb`, with this credential: a kubeconfig file (an absolute path), or `in-cluster` for a pod's ServiceAccount |
+| `--bootstrap-wait` | with `--bootstrap`: how long to look for the cluster before creating one (default `5s`; `5s` to `10m`). A director in a pod uses `31s` or more - see [Kubernetes](kubernetes.md#2b-directors-on-nodes-as-a-daemonset) |
 
 ## `thelb backend`
 
@@ -105,6 +109,10 @@ Prints something for you to keep or install. It never changes the machine.
 | `generate systemd director\|backend <flags>` | a systemd unit - [Running under systemd](systemd.md) |
 | `generate sysctl director\|backend` | the kernel settings theLB sets, for `/etc/sysctl.d` |
 | `generate modules director\|backend` | the kernel modules theLB uses, for `/etc/modules-load.d` |
+| `generate k8s` | the directors' identity and permissions in a Kubernetes cluster - [Kubernetes](kubernetes.md#1-the-directors-identity) |
+| `generate k8s director <flags>` | the same, and a DaemonSet that runs directors with those flags on the nodes labelled for them - [Kubernetes](kubernetes.md#2b-directors-on-nodes-as-a-daemonset) |
+| `generate k8s kubeconfig` | a script that builds the kubeconfig of directors outside the cluster - [Kubernetes](kubernetes.md#2a-directors-outside-the-cluster) |
+| `generate k8s service <name> [flags]` | a Service of theLB's class - [Kubernetes](kubernetes.md#4-a-service) |
 
 ## `thelb admin`
 

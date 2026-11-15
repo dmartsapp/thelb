@@ -23,11 +23,11 @@ theLB is a load balancer for Linux in one binary. Run it on your machines and th
 
 ## Status
 
-**v0.1.0, the first release** ([changelog](CHANGELOG.md)): directors forming a cluster with Raft - joining with a secret and an approval, the leader holding the control VIP, failover, two directors surviving either one's crash - and backends serving services through IPVS, by direct routing or IP-in-IP, with port mapping and health checks from both sides, shared across the directors. VIPs leased from the kernel, connection synchronisation, drift repair, `thelb status`, `doctor`, `generate` (systemd units, kernel parameters, the cluster's commands) and Prometheus metrics. Linux only; Kubernetes comes next.
+**v0.1.0, the first release** ([changelog](CHANGELOG.md)): directors forming a cluster with Raft - joining with a secret and an approval, the leader holding the control VIP, failover, two directors surviving either one's crash - and backends serving services through IPVS, by direct routing or IP-in-IP, with port mapping and health checks from both sides, shared across the directors. VIPs leased from the kernel, connection synchronisation, drift repair, `thelb status`, `doctor`, `generate` (systemd units, kernel parameters, the cluster's commands, Kubernetes manifests) and Prometheus metrics. **Kubernetes**: Services of type `LoadBalancer` and class `dmarts.app/thelb` get their VIPs from theLB, which sends their traffic straight to the nodes running their pods - nothing of theLB on the nodes; directors outside the cluster or on its nodes, under systemd or as a DaemonSet ([Kubernetes](https://dmartsapp.github.io/thelb/docs/kubernetes.html)). Linux only.
 
 ## Releases
 
-Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries (amd64, arm, arm64), their SHA-256 sums, SBOMs (CycloneDX and SPDX), and attestations of their build provenance and SBOMs - see [Install](https://dmartsapp.github.io/thelb/docs/install.html) to download and check one, and [SECURITY.md](SECURITY.md) to report a vulnerability. Releases are tagged `vX.Y.Z` on `release/vX.Y` branches: the tag is the only thing that runs a workflow ([Releasing](https://dmartsapp.github.io/thelb/docs/tech-release.html)). The end-to-end test runs on a development machine before each release, not in CI.
+Each [release](https://github.com/dmartsapp/thelb/releases) has the Linux binaries (amd64, arm, arm64), their SHA-256 sums, SBOMs (CycloneDX and SPDX), and attestations of their build provenance and SBOMs, and a container image of the same binaries, `ghcr.io/dmartsapp/thelb:<version>`, for directors in a Kubernetes cluster - see [Install](https://dmartsapp.github.io/thelb/docs/install.html) to download and check one, and [SECURITY.md](SECURITY.md) to report a vulnerability. Releases are tagged `vX.Y.Z` on `release/vX.Y` branches: the tag is the only thing that runs a workflow ([Releasing](https://dmartsapp.github.io/thelb/docs/tech-release.html)). The end-to-end test runs on a development machine before each release, not in CI.
 
 ## Building and testing
 
@@ -37,8 +37,10 @@ theLB is Linux only, and built with Go 1.27.4 or later. `make` is the one place 
 make build                         # bin/thelb.linux.amd64, .arm and .arm64
 make check                         # gofmt, go vet, go test -race, golangci-lint v2.15.0, govulncheck
 make e2e                           # the kernel tests, and the binary in a lab of network namespaces (Linux, passwordless sudo)
+make e2e-k8s                       # the Kubernetes provider in a lab, against a stand-in API server (make e2e runs it too)
 make remote-check REMOTE=<host>    # make check on a Linux machine, over ssh
 make remote-e2e REMOTE=<host>      # make e2e there
+make remote-e2e-k8s REMOTE=<host>  # make e2e-k8s there
 make lab                           # a lab to try by hand, on one Linux machine (root)
 make lab-down                      # take it away
 make remote-screens REMOTE=<host>  # the documentation's screenshots, captured there

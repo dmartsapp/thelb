@@ -1,0 +1,52 @@
+# theLB 0.1.0, as `thelb generate k8s` printed it: the directors' identity and
+# permissions in the cluster. Apply it: kubectl apply -f <this file>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: thelb
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thelb-director
+  namespace: thelb
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thelb-director
+rules:
+  - apiGroups: [""]
+    resources: ["services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thelb-director
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: thelb-director
+subjects:
+  - kind: ServiceAccount
+    name: thelb-director
+    namespace: thelb
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thelb-director-token
+  namespace: thelb
+  annotations:
+    kubernetes.io/service-account.name: thelb-director
+type: kubernetes.io/service-account-token

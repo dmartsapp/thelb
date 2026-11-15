@@ -25,7 +25,7 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e scale lab lab-down screens remote-sync remote-check remote-e2e remote-scale remote-screens clean
+.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e e2e-k8s scale lab lab-down screens remote-sync remote-check remote-e2e remote-e2e-k8s remote-scale remote-screens clean
 
 build:
 	@for arch in amd64 arm arm64; do \
@@ -91,6 +91,15 @@ e2e:
 	@# Its own binary: never the bin/thelb someone may be running.
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
 	@sudo -n test/e2e.sh bin/e2e/thelb
+	@$(MAKE) -s e2e-k8s
+
+# e2e-k8s: the Kubernetes provider end to end, against a stand-in API server
+# (test/kubeapi); make e2e runs it too.
+e2e-k8s:
+	@echo "==> Kubernetes, end to end, as root"
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
+	@CGO_ENABLED=0 $(GO) build -trimpath -o bin/e2e/kubeapi ./test/kubeapi
+	@sudo -n test/e2e-k8s.sh bin/e2e/thelb bin/e2e/kubeapi
 
 # scale: N services - each its own VIP, three backends - on three directors,
 # and what that costs (N=1000 by default).
@@ -126,6 +135,9 @@ remote-check: remote-sync
 
 remote-e2e: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e COMMIT=$(COMMIT)'
+
+remote-e2e-k8s: remote-sync
+	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e-k8s COMMIT=$(COMMIT)'
 
 remote-scale: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make scale N=$(N) PROFILE=$(PROFILE) COMMIT=$(COMMIT)'

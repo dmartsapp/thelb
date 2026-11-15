@@ -23,7 +23,7 @@ So a documentation change is just a commit to `main`: the site updates within a 
 
    ```bash
    make check
-   make remote-e2e REMOTE=<host>      # or make e2e on the machine itself
+   make remote-e2e REMOTE=<host>      # or make e2e on the machine itself; it runs make e2e-k8s too
    ```
 
 2. **Write the changelog.** `CHANGELOG.md` must have a section `## vX.Y.Z - <date>` with what changed. Its text becomes the release page.
@@ -46,15 +46,24 @@ The tag must be on its `release/vX.Y` branch: the workflow checks, and stops if 
 
 ## The Release workflow
 
-`.github/workflows/release.yaml` has three jobs:
+`.github/workflows/release.yaml` has four jobs:
 
 | Job | What it does |
 |---|---|
 | **check** | the tag is on its release branch; `make check` (with fixed versions of golangci-lint and govulncheck); the scripts' tests; `docs/build.py --check` |
 | **build** (amd64, arm, arm64) | builds the binary with `make dist-one`; attests its build provenance; writes its `.sha256`; writes its SBOMs (CycloneDX 1.6 and SPDX 2.3) and attests both |
-| **publish** | collects every file, writes `SHA256SUMS`, and creates the GitHub release with the changelog's section as its notes |
+| **image** | copies the three binaries the build jobs attested into a container image for each platform (`linux/amd64`, `linux/arm/v7`, `linux/arm64`), on `distroless/static`, and pushes it to `ghcr.io/dmartsapp/thelb` as `X.Y.Z`, `X.Y` and `latest`, with BuildKit's SBOM and provenance and a signed attestation |
+| **publish** | collects every file, writes `SHA256SUMS`, and creates the GitHub release with the changelog's section as its notes - after the image, so a release never names an image that is not there |
 
-Every third-party action is pinned to a full commit hash. Jobs get only the permissions they need: the build jobs may sign attestations, and only the publish job may write the release.
+Every third-party action is pinned to a full commit hash. Jobs get only the permissions they need: the build jobs may sign attestations, the image job may push to the repository's packages, and only the publish job may write the release.
+
+### The container image
+
+The `Dockerfile` builds nothing: it copies `dist/thelb-<version>-linux-<arch>` into `gcr.io/distroless/static-debian12`, so the image runs the very file the release publishes. It runs as root - theLB requires it - and is meant for `thelb generate k8s director`'s DaemonSet. Check it:
+
+```bash
+gh attestation verify oci://ghcr.io/dmartsapp/thelb:{{version}} --repo dmartsapp/thelb
+```
 
 ### The SBOMs
 
@@ -84,5 +93,6 @@ gh secret set SLACK_WEBHOOK_URL --repo dmartsapp/thelb
 ## After a release
 
 - Check the release page: three binaries, three `.sha256` files, six SBOMs, and `SHA256SUMS`.
+- Check the image: `docker pull ghcr.io/dmartsapp/thelb:{{version}}`. **After the first release only**, make the package public: GitHub keeps a new package private - the repository's **Packages**, `thelb`, **Package settings**, **Change visibility**.
 - Check one download: `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify` - see [Security](security.md#check-a-release).
 - Development goes on on `main`. Fixes for a released line are merged to its `release/vX.Y` branch and tagged `vX.Y.Z+1`.

@@ -116,6 +116,26 @@ class Screens(unittest.TestCase):
             build.screen_html("no-such-screen", "")
 
 
+class Examples(unittest.TestCase):
+    """example_html: a file thelb generate k8s wrote, shown as code with a link to it."""
+
+    def test_an_example_is_its_file_with_a_link(self):
+        html = build.example_html("web-service.yaml", "The Service.")
+        self.assertIn('<p class="example-caption">The Service.</p>', html)
+        self.assertIn('href="examples/web-service.yaml" download', html)
+        self.assertIn("loadBalancerClass", html)
+        self.assertIn("web-service.yaml", build.EXAMPLES)
+
+    def test_the_block_needs_its_file(self):
+        with self.assertRaisesRegex(ValueError, "THELB_WRITE_EXAMPLES"):
+            build.example_html("no-such-file.yaml", "")
+
+    def test_every_example_is_shown(self):
+        rendered_site()
+        files = {f.name for f in build.EXAMPLES_DIR.iterdir() if f.is_file()}
+        self.assertEqual(files - build.EXAMPLES, set())
+
+
 class SiteUrlCheck(unittest.TestCase):
     """check_site_urls: absolute URLs of the published site must name files that exist."""
 

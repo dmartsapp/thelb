@@ -1,0 +1,152 @@
+# theLB 0.1.0, as `thelb generate k8s` printed it: the directors' identity and
+# permissions in the cluster. Apply it: kubectl apply -f <this file>
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: thelb
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thelb-director
+  namespace: thelb
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thelb-director
+rules:
+  - apiGroups: [""]
+    resources: ["services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thelb-director
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: thelb-director
+subjects:
+  - kind: ServiceAccount
+    name: thelb-director
+    namespace: thelb
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thelb-director-token
+  namespace: thelb
+  annotations:
+    kubernetes.io/service-account.name: thelb-director
+type: kubernetes.io/service-account-token
+---
+# The directors, on the nodes labelled for them:
+#   kubectl label node <node> dmarts.app/thelb-director=true
+# Its secret files come from the Secret thelb-secrets - the cluster's two
+# secret files, copied from a director:
+#   kubectl -n thelb create secret generic thelb-secrets \
+#     --from-file=director.secret=<the directors' secret file> \
+#     --from-file=backend.secret=<the backends' secret file>
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: thelb-director
+  namespace: thelb
+  labels:
+    app.kubernetes.io/name: thelb-director
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thelb-director
+  minReadySeconds: 10
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thelb-director
+    spec:
+      serviceAccountName: thelb-director
+      hostNetwork: true
+      nodeSelector:
+        dmarts.app/thelb-director: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: dmarts.app/thelb-director
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: director
+          image: ghcr.io/dmartsapp/thelb:0.1.0
+          args:
+            - director
+            - "--vip"
+            - "10.0.0.10"
+            - "--port"
+            - "7443"
+            - "--secret-file"
+            - "/etc/thelb/director.secret"
+            - "--backend-secret-file"
+            - "/etc/thelb/backend.secret"
+            - "--kubeconfig"
+            - "in-cluster"
+            - "--metrics"
+            - "127.0.0.1:9180"
+          securityContext:
+            # theLB writes /proc/sys/net, which a container runtime mounts
+            # read-only otherwise, and may load the kernel's modules.
+            privileged: true
+          readinessProbe:
+            httpGet:
+              host: "127.0.0.1"
+              port: 9180
+              path: /readyz
+            periodSeconds: 2
+          volumeMounts:
+            - name: secrets
+              mountPath: "/etc/thelb"
+              readOnly: true
+            - name: machine-id
+              mountPath: /etc/machine-id
+              readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: run
+              mountPath: /run/thelb
+      volumes:
+        - name: secrets
+          secret:
+            secretName: thelb-secrets
+            defaultMode: 0400
+        # The node's machine ID, for its node fingerprint: a restarted pod
+        # rejoins without approval.
+        - name: machine-id
+          hostPath:
+            path: /etc/machine-id
+            type: File
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        # thelb status and thelb admin work on the node, as on any director.
+        - name: run
+          hostPath:
+            path: /run/thelb
+            type: DirectoryOrCreate

@@ -40,7 +40,7 @@ from datetime import datetime
 # step with the workflow files, so adding a release workflow without listing it
 # here fails `make workflows`.
 WORKFLOWS = [
-    ("Release", "Release: checks, Linux builds, SBOMs and attestations, publishing"),
+    ("Release", "Release: checks, Linux builds, SBOMs and attestations, the container image, publishing"),
 ]
 
 GREEN, RED, AMBER = "#2EB67D", "#E01E5A", "#ECB22E"

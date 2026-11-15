@@ -111,4 +111,4 @@ The lab's client asking each service a few times, and counting who answered.
 
 ## Status
 
-theLB {{version}} is the first release. It runs on **Linux only** (amd64, arm64 and 32-bit arm). Kubernetes support - serving Services of type `LoadBalancer` - comes next. See the [changelog](changelog.md) for what each release changed.
+theLB {{version}} is the first release. It runs on **Linux only** (amd64, arm64 and 32-bit arm), and serves [Kubernetes](kubernetes.md) Services of type `LoadBalancer`. See the [changelog](changelog.md) for what each release changed.
