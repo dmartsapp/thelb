@@ -52,7 +52,7 @@ Not in scope, for now: proxying (a later capability - see [Phases](#phases)), NA
 | **Leader** | The director Raft has elected. It holds the control VIP, signs certificates, and decides; the others follow. |
 | **Control VIP** | The cluster's own VIP, held by the leader: the address backends and the command line talk to, on the control port. |
 | **Backend** | A node that serves a service's traffic: it holds the VIP without announcing it, and answers clients directly. IPVS calls it a real server. |
-| **Agent** | theLB running on a backend - under systemd, on a Kubernetes node as on any other machine. |
+| **Agent** | theLB running on a backend, under systemd. Kubernetes nodes need none: their own service proxy does a backend's work (see [Kubernetes](#kubernetes)). |
 | **Cluster secrets** | Two random secrets - one for directors, one for backends - created by the director that first bootstraps the cluster, in the files the user names, and copied by the user to every node of that role. A node joins by proving it knows its role's secret. |
 | **Pool** | Service VIPs a director registered: a first address in CIDR notation, and how many addresses follow it. The control VIP is in no pool. |
 | **Offer** | What a backend registers: one of its applications, under a name the backend chooses (`shop`), the protocol and port it listens on (`tcp/8080`), and how to check it. Made when the backend starts or while it runs, and recorded only once the leader's check of it passes. No service and no VIP: the same application may listen on 8080 on one node and on 9090 on another. |
@@ -67,6 +67,7 @@ Direct return has hard requirements, and theLB checks them rather than hoping:
 - **Backends must accept traffic to the VIP and must not announce it** - see [Kernel state](#kernel-state-thelb-manages).
 - **Backends' replies must be let out with the VIP as their source.** A backend answers from the VIP through its own gateway; a router or firewall on that way that filters by source address drops the replies. An assignment checks this before any traffic is sent ([Offers, services and assignments](#offers-services-and-assignments)). A stateful firewall that the replies pass and the requests do not would drop them too, and that cannot be checked from either end: direct return needs a network without one.
 - **The network must let a VIP move between machines.** On-premises switches and most hypervisors do (some need settings such as accepting forged transmits); public clouds generally do not. `thelb doctor` detects the major clouds and says so.
+- **Docker hosts, standalone or in a Swarm, are backends like any other** (the user, 2026-11-15): theLB runs under systemd on the host, not in a container, and offers a container's published port. Docker publishes a port for every local address of the host - the VIP on `thelb0` too - and connection tracking turns the replies back, so the reply still goes straight to the client. A Swarm's routing mesh hides the client's address from the task; publishing in `mode: host` keeps it. To be tested in the lab.
 - **Linux only**, with IPVS in the kernel: **kernel 5.14 or later**, so that RHEL 9 and its rebuilds (Rocky, AlmaLinux), still in extended support, are covered - see [Kernels](#kernels).
 
 ### Kernels
@@ -103,7 +104,7 @@ Every node runs the same binary, as `thelb director` or `thelb backend`:
 - **When it does not lead**, it is a backend like any other: the VIP on `thelb0`, `arp_ignore` and `arp_announce` set (which leave the director's own VIPs, on the receiving interface, answered), traffic sent to it by the leader.
 - **Its own offers use the service's port**: a port-mapping rule at prerouting would also catch the clients' packets while it leads - before IPVS - so an offer from a director's address is assigned only on the service's port; other backends may still map.
 - **Nothing pinned for itself**: the leader pins backends' MAC addresses, but not its own address - its own share never leaves the machine.
-- `thelb status` there is the director's view, in which the machine appears twice: as a director, and as its backend. On a Kubernetes node, the backend role mostly checks rather than configures: kube-proxy already accepts traffic for a Service's load-balancer IP (see [Kubernetes](#kubernetes)).
+- `thelb status` there is the director's view, in which the machine appears twice: as a director, and as its backend.
 
 ## The data path
 
@@ -426,7 +427,7 @@ Then the backend adds the VIP to `thelb0`, maps the service's port to its own - 
 
 **A backend never chooses a service**, so a compromised backend cannot claim one: it can offer, and a director decides.
 
-**A Kubernetes Service is a service already**: its name, ports and protocols are its own, and its backends are its nodes - each node's host enrolled and approved as a theLB backend first. After that, its Services need no offers and no assignments: they are handled by themselves (see [Kubernetes](#kubernetes)).
+**A Kubernetes Service is a service already**: its name, ports and protocols are its own, and its backends are the cluster's ready nodes, with no theLB on them. It needs no offers and no assignments (see [Kubernetes](#kubernetes)).
 
 ## The cluster, and what Raft carries
 
@@ -489,53 +490,88 @@ The cluster's state is gone, by design; its secrets are not, because they are th
 
 theLB is a provider for Services of type `LoadBalancer`, for **Kubernetes 1.35.0 and later**. It refuses to start against an older API server.
 
+**Tested by hand on 2026-11-15, before any code**, on Kubernetes 1.36 with Cilium 1.20.1 as kube-proxy replacement (VXLAN tunnel mode). The test used a Service of theLB's class with its status written by hand, and sent packets to a node's MAC address, as a director's direct routing does:
+
+- Cilium's address management and L2 announcements left the Service alone.
+- Each node's health port told nodes with a ready pod (`200`) from the others (`503`).
+- A node with a pod handed it the packet: the pod saw the client's own address, and the reply came from the VIP straight to the client.
+- A node without a pod refused at once.
+- Cilium dropped the Service on a node labelled as a director, and took it back when the label went.
+
+kube-proxy's modes are still to be tested.
+
 ### How traffic reaches the pods
 
-With direct return, a packet reaches a node with the VIP as its destination. **kube-proxy already handles that**: it programs every Service's load-balancer IP, so the packet goes on to a pod, and the reply leaves from the node, with the VIP as its source, straight to the client. theLB therefore:
+**theLB adds nothing on the nodes.** Each node's own service proxy - kube-proxy, or a replacement such as Cilium's - already programs every Service's load-balancer IP from the Service's status. A packet that reaches a node with the VIP as its destination goes on to a pod, and the reply leaves from the node, with the VIP as its source, straight to the client: direct return, done by Kubernetes itself. theLB therefore:
 
-- uses the **nodes as backends**, at the **Service's port** (not its node port): the packet keeps `VIP:port`, which kube-proxy matches, and the Service's `targetPort` already maps it to the pods' port;
-- writes `status.loadBalancer.ingress` with **`ipMode: VIP`**: the load balancer passes packets through unchanged, so kube-proxy may also send in-cluster traffic for the VIP straight to the pods;
-- needs nodes **not to answer ARP for the VIP**. kube-proxy in IPVS mode puts load-balancer IPs on its own interface, `kube-ipvs0`, on every node; theLB's backend on the node sets `arp_ignore` and `arp_announce` at runtime - what kube-proxy's `strictARP` would set - so kube-proxy's configuration needs no change.
-- **patches nothing of kube-proxy's or Cilium's**: both read the Service's status, and theLB writes only that. Cilium's own LB-IPAM, L2 announcements and BGP take only Services without a class, or with Cilium's own, so `dmarts.app/thelb` keeps them away. To verify in kind (phase 3): that kube-proxy, in each of its modes, and Cilium's kube-proxy replacement program the load-balancer IP of a Service of another provider's class from its status.
+- uses the **nodes as backends**, at the **Service's port**, not its node port. The packet keeps `VIP:port`, which the node's proxy matches, and the Service's `targetPort` already maps it to the pods' port.
+- writes `status.loadBalancer.ingress` with **`ipMode: VIP`**. Packets pass through unchanged, so the proxy may also send in-cluster traffic for the VIP straight to the pods.
+- forwards to the nodes by **direct routing** only, so the nodes share a network with the directors. IP-in-IP would need theLB on every node to unwrap the packets.
+- needs nodes **not to answer ARP for the VIP**. Cilium, and kube-proxy's iptables and nftables modes, put the VIP on no interface, so nothing answers. kube-proxy's IPVS mode puts it on `kube-ipvs0` on every node, and needs **`strictARP: true`** in its configuration, as for MetalLB.
+- **changes nothing in the cluster but a Service's status**: no Service's spec or annotations, nothing of kube-proxy's or Cilium's. Cilium's address management (LB-IPAM), L2 announcements and BGP take only Services without a class or with Cilium's own, so `dmarts.app/thelb` keeps them away. This was checked in Cilium 1.20.1's source, and on a cluster.
 
 ### Which Services, and which backends
 
-- Services of type `LoadBalancer` with **`spec.loadBalancerClass`** set to theLB's class, **`dmarts.app/thelb`**, so theLB never takes Services meant for another provider.
-- **VIPs from theLB's own [address pools](#address-pools)**; dual-stack Services (`spec.ipFamilies`) get one VIP per family. A Service brings its own name, ports and protocols, so it needs no offers: its nodes are its backends.
-- **Sharing a VIP**: Services with the same `dmarts.app/thelb-shared-vip` annotation share one VIP, as long as their ports do not overlap - each keeps its own backends.
-- **A node is a backend only when its host runs theLB as a backend that a director approved** - matched to its Node by address - and has reported ready. A Kubernetes node goes through the same approval as any backend; once it is approved, its Services are handled by themselves - a VIP from their pool, the right nodes as backends - with no offers and no assignments.
-- **`externalTrafficPolicy: Local`**: backends are the nodes with ready endpoints, checked at the Service's `healthCheckNodePort`, which kube-proxy answers per node; the client's address reaches the pod.
-- **`externalTrafficPolicy: Cluster`**: every ready node is a backend, checked through kube-proxy's own health endpoint.
-- **A director can be a Kubernetes node, but not one running kube-proxy** (or a replacement for it, such as Cilium's). The catch is in the data path: kube-proxy programs every Service's load-balancer IP on every node, ahead of IPVS. A packet for the VIP that reaches a director which is also a kube-proxy node is taken by kube-proxy's rules - in `PREROUTING` for its iptables and nftables modes, earlier still for eBPF - before IPVS, which sits at `LOCAL_IN`, ever sees it. That node then sends every connection to pods itself, the replies come back through it, direct return is lost, and theLB's IPVS service is never used; with `externalTrafficPolicy: Local` and no pod on that node, kube-proxy drops the packet instead. In IPVS mode, kube-proxy also manages the same kernel IPVS table and the same IPVS parameters as theLB, and the two would undo each other's changes. `ipMode` cannot help: it applies to every node at once, and the backends need `VIP`.
-- So a director that is a Kubernetes node is a **dedicated** node: tainted so that no workload runs on it, and with kube-proxy kept off it (a node affinity on kube-proxy's DaemonSet) - its pods could not reach Services anyway. `doctor` refuses the director role on a node where kube-proxy, or its replacement, is running.
+- **Which Services**: those of type `LoadBalancer` with **`spec.loadBalancerClass: dmarts.app/thelb`**, so theLB never takes Services meant for another provider.
+- **VIPs** come from theLB's own [address pools](#address-pools). A dual-stack Service (`spec.ipFamilies`) gets one VIP per family. A Service brings its own name, ports and protocols, so it needs no offers and no assignments.
+- **Sharing a VIP**: Services with the same `dmarts.app/thelb-shared-vip` annotation share one VIP, as long as their ports do not overlap. Each keeps its own backends.
+- **The backends are the nodes the API lists as `Ready`**, matched to their addresses on the directors' networks. Two kinds are left out: director nodes, and nodes labelled `node.kubernetes.io/exclude-from-external-load-balancers`, the label Kubernetes defines for this.
+- **No theLB on the nodes, and no approval** (decided 2026-11-15). A node appears in the API only once the cluster has admitted its kubelet, so the cluster's own trust decides. New and autoscaled nodes become backends at once, with nothing to install.
+- **`externalTrafficPolicy: Local`** (recommended): the backends are the nodes whose **`healthCheckNodePort`** answers `200`. The node's proxy answers `200` only while the node has a ready pod of the Service. A node's weight is its count of ready pods (`localEndpoints` in the answer). The client's address reaches the pod.
+- **`externalTrafficPolicy: Cluster`**: every `Ready` node is a backend, and its proxy forwards to pods on any node. It uses source NAT, so the pod sees a node's address, not the client's. The check is the proxy's own health endpoint where there is one (kube-proxy's `:10256/healthz`), or else the node's `Ready` condition.
+
+### Directors on Kubernetes nodes
+
+**Where the directors run is the user's choice** (decided 2026-11-15). They can run on machines of their own, outside the cluster, which need nothing more. Or they can run on Kubernetes nodes: a control-plane node, or nodes kept for them.
+
+**The catch is the node's own proxy.** It programs the Service's VIP on every node, ahead of IPVS. When a packet for the VIP reaches a director on a Kubernetes node, the proxy takes it before IPVS ever sees it. Cilium's eBPF takes it at the network card; kube-proxy's iptables and nftables modes take it in `PREROUTING`; IPVS sits later, at `LOCAL_IN`. `ipMode: Proxy` cannot help, because it takes the VIP off every node, and the backends need it. So the proxy must leave theLB's Services alone **on the director nodes only**:
+
+- **With Cilium**, the director nodes carry the label **`dmarts.app/thelb-director`**, and every theLB Service carries the annotation **`service.cilium.io/node-selector: "!dmarts.app/thelb-director"`**. Cilium then installs the Service on every node except the directors'. This needs Cilium 1.17 or later, and was tested on 1.20.1.
+  - **The user writes the annotation in the Service's manifest** (decided 2026-11-15: a one-time job). theLB never edits a Service, so it needs no permission to.
+  - The leader warns of a theLB Service without the annotation while a director runs on a Cilium node.
+  - A director on a Cilium node refuses to start if its Node lacks the label.
+  - Cilium drops the whole Service on those nodes, its cluster IP too, so pods there cannot reach theLB's Services. Director nodes are therefore **kept for theLB**: tainted, as a control-plane node already is.
+  - Cilium reads a node's labels only when a Service changes. So **label a node first, then touch theLB's Services**, before its director is approved; the [example](#example) has the command. Restarting Cilium on the node works too.
+- **With kube-proxy**, there is no such switch. kube-proxy is kept off the director nodes with a node affinity on its DaemonSet, and the director nodes are rebooted to clear the rules it left behind. Pods on a node without kube-proxy can reach no Service at all, so these nodes run nothing else. In IPVS mode, kube-proxy would also share the kernel's IPVS table with theLB.
+- **`doctor`** on a director refuses where kube-proxy runs. On a Cilium node, it checks the label, using the director's credential.
 
 ### Where theLB runs
 
-**Always under systemd, never as a pod** - on a Kubernetes node as on any other machine. Decided, and confirmed (the user, 2026-11-09: "we will go with systemd for kubernetes, no daemonset").
-
-**Why not a DaemonSet**, though it would bring a credential mounted and rotated by Kubernetes: watching Services and writing their status is **one writer's job**, and theLB has one - the leader, which already decides everything else, so it never contends with another writer for a Service's status. A DaemonSet would give write access to every Service's status to every node - as many watchers of the API as there are nodes, and any compromised node able to point any Service elsewhere - when the nodes need no API access at all. MetalLB needs a pod on every node because its nodes announce the addresses; theLB's directors announce them. Had the credential to stay inside the cluster, the way would have been a small controller Deployment, one writer still - not taken: nothing of theLB's runs in the cluster.
-
 | Component | Runs as | Talks to the Kubernetes API |
 |---|---|---|
-| Directors | systemd services, on machines of their own or on dedicated nodes | with a **kubeconfig** for the `thelb-director` ServiceAccount - required, and checked at startup; only the leader watches Services and writes their status, the others hold the same credential to take over |
-| Backends on Kubernetes nodes | systemd services on the nodes' hosts, enrolled and approved like any backend | not at all: the directors read the API and tell them what they need |
+| Directors outside the cluster | systemd services | with a kubeconfig for the `thelb-director` ServiceAccount: `--kubeconfig <file>` |
+| Directors on Kubernetes nodes | **systemd services on the nodes' hosts, or a DaemonSet on the labelled nodes** - the user's choice (decided 2026-11-15, replacing "systemd only") | a kubeconfig file under systemd; in the DaemonSet, the pod's own ServiceAccount: `--kubeconfig in-cluster` |
+| Kubernetes nodes | nothing | - |
 
-A director checks at startup that the API server answers and that it holds every permission it needs (`SelfSubjectAccessReview`, which every authenticated user may call); a missing one stops it with its name.
+- **There is still one writer.** Only the leader watches Services and writes their status. The other directors hold the same credential, so that they can take over.
+- **The credential stays on the director nodes.** The DaemonSet runs only on the labelled nodes, so the credential is there and nowhere else, as under systemd. The earlier objection was to a DaemonSet on every node.
+- **At startup**, a director serving Kubernetes checks that the API server answers and that it holds every permission it needs. It asks with a `SelfSubjectAccessReview`, which every authenticated user may call. A missing permission stops it, with the permission's name.
+- **Either all of a cluster's directors serve Kubernetes, or none do.**
 
-On a Kubernetes node, a backend adds nothing for a VIP - kube-proxy already accepts the VIP's packets; it sets `arp_ignore` and `arp_announce`, checks kube-proxy's mode, sends the return-path probe, and reports the node's health.
+**What the DaemonSet's pod needs, and why:**
+
+- **`hostNetwork: true`**: the VIPs, IPVS and the control port are the node's.
+- **`privileged: true`**: theLB writes to `/proc/sys/net`, which a container runtime otherwise mounts read-only, and it may load modules.
+- **The host's `/etc/machine-id` and `/lib/modules`, read-only.** The machine ID goes into the node fingerprint, so a restarted pod rejoins without approval.
+- **The host's `/run/thelb`**, so that `thelb status` works on the node as on any other director, and so does `kubectl exec`.
+- **The secret files, from a Secret, read-only.** A pod cannot write them, so they must exist before the first bootstrap: copy them from an existing director, or make them with `thelb generate secret`.
+- **`--bootstrap-wait 31s`** on a pod that may bootstrap. Kubernetes restarts a crashed pod after 10 seconds, sooner than `RestartSec=30`, so the pod must look for the cluster for the lease plus 25 seconds. Otherwise it could create a cluster of its own before the other director has stood alone. This flag is new; its default is 5 seconds.
+- **A readiness probe on `/readyz`**, served with `--metrics`. It reports ready once this director votes and has caught up with the leader. A rolling update then replaces the next director only after that, which matters because the cluster's state lives only in the directors' memory. This is new.
+- **The image `ghcr.io/dmartsapp/thelb:<version>`**: the static binary alone, published by the release workflow beside the binaries. This is to come.
 
 ### The manifests
 
-Nothing of theLB's runs in the cluster, so `thelb generate k8s` prints only what the directors need, in namespace **`thelb`**:
+`thelb generate k8s` prints what the directors need, in the namespace **`thelb`**. `thelb generate k8s director <the flags it runs with>` adds the DaemonSet, the way `generate systemd director` prints a unit.
 
 | Object | What for |
 |---|---|
 | `Namespace` `thelb` | Holds the directors' identity. |
 | `ServiceAccount` `thelb-director` | The directors' identity. |
 | `ClusterRole` + `ClusterRoleBinding` `thelb-director` | The permissions below. |
-| `Secret` `thelb-director-token` (type `kubernetes.io/service-account-token`) | The directors' credential, and the kubeconfig built from it, printed for the user to install on the directors. |
+| `Secret` `thelb-director-token` (type `kubernetes.io/service-account-token`) | The credential of directors outside the cluster or under systemd: their kubeconfig is built from it. |
+| `DaemonSet` `thelb-director` | Only with `director <flags>`: the directors on the labelled nodes. |
 
-**RBAC, the least the directors need:**
+**RBAC: the least the directors need.** They read, and write a Service's status, but never a Service itself:
 
 | API group | Resource | Verbs |
 |---|---|---|
@@ -544,6 +580,344 @@ Nothing of theLB's runs in the cluster, so `thelb generate k8s` prints only what
 | `discovery.k8s.io` | `endpointslices` | `get`, `list`, `watch` |
 | core | `nodes` | `get`, `list`, `watch` |
 | `events.k8s.io` | `events` | `create`, `patch` |
+
+### Example
+
+**The setup.** A cluster on the network `10.0.0.0/24`:
+
+- nodes: the control-plane node `cp1` (`10.0.0.21`) and the workers `worker1` (`10.0.0.22`) and `worker2` (`10.0.0.23`);
+- Cilium as kube-proxy replacement;
+- two directors: `lb1` (`10.0.0.5`), a machine outside the cluster, under systemd; and `cp1`, as a DaemonSet;
+- the control VIP `10.0.0.10:7443`, and service VIPs from `10.0.0.50`.
+
+The commands below are the design's: `generate k8s`, `--kubeconfig`, `--bootstrap-wait` and the image are still to be built.
+
+**1. The directors' identity.** On any director, print the manifests, then apply them wherever `kubectl` runs:
+
+```bash
+sudo thelb generate k8s > thelb-k8s.yaml
+kubectl apply -f thelb-k8s.yaml
+```
+
+`generate k8s` prints:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: thelb
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thelb-director
+  namespace: thelb
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thelb-director
+rules:
+  - apiGroups: [""]
+    resources: ["services", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thelb-director
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: thelb-director
+subjects:
+  - kind: ServiceAccount
+    name: thelb-director
+    namespace: thelb
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thelb-director-token
+  namespace: thelb
+  annotations:
+    kubernetes.io/service-account.name: thelb-director
+type: kubernetes.io/service-account-token
+```
+
+**2. A director outside the cluster, under systemd (`lb1`).** Where `kubectl` runs, build its kubeconfig from the token Secret:
+
+```bash
+SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+CA=$(kubectl -n thelb get secret thelb-director-token -o jsonpath='{.data.ca\.crt}')
+TOKEN=$(kubectl -n thelb get secret thelb-director-token -o jsonpath='{.data.token}' | base64 -d)
+cat > thelb.kubeconfig <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: cluster
+    cluster:
+      server: $SERVER
+      certificate-authority-data: $CA
+users:
+  - name: thelb-director
+    user:
+      token: $TOKEN
+contexts:
+  - name: thelb
+    context:
+      cluster: cluster
+      user: thelb-director
+current-context: thelb
+EOF
+```
+
+Copy `thelb.kubeconfig` to `lb1`. There, install it so that only root can read it, and start the director. The first bootstrap writes the two secret files:
+
+```bash
+sudo install -D -m 600 thelb.kubeconfig /etc/thelb/kubeconfig
+sudo thelb generate systemd director --vip 10.0.0.10 --port 7443 --bootstrap \
+  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret \
+  --kubeconfig /etc/thelb/kubeconfig \
+  | sudo tee /etc/systemd/system/thelb-director.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now thelb-director
+```
+
+**3. A director on a Kubernetes node, as a DaemonSet (`cp1`).** Label the node. `cp1` already carries the control-plane taint; any other node kept for theLB is tainted too, so that nothing else runs there:
+
+```bash
+kubectl label node cp1 dmarts.app/thelb-director=true
+# another node kept for theLB, as well:
+# kubectl taint node <node> dmarts.app/thelb-director=true:NoSchedule
+```
+
+Copy `director.secret` and `backend.secret` from `lb1`, readable by root only, make them a Secret, and delete the copies:
+
+```bash
+kubectl -n thelb create secret generic thelb-secrets \
+  --from-file=director.secret=./director.secret \
+  --from-file=backend.secret=./backend.secret
+rm director.secret backend.secret
+```
+
+On `lb1`, print the DaemonSet with the flags it runs with; apply it where `kubectl` runs:
+
+```bash
+sudo thelb generate k8s director --vip 10.0.0.10 --port 7443 \
+  --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret \
+  --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml
+kubectl apply -f thelb-director.yaml
+```
+
+`thelb-director.yaml` holds the manifests from step 1, and:
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: thelb-director
+  namespace: thelb
+  labels:
+    app.kubernetes.io/name: thelb-director
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thelb-director
+  minReadySeconds: 10
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thelb-director
+    spec:
+      serviceAccountName: thelb-director
+      hostNetwork: true
+      nodeSelector:
+        dmarts.app/thelb-director: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: dmarts.app/thelb-director
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: director
+          image: ghcr.io/dmartsapp/thelb:0.1.0
+          args:
+            - director
+            - --vip=10.0.0.10
+            - --port=7443
+            - --secret-file=/etc/thelb/director.secret
+            - --backend-secret-file=/etc/thelb/backend.secret
+            - --kubeconfig=in-cluster
+            - --metrics=127.0.0.1:9180
+          securityContext:
+            privileged: true
+          readinessProbe:
+            httpGet:
+              host: 127.0.0.1
+              port: 9180
+              path: /readyz
+            periodSeconds: 2
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/thelb
+              readOnly: true
+            - name: machine-id
+              mountPath: /etc/machine-id
+              readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: run
+              mountPath: /run/thelb
+      volumes:
+        - name: secrets
+          secret:
+            secretName: thelb-secrets
+            defaultMode: 0400
+        - name: machine-id
+          hostPath:
+            path: /etc/machine-id
+            type: File
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: run
+          hostPath:
+            path: /run/thelb
+            type: DirectoryOrCreate
+```
+
+This pod has no `--bootstrap`, because `lb1` bootstraps. A DaemonSet that bootstraps adds `--bootstrap --bootstrap-wait 31s`. The metrics listen on the node's loopback, only for the readiness probe; to scrape them, give a node address instead.
+
+The new director waits for approval. On `lb1`:
+
+```bash
+sudo thelb status pending
+sudo thelb admin approve cp1
+```
+
+**4. A pool for the Services.** On any director:
+
+```bash
+sudo thelb admin pool add k8s --vip 10.0.0.50/24 --vippool-count 10 --default
+```
+
+**5. A Service.** The annotation is needed only with Cilium, when a director runs on a node; it does no harm elsewhere.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.29
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  annotations:
+    service.cilium.io/node-selector: "!dmarts.app/thelb-director"
+    # dmarts.app/thelb-pool: k8s        # a pool other than the default
+    # dmarts.app/thelb-ip: 10.0.0.55    # a particular address from it
+spec:
+  type: LoadBalancer
+  loadBalancerClass: dmarts.app/thelb
+  externalTrafficPolicy: Local
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+```
+
+```bash
+kubectl apply -f web.yaml
+kubectl get service web
+```
+
+`EXTERNAL-IP` shows `10.0.0.50`, the pool's first address. On a director, `sudo thelb status vips` shows the VIP, with the nodes that run a ready `web` pod as its backends. From a client:
+
+```bash
+curl http://10.0.0.50/
+```
+
+**6. Later.**
+
+*A new director node.* A worker is drained and tainted first, so that nothing else runs there; a control-plane node needs neither. Labelling the node makes the DaemonSet start a director on it, which waits for approval. Before approving it, touch every theLB Service, so that Cilium on that node drops them:
+
+```bash
+kubectl drain worker2 --ignore-daemonsets --delete-emptydir-data
+kubectl taint node worker2 dmarts.app/thelb-director=true:NoSchedule
+kubectl uncordon worker2
+kubectl label node worker2 dmarts.app/thelb-director=true
+kubectl get services -A -o jsonpath='{range .items[?(@.spec.loadBalancerClass=="dmarts.app/thelb")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' |
+  while read -r ns name; do
+    kubectl -n "$ns" annotate service "$name" --overwrite dmarts.app/thelb-touched="$(date +%s)"
+  done
+sudo thelb admin approve worker2      # on a director
+```
+
+*A director node back to work.* Remove the label (the DaemonSet stops its director, as a planned stop) and the taint, then touch the Services the same way, so that Cilium on the node serves them again:
+
+```bash
+kubectl label node worker2 dmarts.app/thelb-director-
+kubectl taint node worker2 dmarts.app/thelb-director-
+```
+
+*A node out of traffic.* With `Local`, draining a node is enough: once it has no ready pod, its health port says `503`. To keep a node out whatever it runs:
+
+```bash
+kubectl label node worker1 node.kubernetes.io/exclude-from-external-load-balancers=true
+```
+
+*With kube-proxy instead of Cilium.* In IPVS mode, set `strictARP`:
+
+```bash
+kubectl -n kube-system get configmap kube-proxy -o yaml \
+  | sed -e 's/strictARP: false/strictARP: true/' \
+  | kubectl apply -f -
+kubectl -n kube-system rollout restart daemonset kube-proxy
+```
+
+A director on a node needs kube-proxy kept off it. Then reboot that node, to clear the rules kube-proxy left. `kubeadm upgrade` rewrites kube-proxy's DaemonSet, so patch it again after an upgrade:
+
+```bash
+kubectl -n kube-system patch daemonset kube-proxy --type=strategic -p \
+  '{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"dmarts.app/thelb-director","operator":"DoesNotExist"}]}]}}}}}}}'
+```
 
 ## Address pools
 
@@ -576,7 +950,7 @@ Six commands, and `--version`. Everything else is a flag. **Every command runs o
 | `thelb offer` | On a backend: `add <name> <protocol>/<port>[,check=...]` offers an application to the cluster - recorded once the leader's check passes - and `remove <name>` withdraws it. |
 | `thelb status` | The cluster, in tables - see below: alone, a summary; `directors`, `backends` or `vips` for one part of it, `all` for everything, or a table's name (`cluster`, `nodes`, `certificates`, `pending`, `pools`, `offers`, `services`). `--json` for the same as JSON; `--watch` to repeat. |
 | `thelb doctor` | Checks this node and says what it would change: kernel and its adaptations, modules, capabilities, kernel parameters (and whether the system's configuration would keep them after a reboot), interfaces, firewalld and SELinux, other software in the way (keepalived, another IPVS user, kube-proxy's mode and `strictARP`), the platform (clouds where VIPs cannot move), the cluster's voter count - and the plan: every change `director` or `backend` would make here. Changes nothing. `--json` too. |
-| `thelb generate` | Prints file content and writes nothing: `secret`, `commands`, and - to come - `systemd`, `sysctl`, `modules`, `k8s` - see below. |
+| `thelb generate` | Prints file content and writes nothing: `secret`, `commands`, `systemd`, `sysctl`, `modules`, and - to come - `k8s` - see below. |
 | `thelb admin` | The only way to change the cluster from outside, on a director: `approve <node>` or `approve --match <regex>`, `refuse <node>`, `remove <node>`, `pool add|remove`, `service add|remove`, `assign|unassign`, `secret show|rotate|retire`. A backend has no `admin`. |
 
 ### `thelb status`
@@ -696,7 +1070,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 | `generate systemd` | A unit file: `Type=notify`, `WatchdogSec=`, `Restart=always`, running as root with `CapabilityBoundingSet=` limited to the capabilities theLB needs, `NoNewPrivileges=yes` and the other hardening settings that do not stop it working - but not `ProtectKernelTunables=`, which would make `/proc/sys` read-only. |
 | `generate sysctl` | A `sysctl.d` file with the parameters this node's roles need, for the user who wants them set from boot. |
 | `generate modules` | A `modules-load.d` file with the modules this node needs. |
-| `generate k8s` | The manifests in [Kubernetes](#the-manifests), as one YAML stream. |
+| `generate k8s` | The manifests in [Kubernetes](#the-manifests), as one YAML stream; `generate k8s director <flags>` adds the directors' DaemonSet. |
 | `generate commands` | On a director: the `thelb admin` commands that create the running pools, services and assignments again - each service on the VIP it has - with the nodes to approve as a comment, not a command. A script for the user to keep, and run after a full stop; theLB never reads it: it is not a configuration file. |
 
 ## Observability
@@ -759,7 +1133,7 @@ Nothing here is written by theLB. The user decides whether to install it, and wh
 - **Unit tests** for everything that is not the kernel: planning, the Raft state machine and its entries, authorisation, enrolment checks, VIP assignment, configuration, health-check logic.
 - **A network lab in network namespaces**: a bridge, veth pairs, a client, three directors and several backends, IPv4 and IPv6 - a real L2 cluster on one machine, in CI too (GitHub's runners allow `sudo`).
 - **Chaos tests in the lab**: kill the leader, partition the directors, restart the bootstrap director, stop every director, flap a backend, flush IPVS, remove a VIP, impersonate a backend, answer ARP for one; measure failover time and how many flows survive.
-- **Kubernetes** in [kind](https://kind.sigs.k8s.io/), with kube-proxy in each of its modes, and theLB's backends under systemd inside kind's node containers, which run systemd.
+- **Kubernetes**: the provider in the network lab, against a stand-in API server, with lab nodes standing in for the nodes' proxies and health ports; on a real cluster with Cilium, as the hand test of 2026-11-15 did; kube-proxy's modes in [kind](https://kind.sigs.k8s.io/).
 - **Kernels**: the lab under QEMU on each supported kernel series - RHEL 9's 5.14 (from a Rocky or AlmaLinux 9 image), 6.1, and the newest long-term kernel - so both sides of every [kernel adaptation](#kernels) are tested.
 - **`make check`** is the one command to run them all, as in shint.
 
@@ -781,7 +1155,7 @@ Like shint, simpler:
 | 0 - spike | On one machine, by hand-written code: an IPVS direct-routing service over netlink, a VIP added and announced, backends prepared, a port mapped in nftables - IPv4 and IPv6, on RHEL 9's kernel and a current one. Settles the kernel questions: IPv6 neighbour solicitations for a VIP on `thelb0`, probing for `IFA_PROTO`, weighted round robin with connection synchronisation on failover, the return-path probe, VIPs on two interfaces at once, pinned neighbour entries. |
 | 1 - one director | **Begun in v0.1.0-dev:** the command line, logging, the secret files, the node fingerprint, the CA and the director's own certificate, the local socket and `status` with its views, and the control VIP - probed, held, announced and given up; **backends** enrolling with their secret and a director's approval, offering, heartbeating, holding their services' VIPs on `thelb0` with `arp_ignore` and `arp_announce`, draining when they stop; **pools, services and assignments** from `admin`, with the forward-path check; **IPVS** over netlink - direct routing, `wrr` by default, the leader holding the service VIPs, pinning backends' MAC addresses, setting `sloppy_tcp`, `expire_nodest_conn` and `expire_quiescent_template`; **health checks from both sides** (TCP, HTTP, none) with the heartbeat lease; what a crash left in the kernel removed at the next start; the network lab (`make lab` to try by hand, `make e2e`). **port mapping** on the backend, in theLB's own nftables table; IP-in-IP; offers by name, made while a backend runs; `generate commands`; drift repaired and the watchdog loop; **IPVS's connection synchronisation**, following leadership. **Built since:** preflight (capabilities, `/proc/sys/net`, IPVS, IPv6); `doctor`; `generate systemd|sysctl|modules`. **To come:** the return-path check; an SCTP check; `doctor`'s plan and its link tests; `generate k8s`; the lab in CI. |
 | 2 - the cluster | **Begun in v0.1.0-dev, ahead of the rest of phase 1:** directors joining with their secret and waiting for approval (`admin approve`, `refuse`, `remove`); Raft with the replicated CA; the leader holding the control VIP; the bootstrap rule and restarts, approved directors rejoining by themselves; failover; fail closed; leadership hand-off on stop; the network lab (`make e2e`: a crash, a planned stop, a partition, a full stop). **To come:** a cluster that finds its control VIP claimed by another standing down; `--peers`; secret rotation; IPv6 in the lab on a kernel that has it; chaos tests under load. |
-| 3 - Kubernetes | The provider; Kubernetes nodes as approved backends, their Services handled by themselves; shared VIPs; `generate k8s`; kind tests. |
+| 3 - Kubernetes | The provider, with nothing on the nodes; directors outside the cluster or on nodes, under systemd or as a DaemonSet; shared VIPs; `generate k8s`; `--kubeconfig`, `--bootstrap-wait`, `/readyz`; the container image; the tests. |
 | 4 - tunnelling | **Begun in v0.1.0-dev:** IP-in-IP as a per-service method (`--method tunnel`), IPv4: IPVS's tunnel forwarding, `thelbt0` on the backend, the MSS clamp, backends joining through a router. **To come:** IPv6 (ip6ip6), GUE as an option, the return-path check. |
 | 5 - active-active | Service VIPs spread across directors; optional IPVS connection synchronisation. |
 | 6 - proxy | A proxying mode, as a separate capability, for networks where direct return is not possible. |
@@ -811,9 +1185,10 @@ Like shint, simpler:
 - **The node fingerprint**: a hash of the machine's application-specific ID, its SMBIOS UUID where there is one, and the MAC address of the interface it joins through ([The node fingerprint](#the-node-fingerprint)).
 - **After a full stop, every node is approved again**; `admin approve --match <regex>` approves many at once.
 - **SCTP is in the first release**, alongside TCP and UDP.
-- **A director may be a Kubernetes node only if it is dedicated, without kube-proxy** - kube-proxy would take the VIP's packets before IPVS ([Kubernetes](#which-services-and-which-backends)).
-- **theLB always runs under systemd, never as a pod or a DaemonSet** - on Kubernetes nodes as on any machine; `generate k8s` prints only the directors' identity and permissions ([Where theLB runs](#where-thelb-runs)).
-- **A Kubernetes node is a backend only once its host's theLB backend is approved**; its Services are then handled by themselves - no offers, no assignments ([Which Services, and which backends](#which-services-and-which-backends)).
+- **Kubernetes nodes run no theLB**: their own service proxy hands the VIP's packets to the pods; the backends are the nodes the API lists as ready, chosen by their health port - no agent, no approval (the user, 2026-11-15, after the hand test) ([Which Services, and which backends](#which-services-and-which-backends)).
+- **Where directors run is the user's choice**: machines outside the cluster, or Kubernetes nodes - under systemd or as a DaemonSet on labelled nodes (the user, 2026-11-15, replacing "systemd only") ([Where theLB runs](#where-thelb-runs)).
+- **A director on a Kubernetes node needs the node's proxy to leave theLB's Services alone there**: with Cilium, the node label `dmarts.app/thelb-director` and the annotation `service.cilium.io/node-selector`, **which the user writes in the Service's manifest** - theLB edits nothing of a Service but its status (the user, 2026-11-15); with kube-proxy, kube-proxy kept off the node ([Directors on Kubernetes nodes](#directors-on-kubernetes-nodes)).
+- **Docker hosts, standalone or in a Swarm, are plain backends under systemd** (the user, 2026-11-15) ([Where it works](#where-it-works)).
 - **What `status` shows**: on a director, everything but secret material, including which service runs on which node's address and port behind which VIP, and the traffic sent to it; on a backend, only its role, the cluster's name, its services by name and its node fingerprint.
 - **The local socket**: `status`, `doctor` and `admin` ask the running theLB over a Unix socket that authorises each caller and exposes only what each command shows - not shared memory ([The local socket](#the-local-socket)).
 - **The control VIP**, held by the leader, is where backends and the command line talk to the cluster; **backends are clients, not Raft members**.

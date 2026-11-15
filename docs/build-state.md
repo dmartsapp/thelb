@@ -1,6 +1,25 @@
 # Build state
 
-Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-10, after `wip/lease` (the control VIP leased from the kernel, its lease in Raft; no director takes a VIP that still answers) on top of `wip/split` (log-tail replay, dead voters out, the leader's VIP watch). The user's JH binary is replaced only when they ask - they asked for this one ("ok build in jh please").
+Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-15: `main` = 7e80fa9 (the documentation site, Go 1.27.4), and the Kubernetes design rewritten after a hand test on the user's cluster. The user's JH binary is replaced only when they ask - they asked for this one ("ok build in jh please").
+
+## Now: Kubernetes, then v0.1.0
+
+The user, 2026-11-15: "complete kubernetes part completely and commit for 0.1.0 release ready". v0.1.0 is **not tagged**; the release settings are done (Pages on, `SLACK_WEBHOOK_URL` set, private vulnerability reporting on). The design's [Kubernetes](design.md#kubernetes) section, with its [example](design.md#example), is the specification.
+
+**Decided by the user on 2026-11-15**: Kubernetes nodes run no theLB (no agent, no approval; the backends are the API's ready nodes, chosen by their health port); directors run outside the cluster or on nodes, under systemd or as a DaemonSet - people choose; on Cilium the user writes `service.cilium.io/node-selector: "!dmarts.app/thelb-director"` in the Service, and theLB edits nothing of a Service but its status; Docker hosts (standalone, Swarm) are plain systemd backends.
+
+**The hand test (2026-11-15, Kubernetes 1.36, Cilium 1.20.1, VXLAN, no kube-proxy)**: a Service of class `dmarts.app/thelb`, `externalTrafficPolicy: Local`, status written by hand; LB-IPAM and L2 announcements left it alone; the health port answered 200 (one local endpoint) or 503; a `/32` route on JH through a worker (what direct routing does) reached the pod with JH's own address, and the reply came from the VIP; a node without a pod refused (`service-no-backend-response=reject`); a node labelled `dmarts.app/thelb-director` dropped the Service after the Service was touched (Cilium re-reads a node's labels only on a Service event), and took it back. **Not tested**: IPVS on a Cilium node (cp) forwarding by direct routing.
+
+**The build, in order:**
+
+1. `internal/kube`: a small client for the Kubernetes API on the standard library, not client-go (theLB keeps its two dependencies): kubeconfig (token, client certificate, CA; exec plugins refused with the reason) and in-cluster; list and watch with resource versions and bookmarks, a new list on `410 Gone`; Services, EndpointSlices, Nodes; the status subresource; `SelfSubjectAccessReview`; events.
+2. The leader's provider: theLB-class Services to VIPs from the pools (`dmarts.app/thelb-pool`, `-ip`, `-shared-vip`), the allocation in Raft; `status.loadBalancer.ingress` with `ipMode: VIP`; one IPVS service per port, the nodes as direct-routing destinations; `Local` - the health port's `200`, weight = `localEndpoints`; `Cluster` - every ready node; director nodes and `node.kubernetes.io/exclude-from-external-load-balancers` left out; release on deletion or a class change; `status` and metrics show them; events on the Service.
+3. The director: `--kubeconfig <file>|in-cluster`, the API and permissions at startup, all directors or none; on a Cilium node, its Node's label required; the leader's warning for a Service without the annotation; `--bootstrap-wait`; `/readyz` on the metrics listener; `doctor`.
+4. `thelb generate k8s [director <flags>]`.
+5. The container image, `ghcr.io/dmartsapp/thelb:<version>` (the static binary, amd64/arm64/arm), in the release workflow, with its SBOM and attestation.
+6. Tests: unit tests against a stand-in API server; the lab with a stand-in API server and lab nodes playing Kubernetes nodes (the VIP's port answered locally, a health port); then, with the user's OK, their cluster - JH outside, cp as a DaemonSet - which also settles IPVS on a Cilium node.
+7. The documentation: a Kubernetes guide on the site with real output, the reference pages, the changelog.
+8. Then v0.1.0: date the changelog, `release/v0.1`, the tag.
 
 ## Branches
 
@@ -22,7 +41,7 @@ Where the code is, what is broken, and what comes next - kept up to date at ever
 7. the leader programs IPVS, then brings the VIP up - only while a backend serves; the VIP goes first when none does.
 The cluster keeps the offers through a backend's restart; the backend keeps them through the directors' outage and offers them again, by itself, to the cluster created again once approved.
 
-**The user asked, about Kubernetes** (answered, not built; phase 3): which nodes get a `LoadBalancer` Service's traffic - the approved backends matched to Nodes by address, `Ready`, without `node.kubernetes.io/exclude-from-external-load-balancers`; `externalTrafficPolicy: Cluster` - all of them, checked at kube-proxy's `:10256/livez`; `Local` - those with ready endpoints in the Service's EndpointSlices, checked at `healthCheckNodePort`; at the Service's port (kube-proxy matches the VIP from `status.loadBalancer.ingress`). Proposed: weight = ready local endpoints, for `Local`. To verify in kind: Cilium's kube-proxy replacement health endpoint; tunnelled services into kube-proxy's rules.
+**Kubernetes**: see [Now](#now-kubernetes-then-v010) above; the 2026-11-09 answers (approved backends, systemd only) were replaced on 2026-11-15.
 
 ## What came in last (from `wip/gencmds`)
 
@@ -35,7 +54,7 @@ The cluster keeps the offers through a backend's restart; the backend keeps them
 - **A director's host as a backend**: two daemons - `thelb backend` started after the director, under its own `--name`; one socket and lock per role (`/run/thelb/director/`, `/run/thelb/backend/`); `status --role`; the clone check per role; the leader refuses a backend with a director's name, does not pin its own address, and assigns an offer from a director's address only on the service's port. IPVS lists the host as an ordinary direct-routing destination (`Route`), and its share arrives through the local stack. `test/lab.sh serve dN`.
 - **The control VIP by name**: `--vip thelb-vip`, `--join thelb-vip:7443`, resolved at start to the one address it has in the node's networks.
 - **Fixed**: the planner's pointers into a growing slice (two services: the first lost its destinations); an API stream's first deadline covering writes for its whole life (backend heartbeats and director check-ins cut 10 s in, `tls: bad record MAC`); a refused backend retrying in silence; the end-to-end cleanup waiting for ever on web servers it never stopped.
-- **Decided**: nftables for port mapping, not eBPF; no configuration file; systemd for backends on Kubernetes nodes.
+- **Decided**: nftables for port mapping, not eBPF; no configuration file. (Kubernetes nodes: since 2026-11-15, no theLB at all.)
 
 ## Next - the agreed order
 
@@ -64,7 +83,8 @@ Then decisions for the user: **BGP with ECMP**, beside or instead of ARP. **NAT 
 - **IPv6 end to end: after Kubernetes** (the user, 2026-11-10: "will test ipv6 after we're done till k8s"); JH boots with `ipv6.disable=1`.
 
 
-- **Kubernetes nodes as backends: decided - systemd, no DaemonSet** (confirmed 2026-11-09), and written into the design's [Kubernetes](design.md#where-thelb-runs) section with its reasoning: the leader is the one writer of Services' status; nodes need no API access; nothing of kube-proxy's or Cilium's is patched.
+- **Kubernetes**: decided on 2026-11-15 - see [Now](#now-kubernetes-then-v010). To ask before testing on the user's cluster: running the directors there (JH outside, cp as a DaemonSet).
+- **Docker**: a Docker host as a backend is untested; a test on JH needs the user's OK (it runs Docker).
 - **BGP**: see above. NAT: set aside, see above.
 
 ## Known limits of the two-director takeover (told the user)
@@ -77,7 +97,7 @@ Then decisions for the user: **BGP with ECMP**, beside or instead of ARP. **NAT 
 
 ## Still to build (from the design)
 
-Preflight (full authority or refuse to start, loading modules); kernel feature probing, tested on RHEL 9's 5.14; service VIP conflict detection (the control VIP is watched), and a cluster standing down when another claims its control VIP; `--peers`; secret rotation (`admin secret rotate|retire`); the backend networks a director allows to enrol, as an `admin` setting; a removed node kept out until allowed; term fencing on backends; an SCTP health check; Prometheus metrics; IPv6 tested end to end (JH boots with IPv6 disabled); `doctor`; `generate`; then the Kubernetes provider (phase 3), tunnelling's GUE, active-active VIPs (phase 5), the proxy (phase 6); CI, releases, the docs site.
+After Kubernetes: service VIP conflict detection beyond the control VIP; `--peers`; secret rotation (`admin secret rotate|retire`); the backend networks a director allows to enrol; a removed node kept out until allowed; term fencing on backends; an SCTP health check; the return-path check; IPv6 end to end (JH boots with IPv6 disabled); ip6ip6 and GUE; then BGP (the user's call) and active-active. Built since this list was first written: preflight, kernel probing, `doctor`, `generate systemd|sysctl|modules`, metrics.
 
 ## Decided on 2026-11-08
 
