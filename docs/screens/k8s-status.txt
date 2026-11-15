@@ -1,0 +1,31 @@
+d1 - a Kubernetes Service, and the nodes serving it
+$ sudo thelb status vips
+ vip         | purpose    | pool | interface | held by | since
+-------------+------------+------+-----------+---------+---------------------
+ 198.18.0.10 | control    | -    | eth0      | d1      | 2026-11-15 20:55:02
+ 198.18.0.50 | kubernetes | k8s  | eth0      | d1      | 2026-11-15 20:55:08
+
+ service     | vip         | port   | scheduler | method | backends up
+-------------+-------------+--------+-----------+--------+-------------
+ default/web | 198.18.0.50 | tcp/80 | wrr       | direct | 2 of 2
+
+ pool | network       | addresses                 | interface | used
+------+---------------+---------------------------+-----------+--------
+ k8s  | 198.18.0.0/24 | 198.18.0.50 - 198.18.0.53 | eth0      | 1 of 4
+$ sudo thelb status backends
+ node | role | address | state | version | node fingerprint | last check-in
+------+------+---------+-------+---------+------------------+---------------
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ node | offer | address | port | check | own check | service | since
+------+-------+---------+------+-------+-----------+---------+-------
+
+ service     | vip            | backend | at             | checks | weight | connections | packets | bytes | last check-in
+-------------+----------------+---------+----------------+--------+--------+-------------+---------+-------+---------------
+ default/web | 198.18.0.50:80 | n1      | 198.18.0.31:80 | - / ok |      2 |           0 |       0 | 0 B   | -
+ default/web | 198.18.0.50:80 | n2      | 198.18.0.32:80 | - / ok |      1 |           0 |       0 | 0 B   | -
+
+ certificate | kind | fingerprint | not after
+-------------+------+-------------+-----------

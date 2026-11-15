@@ -2,20 +2,20 @@ d2
 $ sudo thelb status directors
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d2     |    3 | 2026-11-14 21:36:36 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d2     |    3 | 2026-11-15 20:54:33 |        6s
 
  node | role     | address     | state | version | node fingerprint | last check-in
 ------+----------+-------------+-------+---------+------------------+---------------
- d1   | director | 198.18.0.11 | down  | 0.1.0   | 54cbcbbb78ad3cc6 | 10.3 s ago
- d2   | leader   | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | -
- d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.8 s ago
+ d1   | director | 198.18.0.11 | down  | 0.1.0   | fa65c24eecea87db | 10.5 s ago
+ d2   | leader   | 198.18.0.12 | up    | 0.1.0   | 0d01fb995174b13f | -
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 87880f68e96e94b8 | 0.8 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  certificate  | kind     | fingerprint      | not after
 --------------+----------+------------------+---------------------
- theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
- d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
- d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
- d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53
+ theLB lab CA | ca       | 88701f2376f6a200 | 2036-11-12 20:53:47
+ d1           | director | 84d9f095d83497bd | 2026-11-16 20:53:47
+ d2           | director | 3ed8d68d8eb537e7 | 2026-11-16 20:53:52
+ d3           | director | 14d4e4152322a864 | 2026-11-16 20:53:52

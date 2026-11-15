@@ -26,9 +26,9 @@
 <text x="16" y="415"> parameters <tspan class="d">|</tspan> net.ipv4.vs.expire_quiescent_template <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 0; from boot: not set</text>
 <text x="16" y="433"> parameters <tspan class="d">|</tspan> net.ipv4.conf.all.arp_ignore          <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 1 while it runs; now 1; from boot: not set</text>
 <text x="16" y="451"> parameters <tspan class="d">|</tspan> net.ipv4.conf.all.arp_announce        <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> theLB sets 2 while it runs; now 2; from boot: not set</text>
-<text x="16" y="469"> theLB      <tspan class="d">|</tspan> the director                          <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 11140, started by hand: a crash, a reboot or a</text>
+<text x="16" y="469"> theLB      <tspan class="d">|</tspan> the director                          <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 90524, started by hand: a crash, a reboot or a</text>
 <text x="16" y="487"><tspan class="d">            |                                       |       | </tspan>closed terminal stops it</text>
-<text x="16" y="505"> theLB      <tspan class="d">|</tspan> the backend                           <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 12090, started by hand: a crash, a reboot or a</text>
+<text x="16" y="505"> theLB      <tspan class="d">|</tspan> the backend                           <tspan class="d">|</tspan> <tspan class="wa">warn</tspan>  <tspan class="d">|</tspan> process 91487, started by hand: a crash, a reboot or a</text>
 <text x="16" y="523"><tspan class="d">            |                                       |       | </tspan>closed terminal stops it</text>
 <text x="16" y="541"> firewall   <tspan class="d">|</tspan> firewall                              <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> none found dropping by default (ufw, firewalld, nftables)</text>
 <text x="16" y="559"> in the way <tspan class="d">|</tspan> others                                <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> no keepalived, kube-proxy, Cilium or kube-router here</text>
@@ -45,7 +45,7 @@
 <text x="16" y="757"><tspan class="d">            |                                       |       | </tspan>machine is down</text>
 <text x="16" y="775"> link       <tspan class="d">|</tspan> connection sync                       <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> backup on eth0; 29 connection entries here</text>
 <text x="16" y="793"> link       <tspan class="d">|</tspan> gratuitous ARP                        <tspan class="d">|</tspan> <tspan class="ok">ok</tspan>    <tspan class="d">|</tspan> this node's cache points the control VIP at the leader</text>
-<text x="16" y="811"><tspan class="d">            |                                       |       | </tspan>(1a:45:77:7a:8f:bf): its announcements arrive</text>
+<text x="16" y="811"><tspan class="d">            |                                       |       | </tspan>(82:89:43:24:7b:db): its announcements arrive</text>
 <text x="16" y="829"> plan       <tspan class="d">|</tspan> control VIP                           <tspan class="d">|</tspan> info  <tspan class="d">|</tspan> while it leads: 198.18.0.10 on eth0 - label eth0:thelb,</text>
 <text x="16" y="847"><tspan class="d">            |                                       |       | </tspan>protocol 116, leased 6s, renewed every third of it -</text>
 <text x="16" y="865"><tspan class="d">            |                                       |       | </tspan>announced by gratuitous ARP</text>

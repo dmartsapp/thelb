@@ -44,7 +44,7 @@
 <figure class="screen"><img src="assets/screens/status.svg" width="765" height="286" alt="The summary." loading="lazy"><figcaption>The summary.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d1     |    2 | 2026-11-15 20:53:48 |        6s
 
  what      | total | up | down | pending
 -----------+-------+----+------+---------
@@ -58,41 +58,41 @@ More: thelb status directors | backends | vips | all</code></pre></details></fig
 <figure class="screen"><img src="assets/screens/status-backends.svg" width="1015" height="736" alt="Every backend of every service, its checks (its own / the directors&#x27;), weight and traffic." loading="lazy"><figcaption>Every backend of every service, its checks (its own / the directors'), weight and traffic.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status backends
  node | role    | address     | state | version | node fingerprint | last check-in
 ------+---------+-------------+-------+---------+------------------+---------------
- b1   | backend | 198.18.0.31 | up    | 0.1.0   | 13fb773a2f1602be | 1.8 s ago
- b2   | backend | 198.18.0.32 | up    | 0.1.0   | 47e299ae51b988ce | 1.8 s ago
- b3   | backend | 198.18.0.33 | up    | 0.1.0   | fbc7b527309b076e | 1.8 s ago
- b4   | backend | 198.19.0.41 | up    | 0.1.0   | 138d4b1de80a58a0 | 1.5 s ago
+ b1   | backend | 198.18.0.31 | up    | 0.1.0   | 0beaab3f6d2dfb43 | 1.9 s ago
+ b2   | backend | 198.18.0.32 | up    | 0.1.0   | 8948c9a6b3974fe9 | 1.9 s ago
+ b3   | backend | 198.18.0.33 | up    | 0.1.0   | 86fbc35cd82f7f79 | 1.9 s ago
+ b4   | backend | 198.19.0.41 | up    | 0.1.0   | 525079852f9bb67e | 1.5 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  node | offer    | address     | port     | check  | own check | service  | since
 ------+----------+-------------+----------+--------+-----------+----------+--------
- b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
- b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.7 s
- b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
- b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.7 s
- b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.7 s
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.9 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.9 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.9 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.9 s
  b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s
 
  service | vip            | backend | at               | checks  | weight | connections | packets | bytes  | last check-in
 ---------+----------------+---------+------------------+---------+--------+-------------+---------+--------+---------------
- web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
- web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.8 s ago
- web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      19 | 1.2 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
- far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.8 s ago
- far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.5 s ago
+ web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.9 s ago
+ web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.9 s ago
+ web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      28 | 1.8 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.9 s ago
+ far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.5 s ago
 
  certificate | kind    | fingerprint      | not after
 -------------+---------+------------------+---------------------
- b1          | backend | fb7a6dccf0b61793 | 2026-11-15 21:35:54
- b2          | backend | 3f79e6b05f968c20 | 2026-11-15 21:35:54
- b3          | backend | f1c3a00db0a7c495 | 2026-11-15 21:35:54
- b4          | backend | 4f2240e08f2c1741 | 2026-11-15 21:35:54</code></pre></details></figure>
+ b1          | backend | 59eadccbf3c92770 | 2026-11-16 20:53:53
+ b2          | backend | a58c9affc202d176 | 2026-11-16 20:53:53
+ b3          | backend | 0e591fe45e592b4d | 2026-11-16 20:53:53
+ b4          | backend | bc53fbdf9b6dcef2 | 2026-11-16 20:53:53</code></pre></details></figure>
 <p><a href="status.html">Reading thelb status</a> explains every column.</p>
 <h2 id="logs">Logs<a class="anchor" href="#logs" aria-label="Link to this section">#</a></h2>
 <p>theLB writes one line per event to standard error - so under systemd, to the journal (<code>journalctl -u thelb-director</code>).</p>
@@ -100,23 +100,23 @@ More: thelb status directors | backends | vips | all</code></pre></details></fig
 2026-11-09T01:28:55.655Z <span class="tok-mod">[director]</span> WARN backend not serving: weight 0 <span class="tok-key">service</span>=web <span class="tok-key">node</span>=web-1 <span class="tok-key">at</span>=10.0.0.21:80 <span class="tok-key">reason</span>="the director's check fails"</code></pre></div>
 <ul><li><code>OK</code> is something that went as it should; <code>WARN</code> is something to look at; <code>ERROR</code> is a failure.</li><li>The word in brackets is the part of theLB that wrote it: <code>director</code>, <code>backend</code>, <code>network</code>, <code>dataplane</code>, <code>kernel</code>, <code>raft</code>, <code>socket</code> or <code>watchdog</code>.</li><li>No secret or key is ever logged.</li></ul>
 <p>When a backend's application stops, the leader's log says so - and says so again when it is back:</p>
-<figure class="screen"><img src="assets/screens/app-down.svg" width="902" height="160" alt="`b2`&#x27;s web servers stopped and started again: weight 0, then serving again." loading="lazy"><figcaption><code>b2</code>'s web servers stopped and started again: weight 0, then serving again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:20.868Z [director] WARN backend not serving: weight 0 service=mapped node=b2 at=198.18.0.32:9090 reason="the director's check fails"
-2026-11-14T21:36:21.871Z [director] WARN backend not serving: weight 0 service=web node=b2 at=198.18.0.32:80 reason="the director's check fails"
-2026-11-14T21:36:26.885Z [director] OK backend serving service=mapped node=b2 at=198.18.0.32:9090 weight=1
-2026-11-14T21:36:26.886Z [director] OK backend serving service=web node=b2 at=198.18.0.32:80 weight=1</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/app-down.svg" width="902" height="160" alt="`b2`&#x27;s web servers stopped and started again: weight 0, then serving again." loading="lazy"><figcaption><code>b2</code>'s web servers stopped and started again: weight 0, then serving again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:54:20.984Z [director] WARN backend not serving: weight 0 service=web node=b2 at=198.18.0.32:80 reason="the director's check fails"
+2026-11-15T20:54:20.985Z [director] WARN backend not serving: weight 0 service=mapped node=b2 at=198.18.0.32:9090 reason="the director's check fails"
+2026-11-15T20:54:25.998Z [director] OK backend serving service=web node=b2 at=198.18.0.32:80 weight=1
+2026-11-15T20:54:25.999Z [director] OK backend serving service=mapped node=b2 at=198.18.0.32:9090 weight=1</code></pre></details></figure>
 <p>When something changes theLB's setup behind its back, theLB puts it back within 10 seconds and logs it. Here someone cleared IPVS on the leader (<code>ipvsadm -C</code>):</p>
-<figure class="screen"><img src="assets/screens/drift.svg" width="821" height="160" alt="theLB finds its IPVS services gone, and adds them again." loading="lazy"><figcaption>theLB finds its IPVS services gone, and adds them again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.22:80 scheduler=wrr
-2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.21:80 scheduler=wrr
-2026-11-14T21:36:31.898Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.20:80 scheduler=wrr</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/drift.svg" width="821" height="160" alt="theLB finds its IPVS services gone, and adds them again." loading="lazy"><figcaption>theLB finds its IPVS services gone, and adds them again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:54:30.009Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.22:80 scheduler=wrr
+2026-11-15T20:54:30.009Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.21:80 scheduler=wrr
+2026-11-15T20:54:30.010Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.20:80 scheduler=wrr</code></pre></details></figure>
 <p><a href="messages.html">Log messages</a> lists the messages that need you to do something.</p>
 <h3 id="each-connection-with-debug">Each connection, with <code>--debug</code><a class="anchor" href="#each-connection-with-debug" aria-label="Link to this section">#</a></h3>
 <p>Start a director with <code>--debug</code> to log every new connection. While it leads, it reads the kernel's connection table every second and logs each new connection once: the client's address, the service and VIP, and the backend it went to.</p>
-<figure class="screen"><img src="assets/screens/debug.svg" width="862" height="268" alt="Each new connection, once: client, service, VIP, backend, protocol, state." loading="lazy"><figcaption>Each new connection, once: client, service, VIP, backend, protocol, state.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39380 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39300 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39320 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:51708 service=mapped vip=198.18.0.21:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39294 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39372 service=web vip=198.18.0.20:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/debug.svg" width="862" height="268" alt="Each new connection, once: client, service, VIP, backend, protocol, state." loading="lazy"><figcaption>Each new connection, once: client, service, VIP, backend, protocol, state.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:39878 service=mapped vip=198.18.0.21:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54822 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54782 service=web vip=198.18.0.20:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54788 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54730 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54742 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT</code></pre></details></figure>
 <p>A busy service writes many lines, so turn <code>--debug</code> on to look, not for good. Without it there are no DEBUG lines at all.</p>
 <h2 id="metrics">Metrics<a class="anchor" href="#metrics" aria-label="Link to this section">#</a></h2>
 <p><code>--metrics &lt;address:port&gt;</code> on a director or a backend serves Prometheus metrics at <code>http://&lt;address:port&gt;/metrics</code>.</p>
@@ -138,12 +138,12 @@ thelb_service_backends_up{service="far",vip="198.18.0.22"} 2
 thelb_service_connections_total{service="web",vip="198.18.0.20"} 12
 thelb_service_connections_total{service="mapped",vip="198.18.0.21"} 9
 thelb_service_connections_total{service="far",vip="198.18.0.22"} 8
-thelb_service_packets_total{service="web",vip="198.18.0.20"} 80
-thelb_service_packets_total{service="mapped",vip="198.18.0.21"} 59
-thelb_service_packets_total{service="far",vip="198.18.0.22"} 51
-thelb_service_bytes_total{service="web",vip="198.18.0.20"} 5156
-thelb_service_bytes_total{service="mapped",vip="198.18.0.21"} 3815
-thelb_service_bytes_total{service="far",vip="198.18.0.22"} 3316
+thelb_service_packets_total{service="web",vip="198.18.0.20"} 79
+thelb_service_packets_total{service="mapped",vip="198.18.0.21"} 60
+thelb_service_packets_total{service="far",vip="198.18.0.22"} 53
+thelb_service_bytes_total{service="web",vip="198.18.0.20"} 5104
+thelb_service_bytes_total{service="mapped",vip="198.18.0.21"} 3867
+thelb_service_bytes_total{service="far",vip="198.18.0.22"} 3420
 thelb_service_connections_active{service="web",vip="198.18.0.20"} 0
 thelb_service_connections_active{service="mapped",vip="198.18.0.21"} 0
 thelb_service_connections_active{service="far",vip="198.18.0.22"} 0</code></pre></details></figure>

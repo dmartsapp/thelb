@@ -68,13 +68,13 @@ withdrawn: shop (tcp/5000)</code></pre></details></figure>
 <figure class="screen"><img src="assets/screens/status-b1.svg" width="1120" height="142" alt="A backend&#x27;s own status." loading="lazy"><figcaption>A backend's own status.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
  role    | cluster | state                   | offer    | port     | check  | own check | offered | service          | node fingerprint
 ---------+---------+-------------------------+----------+----------+--------+-----------+---------+------------------+------------------
- backend | lab     | a member of the cluster | tcp-80   | tcp/80   | http / | ok        | yes     | far, web         | 13fb773a2f1602be
- backend | lab     | a member of the cluster | tcp-8080 | tcp/8080 | http / | ok        | yes     | mapped (port 80) | 13fb773a2f1602be</code></pre></details></figure>
+ backend | lab     | a member of the cluster | tcp-80   | tcp/80   | http / | ok        | yes     | far, web         | 0beaab3f6d2dfb43
+ backend | lab     | a member of the cluster | tcp-8080 | tcp/8080 | http / | ok        | yes     | mapped (port 80) | 0beaab3f6d2dfb43</code></pre></details></figure>
 <h2 id="what-a-backend-changes-on-its-machine">What a backend changes on its machine<a class="anchor" href="#what-a-backend-changes-on-its-machine" aria-label="Link to this section">#</a></h2>
 <ul><li>It creates <code>thelb0</code>, a dummy interface that does not answer ARP, and puts its services' VIPs on it.</li><li>It sets <code>net.ipv4.conf.all.arp_ignore=1</code> and <code>arp_announce=2</code> (unless they are already stricter), so the machine never answers ARP for a VIP.</li><li>For port mapping or tunnelled services, it adds an nftables table, <code>inet thelb</code>, and for tunnels an interface, <code>thelbt0</code>. See <a href="forwarding.html">Direct routing and tunnels</a>.</li></ul>
 <figure class="screen"><img src="assets/screens/thelb0.svg" width="846" height="214" alt="`thelb0` on a backend, with the VIPs of the services it serves." loading="lazy"><figcaption><code>thelb0</code> on a backend, with the VIPs of the services it serves.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ ip address show thelb0
 4: thelb0: &lt;BROADCAST,NOARP,UP,LOWER_UP&gt; mtu 1500 qdisc noqueue state UNKNOWN group default qlen 1000
-    link/ether d2:20:74:b8:88:0a brd ff:ff:ff:ff:ff:ff
+    link/ether 72:ab:d4:bb:94:92 brd ff:ff:ff:ff:ff:ff
     inet 198.18.0.20/32 scope global proto 0x74 thelb0
        valid_lft forever preferred_lft forever
     inet 198.18.0.22/32 scope global proto 0x74 thelb0

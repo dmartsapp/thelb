@@ -4,14 +4,14 @@
 <path d="M0 8a8 8 0 0 1 8-8h902A8 8 0 0 1 918 8v22H0z" fill="#161b22"/>
 <circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
 <text class="bar" x="459" y="19.5" text-anchor="middle">d2 - a second director's log</text>
-<text x="16" y="55"><tspan class="d">2026-11-14T21:35:53.168Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> preflight: this node has all theLB needs <tspan class="k">found=</tspan>"kernel</text>
+<text x="16" y="55"><tspan class="d">2026-11-15T20:53:52.190Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> preflight: this node has all theLB needs <tspan class="k">found=</tspan>"kernel</text>
 <text x="16" y="73">    6.12.116+deb13-amd64"</text>
-<text x="16" y="91"><tspan class="d">2026-11-14T21:35:53.169Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node fingerprint <tspan class="k">node=</tspan>d2 <tspan class="k">fingerprint=</tspan>0ecf672c4027c77f <tspan class="k">hostname=</tspan>linux</text>
+<text x="16" y="91"><tspan class="d">2026-11-15T20:53:52.192Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node fingerprint <tspan class="k">node=</tspan>d2 <tspan class="k">fingerprint=</tspan>0d01fb995174b13f <tspan class="k">hostname=</tspan>linux</text>
 <text x="16" y="109">    <tspan class="k">interface=</tspan>eth0 <tspan class="k">address=</tspan>198.18.0.12</text>
-<text x="16" y="127"><tspan class="d">2026-11-14T21:35:53.182Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> waiting for approval <tspan class="k">cluster=</tspan>lab <tspan class="k">node=</tspan>d2 <tspan class="k">fingerprint=</tspan>0ecf672c4027c77f</text>
-<text x="16" y="145">    <tspan class="k">address=</tspan>198.18.0.12 <tspan class="k">mac=</tspan>b6:df:e6:99:04:4e</text>
-<text x="16" y="163"><tspan class="d">2026-11-14T21:35:53.393Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> approved <tspan class="k">cluster=</tspan>lab <tspan class="k">by=</tspan>d1</text>
-<text x="16" y="181"><tspan class="d">2026-11-14T21:35:53.419Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> joined the cluster <tspan class="k">cluster=</tspan>lab <tspan class="k">id=</tspan>b98a54ee <tspan class="k">member=</tspan>d2-3ac448fb <tspan class="k">leader=</tspan>d1</text>
-<text x="16" y="199"><tspan class="d">2026-11-14T21:35:53.429Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> director ready <tspan class="k">socket=</tspan>/run/thelb/director/thelb.sock</text>
-<text x="16" y="217">    <tspan class="k">control_vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443 <tspan class="k">interface=</tspan>eth0 <tspan class="k">member=</tspan>d2-3ac448fb</text>
+<text x="16" y="127"><tspan class="d">2026-11-15T20:53:52.206Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> waiting for approval <tspan class="k">cluster=</tspan>lab <tspan class="k">node=</tspan>d2 <tspan class="k">fingerprint=</tspan>0d01fb995174b13f</text>
+<text x="16" y="145">    <tspan class="k">address=</tspan>198.18.0.12 <tspan class="k">mac=</tspan>8e:7f:28:02:95:30</text>
+<text x="16" y="163"><tspan class="d">2026-11-15T20:53:52.417Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> approved <tspan class="k">cluster=</tspan>lab <tspan class="k">by=</tspan>d1</text>
+<text x="16" y="181"><tspan class="d">2026-11-15T20:53:52.441Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> joined the cluster <tspan class="k">cluster=</tspan>lab <tspan class="k">id=</tspan>ac7940f8 <tspan class="k">member=</tspan>d2-7517a90e <tspan class="k">leader=</tspan>d1</text>
+<text x="16" y="199"><tspan class="d">2026-11-15T20:53:52.465Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> director ready <tspan class="k">socket=</tspan>/run/thelb/director/thelb.sock</text>
+<text x="16" y="217">    <tspan class="k">control_vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443 <tspan class="k">interface=</tspan>eth0 <tspan class="k">member=</tspan>d2-7517a90e</text>
 </svg>

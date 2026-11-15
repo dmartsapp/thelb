@@ -1,7 +1,7 @@
 d1 - the leader's log, with --debug
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39380 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39300 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39320 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:51708 service=mapped vip=198.18.0.21:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39294 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
-2026-11-14T21:36:08.788Z [director] DEBUG connection forwarded client=198.18.0.100:39372 service=web vip=198.18.0.20:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:39878 service=mapped vip=198.18.0.21:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54822 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54782 service=web vip=198.18.0.20:80 backend=b2 to=198.18.0.32:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54788 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54730 service=web vip=198.18.0.20:80 backend=b1 to=198.18.0.31:80 proto=tcp state=FIN_WAIT
+2026-11-15T20:54:07.802Z [director] DEBUG connection forwarded client=198.18.0.100:54742 service=web vip=198.18.0.20:80 backend=b3 to=198.18.0.33:80 proto=tcp state=FIN_WAIT

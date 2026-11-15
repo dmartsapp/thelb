@@ -39,7 +39,7 @@
 <figure class="screen"><img src="assets/screens/status.svg" width="765" height="286" alt="The summary: each kind of thing, how many there are, and how many are up, down or waiting." loading="lazy"><figcaption>The summary: each kind of thing, how many there are, and how many are up, down or waiting.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d1     |    2 | 2026-11-15 20:53:48 |        6s
 
  what      | total | up | down | pending
 -----------+-------+----+------+---------
@@ -53,23 +53,23 @@ More: thelb status directors | backends | vips | all</code></pre></details></fig
 <figure class="screen"><img src="assets/screens/status-directors.svg" width="765" height="412" alt="The cluster table, then the nodes and their certificates." loading="lazy"><figcaption>The cluster table, then the nodes and their certificates.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d1     |    2 | 2026-11-15 20:53:48 |        6s
 
  node | role     | address     | state | version | node fingerprint | last check-in
 ------+----------+-------------+-------+---------+------------------+---------------
- d1   | leader   | 198.18.0.11 | up    | 0.1.0   | 54cbcbbb78ad3cc6 | -
- d2   | director | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | 0.4 s ago
- d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.4 s ago
+ d1   | leader   | 198.18.0.11 | up    | 0.1.0   | fa65c24eecea87db | -
+ d2   | director | 198.18.0.12 | up    | 0.1.0   | 0d01fb995174b13f | 0.7 s ago
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 87880f68e96e94b8 | 0.7 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  certificate  | kind     | fingerprint      | not after
 --------------+----------+------------------+---------------------
- theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
- d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
- d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
- d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+ theLB lab CA | ca       | 88701f2376f6a200 | 2036-11-12 20:53:47
+ d1           | director | 84d9f095d83497bd | 2026-11-16 20:53:47
+ d2           | director | 3ed8d68d8eb537e7 | 2026-11-16 20:53:52
+ d3           | director | 14d4e4152322a864 | 2026-11-16 20:53:52</code></pre></details></figure>
 <p><strong>state</strong> is one of:</p>
 <div class="tablewrap"><table><thead><tr><th>State</th><th>Means</th></tr></thead><tbody><tr><td><code>up</code></td><td>working</td></tr><tr><td><code>down</code></td><td>a director that has not checked in for 3 seconds, or a backend with no heartbeat for 10; also a director the leader found gone and took out of the vote</td></tr><tr><td><code>catching up</code></td><td>a new director, copying the cluster's state; it cannot vote yet</td></tr><tr><td><code>stopped</code></td><td>a director stopped on purpose; out of the vote until it starts again</td></tr><tr><td><code>unknown</code></td><td>this director cannot reach the leader, so it cannot tell</td></tr></tbody></table></div>
 <p>The <strong>node fingerprint</strong> identifies the machine. Compare it before you approve a node.</p>
@@ -79,41 +79,41 @@ More: thelb status directors | backends | vips | all</code></pre></details></fig
 <figure class="screen"><img src="assets/screens/status-backends.svg" width="1015" height="736" alt="Each backend of each service." loading="lazy"><figcaption>Each backend of each service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status backends
  node | role    | address     | state | version | node fingerprint | last check-in
 ------+---------+-------------+-------+---------+------------------+---------------
- b1   | backend | 198.18.0.31 | up    | 0.1.0   | 13fb773a2f1602be | 1.8 s ago
- b2   | backend | 198.18.0.32 | up    | 0.1.0   | 47e299ae51b988ce | 1.8 s ago
- b3   | backend | 198.18.0.33 | up    | 0.1.0   | fbc7b527309b076e | 1.8 s ago
- b4   | backend | 198.19.0.41 | up    | 0.1.0   | 138d4b1de80a58a0 | 1.5 s ago
+ b1   | backend | 198.18.0.31 | up    | 0.1.0   | 0beaab3f6d2dfb43 | 1.9 s ago
+ b2   | backend | 198.18.0.32 | up    | 0.1.0   | 8948c9a6b3974fe9 | 1.9 s ago
+ b3   | backend | 198.18.0.33 | up    | 0.1.0   | 86fbc35cd82f7f79 | 1.9 s ago
+ b4   | backend | 198.19.0.41 | up    | 0.1.0   | 525079852f9bb67e | 1.5 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  node | offer    | address     | port     | check  | own check | service  | since
 ------+----------+-------------+----------+--------+-----------+----------+--------
- b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
- b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.7 s
- b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
- b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.7 s
- b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.7 s
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.9 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.9 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.9 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.9 s
  b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s
 
  service | vip            | backend | at               | checks  | weight | connections | packets | bytes  | last check-in
 ---------+----------------+---------+------------------+---------+--------+-------------+---------+--------+---------------
- web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
- web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.8 s ago
- web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      19 | 1.2 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
- mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.8 s ago
- far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.8 s ago
- far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.5 s ago
+ web     | 198.18.0.20:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      25 | 1.6 kB | 1.9 s ago
+ web     | 198.18.0.20:80 | b2      | 198.18.0.32:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.9 s ago
+ web     | 198.18.0.20:80 | b3      | 198.18.0.33:80   | ok / ok |      1 |           4 |      28 | 1.8 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b1      | 198.18.0.31:8080 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b2      | 198.18.0.32:9090 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ mapped  | 198.18.0.21:80 | b3      | 198.18.0.33:7070 | ok / ok |      1 |           3 |      20 | 1.3 kB | 1.9 s ago
+ far     | 198.18.0.22:80 | b1      | 198.18.0.31:80   | ok / ok |      1 |           4 |      26 | 1.7 kB | 1.9 s ago
+ far     | 198.18.0.22:80 | b4      | 198.19.0.41:80   | ok / ok |      1 |           4 |      27 | 1.7 kB | 1.5 s ago
 
  certificate | kind    | fingerprint      | not after
 -------------+---------+------------------+---------------------
- b1          | backend | fb7a6dccf0b61793 | 2026-11-15 21:35:54
- b2          | backend | 3f79e6b05f968c20 | 2026-11-15 21:35:54
- b3          | backend | f1c3a00db0a7c495 | 2026-11-15 21:35:54
- b4          | backend | 4f2240e08f2c1741 | 2026-11-15 21:35:54</code></pre></details></figure>
+ b1          | backend | 59eadccbf3c92770 | 2026-11-16 20:53:53
+ b2          | backend | a58c9affc202d176 | 2026-11-16 20:53:53
+ b3          | backend | 0e591fe45e592b4d | 2026-11-16 20:53:53
+ b4          | backend | bc53fbdf9b6dcef2 | 2026-11-16 20:53:53</code></pre></details></figure>
 <div class="tablewrap"><table><thead><tr><th>Column</th><th>Means</th></tr></thead><tbody><tr><td><strong>checks</strong></td><td>the backend's own check, then the directors' check: <code>ok</code>, <code>fail</code>, or <code>-</code> (no result yet)</td></tr><tr><td><strong>weight</strong></td><td>what IPVS has now: the assigned weight, or 0 while the backend does not serve</td></tr><tr><td><strong>connections</strong>, <strong>packets</strong>, <strong>bytes</strong></td><td>what IPVS sent the backend. There is no count of replies: they never pass the director</td></tr><tr><td><strong>last check-in</strong></td><td>how long ago the backend's last heartbeat arrived</td></tr></tbody></table></div>
 <h2 id="services">Services<a class="anchor" href="#services" aria-label="Link to this section">#</a></h2>
 <ul><li><strong>backends up</strong>: how many of the assigned backends have a weight above 0.</li><li><strong>method</strong>: <code>direct</code> or <code>tunnel</code>.</li><li><strong>scheduler</strong>: how connections are spread - <code>wrr</code> by default.</li></ul>
@@ -121,22 +121,22 @@ More: thelb status directors | backends | vips | all</code></pre></details></fig
 <figure class="screen"><img src="assets/screens/status-offers.svg" width="692" height="232" alt="Every offer." loading="lazy"><figcaption>Every offer.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status offers
  node | offer    | address     | port     | check  | own check | service  | since
 ------+----------+-------------+----------+--------+-----------+----------+--------
- b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
- b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.8 s
- b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
- b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.8 s
- b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s</code></pre></details></figure>
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 12.0 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 12.0 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 12.0 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 12.0 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.9 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.6 s</code></pre></details></figure>
 <ul><li><strong>offer</strong>: the name the backend gave it.</li><li><strong>own check</strong>: the backend's own check, as its last heartbeat said.</li><li><strong>service</strong>: what it is assigned to; <code>-</code> while not assigned.</li></ul>
 <h2 id="vips">VIPs<a class="anchor" href="#vips" aria-label="Link to this section">#</a></h2>
 <figure class="screen"><img src="assets/screens/status-vips.svg" width="620" height="358" alt="The VIPs: the control VIP and each service&#x27;s, with their holder." loading="lazy"><figcaption>The VIPs: the control VIP and each service's, with their holder.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status vips
  vip         | purpose | pool | interface | held by | since
 -------------+---------+------+-----------+---------+---------------------
- 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-14 21:35:49
- 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-14 21:35:59
- 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-14 21:36:00
- 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-14 21:36:01
+ 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-15 20:53:48
+ 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-15 20:53:58
+ 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-15 20:53:59
+ 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-15 20:54:01
 
  service | vip         | port   | scheduler | method | backends up
 ---------+-------------+--------+-----------+--------+-------------

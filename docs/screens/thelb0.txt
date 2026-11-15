@@ -1,7 +1,7 @@
 b1
 $ ip address show thelb0
 4: thelb0: <BROADCAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN group default qlen 1000
-    link/ether d2:20:74:b8:88:0a brd ff:ff:ff:ff:ff:ff
+    link/ether 72:ab:d4:bb:94:92 brd ff:ff:ff:ff:ff:ff
     inet 198.18.0.20/32 scope global proto 0x74 thelb0
        valid_lft forever preferred_lft forever
     inet 198.18.0.22/32 scope global proto 0x74 thelb0

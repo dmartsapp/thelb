@@ -39,33 +39,33 @@
 <p>It finds the cluster on the control VIP and waits for approval. Approve it on any director:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin approve lb-2</code></pre></div>
 <p>It then copies the cluster's state from the leader. Once it has caught up, it becomes a voting member, and can take over if the leader fails.</p>
-<figure class="screen"><img src="assets/screens/director-join.svg" width="918" height="232" alt="A second director&#x27;s log: it finds the cluster, waits, is approved, catches up and is ready." loading="lazy"><figcaption>A second director's log: it finds the cluster, waits, is approved, catches up and is ready.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:53.168Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
-2026-11-14T21:35:53.169Z [director] OK node fingerprint node=d2 fingerprint=0ecf672c4027c77f hostname=linux interface=eth0 address=198.18.0.12
-2026-11-14T21:35:53.182Z [director] OK waiting for approval cluster=lab node=d2 fingerprint=0ecf672c4027c77f address=198.18.0.12 mac=b6:df:e6:99:04:4e
-2026-11-14T21:35:53.393Z [director] OK approved cluster=lab by=d1
-2026-11-14T21:35:53.419Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d2-3ac448fb leader=d1
-2026-11-14T21:35:53.429Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d2-3ac448fb</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/director-join.svg" width="918" height="232" alt="A second director&#x27;s log: it finds the cluster, waits, is approved, catches up and is ready." loading="lazy"><figcaption>A second director's log: it finds the cluster, waits, is approved, catches up and is ready.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:53:52.190Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-15T20:53:52.192Z [director] OK node fingerprint node=d2 fingerprint=0d01fb995174b13f hostname=linux interface=eth0 address=198.18.0.12
+2026-11-15T20:53:52.206Z [director] OK waiting for approval cluster=lab node=d2 fingerprint=0d01fb995174b13f address=198.18.0.12 mac=8e:7f:28:02:95:30
+2026-11-15T20:53:52.417Z [director] OK approved cluster=lab by=d1
+2026-11-15T20:53:52.441Z [director] OK joined the cluster cluster=lab id=ac7940f8 member=d2-7517a90e leader=d1
+2026-11-15T20:53:52.465Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d2-7517a90e</code></pre></details></figure>
 <p><code>thelb status directors</code> shows every director, its state, and the cluster's leader:</p>
 <figure class="screen"><img src="assets/screens/status-directors.svg" width="765" height="412" alt="The cluster, its directors, and their certificates." loading="lazy"><figcaption>The cluster, its directors, and their certificates.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d1     |    2 | 2026-11-14 21:35:49 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d1     |    2 | 2026-11-15 20:53:48 |        6s
 
  node | role     | address     | state | version | node fingerprint | last check-in
 ------+----------+-------------+-------+---------+------------------+---------------
- d1   | leader   | 198.18.0.11 | up    | 0.1.0   | 54cbcbbb78ad3cc6 | -
- d2   | director | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | 0.4 s ago
- d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.4 s ago
+ d1   | leader   | 198.18.0.11 | up    | 0.1.0   | fa65c24eecea87db | -
+ d2   | director | 198.18.0.12 | up    | 0.1.0   | 0d01fb995174b13f | 0.7 s ago
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 87880f68e96e94b8 | 0.7 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  certificate  | kind     | fingerprint      | not after
 --------------+----------+------------------+---------------------
- theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
- d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
- d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
- d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+ theLB lab CA | ca       | 88701f2376f6a200 | 2036-11-12 20:53:47
+ d1           | director | 84d9f095d83497bd | 2026-11-16 20:53:47
+ d2           | director | 3ed8d68d8eb537e7 | 2026-11-16 20:53:52
+ d3           | director | 14d4e4152322a864 | 2026-11-16 20:53:52</code></pre></details></figure>
 <h2 id="how-many-directors">How many directors?<a class="anchor" href="#how-many-directors" aria-label="Link to this section">#</a></h2>
 <div class="tablewrap"><table><thead><tr><th>Directors</th><th>What it survives</th></tr></thead><tbody><tr><td>1</td><td>nothing: if it stops, the VIPs stop. Fine for trying theLB.</td></tr><tr><td>2</td><td>one planned stop, or one crash - with a few rules (below)</td></tr><tr><td><strong>3</strong></td><td><strong>any one failure, with no guessing. Recommended.</strong></td></tr><tr><td>5</td><td>any two failures</td></tr></tbody></table></div>
 <p>The cluster uses <strong>Raft</strong>: a change counts once a majority of the voting directors have it. Three directors keep their majority when any one fails.</p>
@@ -99,29 +99,29 @@
 <figure class="screen"><img src="assets/screens/failover-status.svg" width="765" height="412" alt="After the leader was killed: the new leader, and the old one `down`, out of the vote." loading="lazy"><figcaption>After the leader was killed: the new leader, and the old one <code>down</code>, out of the vote.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status directors
  cluster | id       | created             | leader | term | leader since        | vip lease
 ---------+----------+---------------------+--------+------+---------------------+-----------
- lab     | b98a54ee | 2026-11-14 21:35:48 | d2     |    3 | 2026-11-14 21:36:36 |        6s
+ lab     | ac7940f8 | 2026-11-15 20:53:47 | d2     |    3 | 2026-11-15 20:54:33 |        6s
 
  node | role     | address     | state | version | node fingerprint | last check-in
 ------+----------+-------------+-------+---------+------------------+---------------
- d1   | director | 198.18.0.11 | down  | 0.1.0   | 54cbcbbb78ad3cc6 | 10.3 s ago
- d2   | leader   | 198.18.0.12 | up    | 0.1.0   | 0ecf672c4027c77f | -
- d3   | director | 198.18.0.13 | up    | 0.1.0   | 664e742c52376e33 | 0.8 s ago
+ d1   | director | 198.18.0.11 | down  | 0.1.0   | fa65c24eecea87db | 10.5 s ago
+ d2   | leader   | 198.18.0.12 | up    | 0.1.0   | 0d01fb995174b13f | -
+ d3   | director | 198.18.0.13 | up    | 0.1.0   | 87880f68e96e94b8 | 0.8 s ago
 
  pending | role | address | mac | node fingerprint | waiting
 ---------+------+---------+-----+------------------+---------
 
  certificate  | kind     | fingerprint      | not after
 --------------+----------+------------------+---------------------
- theLB lab CA | ca       | 587cd93f8c26fb25 | 2036-11-11 21:35:48
- d1           | director | 0387929998603c0c | 2026-11-15 21:35:48
- d2           | director | d06fcdbad86930cb | 2026-11-15 21:35:53
- d3           | director | 7cf26cda1c8a20b9 | 2026-11-15 21:35:53</code></pre></details></figure>
+ theLB lab CA | ca       | 88701f2376f6a200 | 2036-11-12 20:53:47
+ d1           | director | 84d9f095d83497bd | 2026-11-16 20:53:47
+ d2           | director | 3ed8d68d8eb537e7 | 2026-11-16 20:53:52
+ d3           | director | 14d4e4152322a864 | 2026-11-16 20:53:52</code></pre></details></figure>
 <p>When the crashed director starts again, it cleans up what it left in its kernel and rejoins - without approval:</p>
-<figure class="screen"><img src="assets/screens/rejoin.svg" width="918" height="196" alt="The crashed director, started again: it removes what the crash left, rejoins and follows." loading="lazy"><figcaption>The crashed director, started again: it removes what the crash left, rejoins and follows.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:46.367Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
-2026-11-14T21:36:46.368Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
-2026-11-14T21:36:46.375Z [director] OK approved before: rejoining cluster=lab approved_by=bootstrap
-2026-11-14T21:36:46.387Z [director] OK joined the cluster cluster=lab id=b98a54ee member=d1-b073ec0e leader=d2
-2026-11-14T21:36:46.393Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-b073ec0e</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/rejoin.svg" width="918" height="196" alt="The crashed director, started again: it removes what the crash left, rejoins and follows." loading="lazy"><figcaption>The crashed director, started again: it removes what the crash left, rejoins and follows.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:54:44.401Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-15T20:54:44.403Z [director] OK node fingerprint node=d1 fingerprint=fa65c24eecea87db hostname=linux interface=eth0 address=198.18.0.11
+2026-11-15T20:54:44.410Z [director] OK approved before: rejoining cluster=lab approved_by=bootstrap
+2026-11-15T20:54:44.426Z [director] OK joined the cluster cluster=lab id=ac7940f8 member=d1-c2269a13 leader=d2
+2026-11-15T20:54:44.430Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-c2269a13</code></pre></details></figure>
 <h3 id="connections-in-progress">Connections in progress<a class="anchor" href="#connections-in-progress" aria-label="Link to this section">#</a></h3>
 <p>Connections keep going through a failover. The leader sends its connection table to the other directors all the time (IPVS <em>connection sync</em>, by multicast). So the new leader already knows which backend each open connection belongs to. This needs multicast between the directors - see the firewall table in <a href="install.html#open-these-in-your-firewalls">Install</a>.</p>
 <h2 id="two-directors">Two directors<a class="anchor" href="#two-directors" aria-label="Link to this section">#</a></h2>

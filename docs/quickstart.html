@@ -43,21 +43,21 @@
   <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret</code></pre></div>
 <p>What happens:</p>
 <ol><li>It checks that the machine has everything theLB needs (this is called <em>preflight</em>).</li><li>It looks for an existing cluster on the control VIP for 5 seconds, and finds none.</li><li>It creates the cluster, and - because the files do not exist yet - the two <strong>secret files</strong>, readable by root only.</li><li>It takes the control VIP and becomes the leader.</li></ol>
-<figure class="screen"><img src="assets/screens/director-start.svg" width="910" height="520" alt="The first director&#x27;s log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab&#x27;s `d1` also runs with `--metrics` and `--debug`: hence their two lines.)" loading="lazy"><figcaption>The first director's log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab's <code>d1</code> also runs with <code>--metrics</code> and <code>--debug</code>: hence their two lines.)</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:39.663Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
-2026-11-14T21:35:39.672Z [metrics] OK metrics served address=198.18.0.11:9100 path=/metrics
-2026-11-14T21:35:39.673Z [director] OK node fingerprint node=d1 fingerprint=54cbcbbb78ad3cc6 hostname=linux interface=eth0 address=198.18.0.11
-2026-11-14T21:35:48.182Z [director] OK secret file created role=director file=/tmp/thelb-lab/d1/director.secret mode=0600
-2026-11-14T21:35:48.182Z [director] OK secret file created role=backend file=/tmp/thelb-lab/d1/backend.secret mode=0600
-2026-11-14T21:35:48.183Z [director] OK creating the cluster: nothing answers on the control VIP cluster=lab vip=198.18.0.10 port=7443
-2026-11-14T21:35:49.785Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr="" last-leader-id=""
-2026-11-14T21:35:49.787Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-74a7b4d5
-2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=master interface=eth0 sync_id=188
-2026-11-14T21:35:49.787Z [dataplane] OK IPVS connection sync started role=backup interface=eth0 sync_id=188
-2026-11-14T21:35:49.787Z [director] DEBUG watching IPVS's connections, to log each new one in_progress=0
-2026-11-14T21:35:52.898Z [director] OK cluster created cluster=lab id=b98a54ee
-2026-11-14T21:35:52.898Z [director] OK certificate authority created fingerprint=587cd93f8c26fb25004feaf88a73519cf98eee509f37098a73bde3c13db916ad not_after=2036-11-11T21:35:48Z
-2026-11-14T21:35:52.898Z [director] OK certificate issued node=d1 role=director fingerprint=0387929998603c0c59f5c35bae7cfc13aeed3bc74d9f417d0ae24070533157ff not_after=2026-11-15T21:35:48Z
-2026-11-14T21:35:52.898Z [director] OK leader node=d1 term=2 member=d1-74a7b4d5</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/director-start.svg" width="910" height="520" alt="The first director&#x27;s log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab&#x27;s `d1` also runs with `--metrics` and `--debug`: hence their two lines.)" loading="lazy"><figcaption>The first director's log: preflight, the secret files, a new cluster, connection sync, leadership. (The lab's <code>d1</code> also runs with <code>--metrics</code> and <code>--debug</code>: hence their two lines.)</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:53:38.492Z [director] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-15T20:53:38.504Z [metrics] OK metrics served address=198.18.0.11:9100 path=/metrics
+2026-11-15T20:53:38.505Z [director] OK node fingerprint node=d1 fingerprint=fa65c24eecea87db hostname=linux interface=eth0 address=198.18.0.11
+2026-11-15T20:53:47.030Z [director] OK secret file created role=director file=/tmp/thelb-lab/d1/director.secret mode=0600
+2026-11-15T20:53:47.030Z [director] OK secret file created role=backend file=/tmp/thelb-lab/d1/backend.secret mode=0600
+2026-11-15T20:53:47.031Z [director] OK creating the cluster: nothing answers on the control VIP cluster=lab vip=198.18.0.10 port=7443
+2026-11-15T20:53:48.798Z [raft] WARN heartbeat timeout reached, starting election last-leader-addr="" last-leader-id=""
+2026-11-15T20:53:48.800Z [director] OK director ready socket=/run/thelb/director/thelb.sock control_vip=198.18.0.10 port=7443 interface=eth0 member=d1-eb0e9509
+2026-11-15T20:53:48.800Z [dataplane] OK IPVS connection sync started role=master interface=eth0 sync_id=221
+2026-11-15T20:53:48.800Z [dataplane] OK IPVS connection sync started role=backup interface=eth0 sync_id=221
+2026-11-15T20:53:48.800Z [director] DEBUG watching IPVS's connections, to log each new one in_progress=0
+2026-11-15T20:53:51.922Z [director] OK cluster created cluster=lab id=ac7940f8
+2026-11-15T20:53:51.922Z [director] OK certificate authority created fingerprint=88701f2376f6a200c1f8a15110eb7e218ec8d3197395782a27ec93c05d6347b2 not_after=2036-11-12T20:53:47Z
+2026-11-15T20:53:51.922Z [director] OK certificate issued node=d1 role=director fingerprint=84d9f095d83497bd96d809cad3cd998a30b3dd11c7dccbb0b4287a908d07c2f6 not_after=2026-11-16T20:53:47Z
+2026-11-15T20:53:51.922Z [director] OK leader node=d1 term=2 member=d1-eb0e9509</code></pre></details></figure>
 <p>Leave it running. (Later, <a href="systemd.html">run it under systemd</a> instead.)</p>
 <h2 id="2-copy-the-backend-secret">2. Copy the backend secret<a class="anchor" href="#2-copy-the-backend-secret" aria-label="Link to this section">#</a></h2>
 <p>Copy <code>/etc/thelb/backend.secret</code> from <code>lb-1</code> to each backend, readable by root only:</p>
@@ -69,12 +69,12 @@
   <span class="tok-flag">--offer</span> web=tcp/80,check=http:/</code></pre></div>
 <p><code>--offer web=tcp/80,check=http:/</code> means: "I have an application. Call it <code>web</code>. It is on TCP port 80. Check it with an HTTP request for <code>/</code>."</p>
 <p>The backend joins and waits for approval. Its log shows its <strong>node fingerprint</strong> - a code that identifies this machine:</p>
-<figure class="screen"><img src="assets/screens/pending-log.svg" width="894" height="214" alt="A new backend&#x27;s log: it reaches the cluster, and waits to be approved." loading="lazy"><figcaption>A new backend's log: it reaches the cluster, and waits to be approved.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:36:11.314Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
-2026-11-14T21:36:11.315Z [kernel] OK interface created interface=thelb0 arp=off
-2026-11-14T21:36:11.315Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
-2026-11-14T21:36:11.315Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
-2026-11-14T21:36:11.315Z [backend] OK node fingerprint node=d2-web fingerprint=0ecf672c4027c77f hostname=linux interface=eth0 address=198.18.0.12
-2026-11-14T21:36:11.326Z [backend] OK waiting for approval cluster=lab node=d2-web fingerprint=0ecf672c4027c77f address=198.18.0.12 mac=b6:df:e6:99:04:4e</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/pending-log.svg" width="894" height="214" alt="A new backend&#x27;s log: it reaches the cluster, and waits to be approved." loading="lazy"><figcaption>A new backend's log: it reaches the cluster, and waits to be approved.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:54:10.620Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-15T20:54:10.623Z [kernel] OK interface created interface=thelb0 arp=off
+2026-11-15T20:54:10.624Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
+2026-11-15T20:54:10.624Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
+2026-11-15T20:54:10.624Z [backend] OK node fingerprint node=d2-web fingerprint=0d01fb995174b13f hostname=linux interface=eth0 address=198.18.0.12
+2026-11-15T20:54:10.640Z [backend] OK waiting for approval cluster=lab node=d2-web fingerprint=0d01fb995174b13f address=198.18.0.12 mac=8e:7f:28:02:95:30</code></pre></details></figure>
 <h2 id="4-approve-the-backends">4. Approve the backends<a class="anchor" href="#4-approve-the-backends" aria-label="Link to this section">#</a></h2>
 <p>On the director, list the nodes that are waiting:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending</code></pre></div>
@@ -85,21 +85,21 @@
 <figure class="screen"><img src="assets/screens/approve.svg" width="684" height="196" alt="The waiting list, the approval, and assigning the new backend to a service." loading="lazy"><figcaption>The waiting list, the approval, and assigning the new backend to a service.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status pending
  pending | role    | address     | mac               | node fingerprint | waiting
 ---------+---------+-------------+-------------------+------------------+---------
- d2-web  | backend | 198.18.0.12 | b6:df:e6:99:04:4e | 0ecf672c4027c77f | 0.2 s
+ d2-web  | backend | 198.18.0.12 | 8e:7f:28:02:95:30 | 0d01fb995174b13f | 0.2 s
 $ sudo thelb admin approve d2-web
 approved: d2-web
 $ sudo thelb admin assign web d2-web:tcp/80
 assigned to web: d2-web</code></pre></details></figure>
 <p>Once approved, the backend says <code>backend ready</code>:</p>
-<figure class="screen"><img src="assets/screens/backend-join.svg" width="894" height="268" alt="A backend&#x27;s log from start to ready: preflight, joining, approval, its offers." loading="lazy"><figcaption>A backend's log from start to ready: preflight, joining, approval, its offers.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-14T21:35:53.564Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
-2026-11-14T21:35:53.579Z [kernel] OK interface created interface=thelb0 arp=off
-2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
-2026-11-14T21:35:53.579Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
-2026-11-14T21:35:53.579Z [backend] OK node fingerprint node=b1 fingerprint=13fb773a2f1602be hostname=linux interface=eth0 address=198.18.0.31
-2026-11-14T21:35:53.607Z [backend] OK waiting for approval cluster=lab node=b1 fingerprint=13fb773a2f1602be address=198.18.0.31 mac=da:ca:55:fb:f2:6b
-2026-11-14T21:35:54.107Z [backend] OK approved cluster=lab by=d1
-2026-11-14T21:35:54.118Z [backend] OK enrolled cluster=lab id=b98a54ee member=b1-09877083
-2026-11-14T21:35:54.127Z [backend] OK backend ready cluster=lab member=b1-09877083 offers=2</code></pre></details></figure>
+<figure class="screen"><img src="assets/screens/backend-join.svg" width="894" height="268" alt="A backend&#x27;s log from start to ready: preflight, joining, approval, its offers." loading="lazy"><figcaption>A backend's log from start to ready: preflight, joining, approval, its offers.</figcaption><details class="screentext"><summary>As text</summary><pre><code>2026-11-15T20:53:52.824Z [backend] OK preflight: this node has all theLB needs found="kernel 6.12.116+deb13-amd64"
+2026-11-15T20:53:52.827Z [kernel] OK interface created interface=thelb0 arp=off
+2026-11-15T20:53:52.828Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_ignore value=1 was=0
+2026-11-15T20:53:52.828Z [kernel] OK kernel parameter set name=net/ipv4/conf/all/arp_announce value=2 was=0
+2026-11-15T20:53:52.828Z [backend] OK node fingerprint node=b1 fingerprint=0beaab3f6d2dfb43 hostname=linux interface=eth0 address=198.18.0.31
+2026-11-15T20:53:52.873Z [backend] OK waiting for approval cluster=lab node=b1 fingerprint=0beaab3f6d2dfb43 address=198.18.0.31 mac=6e:13:73:11:66:cd
+2026-11-15T20:53:53.222Z [backend] OK approved cluster=lab by=d1
+2026-11-15T20:53:53.224Z [backend] OK enrolled cluster=lab id=ac7940f8 member=b1-13e7aff0
+2026-11-15T20:53:53.258Z [backend] OK backend ready cluster=lab member=b1-13e7aff0 offers=2</code></pre></details></figure>
 <h2 id="5-create-a-service">5. Create a service<a class="anchor" href="#5-create-a-service" aria-label="Link to this section">#</a></h2>
 <p>Three commands on the director. A <strong>pool</strong> is a range of addresses for VIPs. A <strong>service</strong> is a VIP, a protocol and a port. An <strong>assignment</strong> connects a backend's offer to a service.</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin pool add main <span class="tok-flag">--vip</span> 10.0.0.20/24 <span class="tok-flag">--vippool-count</span> 10
@@ -114,12 +114,12 @@ service web: 198.18.0.20 tcp/80
 $ sudo thelb status offers
  node | offer    | address     | port     | check  | own check | service | since
 ------+----------+-------------+----------+--------+-----------+---------+-------
- b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | -       | 1.5 s
- b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | -       | 1.4 s
- b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | -       | 1.5 s
- b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | -       | 1.4 s
- b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | -       | 1.5 s
- b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | -       | 1.4 s
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | -       | 1.6 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | -       | 1.6 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | -       | 1.6 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | -       | 1.5 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | -       | 1.6 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | -       | 1.5 s
  b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | -       | 1.2 s
 $ sudo thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80
 assigned to web: b1, b2, b3</code></pre></details></figure>
@@ -129,10 +129,10 @@ assigned to web: b1, b2, b3</code></pre></details></figure>
 <figure class="screen"><img src="assets/screens/status-vips.svg" width="620" height="358" alt="The VIPs, who holds them, and the services on them." loading="lazy"><figcaption>The VIPs, who holds them, and the services on them.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status vips
  vip         | purpose | pool | interface | held by | since
 -------------+---------+------+-----------+---------+---------------------
- 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-14 21:35:49
- 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-14 21:35:59
- 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-14 21:36:00
- 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-14 21:36:01
+ 198.18.0.10 | control | -    | eth0      | d1      | 2026-11-15 20:53:48
+ 198.18.0.20 | service | lab  | eth0      | d1      | 2026-11-15 20:53:58
+ 198.18.0.21 | service | lab  | eth0      | d1      | 2026-11-15 20:53:59
+ 198.18.0.22 | service | lab  | eth0      | d1      | 2026-11-15 20:54:01
 
  service | vip         | port   | scheduler | method | backends up
 ---------+-------------+--------+-----------+--------+-------------

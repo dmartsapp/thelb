@@ -183,7 +183,11 @@ sudo thelb status vips            # on a director: the VIP, held by the leader
 curl http://10.0.0.50/            # from a client
 ```
 
-`thelb status services` and `thelb status backends` list each port of the Service on its VIP, and the nodes serving it, with their weights and checks.
+`thelb status services` and `thelb status backends` list each port of the Service on its VIP, and the nodes serving it, with their weights and checks:
+
+:::screen k8s-status
+A Service in the [lab](tech-testing.md#the-kubernetes-test): its VIP, its port, and the two nodes serving it - n1 with two ready pods, so weight 2, and n2 with one. The tables of theLB's own backends are empty: in a Kubernetes cluster, the nodes are the backends.
+:::
 
 ## Which nodes get traffic
 
@@ -198,7 +202,11 @@ Never a node that is not `Ready`, a director's node, or a node labelled `node.ku
 kubectl label node worker1 node.kubernetes.io/exclude-from-external-load-balancers=true
 ```
 
-With `Local`, draining a node is enough: once it has no ready pod, its health port says `503`, and it gets no new connections.
+With `Local`, draining a node is enough: once it has no ready pod, its health port says `503`, and it gets no new connections. The leader logs each node that starts or stops serving:
+
+:::screen k8s-log
+The Service gets its VIP; n2 loses its pod - its health port says 503 - and gets it back.
+:::
 
 ## Annotations
 

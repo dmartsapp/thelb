@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 910 250" width="910" height="250" role="img" aria-label="d1 - the leader&#x27;s log: a Service gets its VIP; n2 loses its pod, and gets it back" xml:space="preserve">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:13px;white-space:pre;fill:#c9d1d9}.bar{fill:#8b949e;font-size:12px}.p{fill:#7ee787}.c{fill:#f0f6fc;font-weight:600}.d{fill:#8b949e}.m{fill:#79c0ff}.ok{fill:#3fb950}.wa{fill:#d29922}.er{fill:#f85149}.db{fill:#bc8cff}.k{fill:#8b949e}.h{fill:#79c0ff;font-weight:600}</style>
+<rect width="910" height="250" rx="8" fill="#0d1117"/>
+<path d="M0 8a8 8 0 0 1 8-8h894A8 8 0 0 1 910 8v22H0z" fill="#161b22"/>
+<circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
+<text class="bar" x="455" y="19.5" text-anchor="middle">d1 - the leader's log: a Service gets its VIP; n2 loses its pod, and gets it back</text>
+<text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">journalctl -u thelb-director -o cat</tspan></text>
+<text x="16" y="73"><tspan class="d">2026-11-15T20:55:08.578Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> Kubernetes Service given its VIPs <tspan class="k">service=</tspan>default/web <tspan class="k">vips=</tspan>198.18.0.50</text>
+<text x="16" y="91"><tspan class="d">2026-11-15T20:55:08.579Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node serving <tspan class="k">service=</tspan>default/web <tspan class="k">vip=</tspan>198.18.0.50 <tspan class="k">port=</tspan>tcp/80 <tspan class="k">node=</tspan>n1</text>
+<text x="16" y="109">    <tspan class="k">at=</tspan>198.18.0.31:80 <tspan class="k">weight=</tspan>2</text>
+<text x="16" y="127"><tspan class="d">2026-11-15T20:55:08.580Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node serving <tspan class="k">service=</tspan>default/web <tspan class="k">vip=</tspan>198.18.0.50 <tspan class="k">port=</tspan>tcp/80 <tspan class="k">node=</tspan>n2</text>
+<text x="16" y="145">    <tspan class="k">at=</tspan>198.18.0.32:80 <tspan class="k">weight=</tspan>1</text>
+<text x="16" y="163"><tspan class="d">2026-11-15T20:55:16.736Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> node not serving: weight 0 <tspan class="k">service=</tspan>default/web <tspan class="k">vip=</tspan>198.18.0.50</text>
+<text x="16" y="181">    <tspan class="k">port=</tspan>tcp/80 <tspan class="k">node=</tspan>n2 <tspan class="k">at=</tspan>198.18.0.32:80 <tspan class="k">reason=</tspan>"its health port answers no 200: no ready pod of the Service</text>
+<text x="16" y="199">    there"</text>
+<text x="16" y="217"><tspan class="d">2026-11-15T20:55:20.742Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> node serving <tspan class="k">service=</tspan>default/web <tspan class="k">vip=</tspan>198.18.0.50 <tspan class="k">port=</tspan>tcp/80 <tspan class="k">node=</tspan>n2</text>
+<text x="16" y="235">    <tspan class="k">at=</tspan>198.18.0.32:80 <tspan class="k">weight=</tspan>1</text>
+</svg>

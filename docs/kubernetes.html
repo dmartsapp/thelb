@@ -372,12 +372,48 @@
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> get service web           <span class="tok-com"># EXTERNAL-IP: 10.0.0.50</span>
 <span class="tok-cmd">sudo</span> thelb status vips            <span class="tok-com"># on a director: the VIP, held by the leader</span>
 <span class="tok-cmd">curl</span> http://10.0.0.50/            <span class="tok-com"># from a client</span></code></pre></div>
-<p><code>thelb status services</code> and <code>thelb status backends</code> list each port of the Service on its VIP, and the nodes serving it, with their weights and checks.</p>
+<p><code>thelb status services</code> and <code>thelb status backends</code> list each port of the Service on its VIP, and the nodes serving it, with their weights and checks:</p>
+<figure class="screen"><img src="assets/screens/k8s-status.svg" width="1015" height="592" alt="A Service in the [lab](tech-testing.md#the-kubernetes-test): its VIP, its port, and the two nodes serving it - n1 with two ready pods, so weight 2, and n2 with one. The tables of theLB&#x27;s own backends are empty: in a Kubernetes cluster, the nodes are the backends." loading="lazy"><figcaption>A Service in the <a href="tech-testing.html#the-kubernetes-test">lab</a>: its VIP, its port, and the two nodes serving it - n1 with two ready pods, so weight 2, and n2 with one. The tables of theLB's own backends are empty: in a Kubernetes cluster, the nodes are the backends.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status vips
+ vip         | purpose    | pool | interface | held by | since
+-------------+------------+------+-----------+---------+---------------------
+ 198.18.0.10 | control    | -    | eth0      | d1      | 2026-11-15 20:55:02
+ 198.18.0.50 | kubernetes | k8s  | eth0      | d1      | 2026-11-15 20:55:08
+
+ service     | vip         | port   | scheduler | method | backends up
+-------------+-------------+--------+-----------+--------+-------------
+ default/web | 198.18.0.50 | tcp/80 | wrr       | direct | 2 of 2
+
+ pool | network       | addresses                 | interface | used
+------+---------------+---------------------------+-----------+--------
+ k8s  | 198.18.0.0/24 | 198.18.0.50 - 198.18.0.53 | eth0      | 1 of 4
+$ sudo thelb status backends
+ node | role | address | state | version | node fingerprint | last check-in
+------+------+---------+-------+---------+------------------+---------------
+
+ pending | role | address | mac | node fingerprint | waiting
+---------+------+---------+-----+------------------+---------
+
+ node | offer | address | port | check | own check | service | since
+------+-------+---------+------+-------+-----------+---------+-------
+
+ service     | vip            | backend | at             | checks | weight | connections | packets | bytes | last check-in
+-------------+----------------+---------+----------------+--------+--------+-------------+---------+-------+---------------
+ default/web | 198.18.0.50:80 | n1      | 198.18.0.31:80 | - / ok |      2 |           0 |       0 | 0 B   | -
+ default/web | 198.18.0.50:80 | n2      | 198.18.0.32:80 | - / ok |      1 |           0 |       0 | 0 B   | -
+
+ certificate | kind | fingerprint | not after
+-------------+------+-------------+-----------</code></pre></details></figure>
 <h2 id="which-nodes-get-traffic">Which nodes get traffic<a class="anchor" href="#which-nodes-get-traffic" aria-label="Link to this section">#</a></h2>
 <div class="tablewrap"><table><thead><tr><th>Policy</th><th>The nodes that get traffic</th><th>Their weight</th><th>The client's address</th></tr></thead><tbody><tr><td><code>Local</code> (recommended)</td><td>those whose health port - the Service's <code>healthCheckNodePort</code> - answers <code>200</code>: they run a ready pod of the Service</td><td>the node's number of ready pods</td><td>reaches the pod</td></tr><tr><td><code>Cluster</code></td><td>every ready node; checked at the port's node port, for TCP</td><td>1</td><td>lost: the node passes traffic to a pod on any node, through source NAT</td></tr></tbody></table></div>
 <p>Never a node that is not <code>Ready</code>, a director's node, or a node labelled <code>node.kubernetes.io/exclude-from-external-load-balancers</code> - the label Kubernetes defines for this:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> label node worker1 node.kubernetes.io/exclude-from-external-load-balancers=true</code></pre></div>
-<p>With <code>Local</code>, draining a node is enough: once it has no ready pod, its health port says <code>503</code>, and it gets no new connections.</p>
+<p>With <code>Local</code>, draining a node is enough: once it has no ready pod, its health port says <code>503</code>, and it gets no new connections. The leader logs each node that starts or stops serving:</p>
+<figure class="screen"><img src="assets/screens/k8s-log.svg" width="910" height="250" alt="The Service gets its VIP; n2 loses its pod - its health port says 503 - and gets it back." loading="lazy"><figcaption>The Service gets its VIP; n2 loses its pod - its health port says 503 - and gets it back.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ journalctl -u thelb-director -o cat
+2026-11-15T20:55:08.578Z [director] OK Kubernetes Service given its VIPs service=default/web vips=198.18.0.50
+2026-11-15T20:55:08.579Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n1 at=198.18.0.31:80 weight=2
+2026-11-15T20:55:08.580Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 weight=1
+2026-11-15T20:55:16.736Z [director] WARN node not serving: weight 0 service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 reason="its health port answers no 200: no ready pod of the Service there"
+2026-11-15T20:55:20.742Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 weight=1</code></pre></details></figure>
 <h2 id="annotations">Annotations<a class="anchor" href="#annotations" aria-label="Link to this section">#</a></h2>
 <div class="tablewrap"><table><thead><tr><th>Annotation</th><th>What it does</th></tr></thead><tbody><tr><td><code>dmarts.app/thelb-pool: &lt;pool&gt;</code></td><td>takes the VIP from that pool, not the default. A dual-stack Service names one pool for each family, separated by commas.</td></tr><tr><td><code>dmarts.app/thelb-ip: &lt;address&gt;</code></td><td>asks for that address of the pool. One for each family, separated by commas.</td></tr><tr><td><code>dmarts.app/thelb-shared-vip: &lt;key&gt;</code></td><td>Services with the same key share one VIP, as long as their ports are different.</td></tr><tr><td><code>service.cilium.io/node-selector: "!dmarts.app/thelb-director"</code></td><td>with Cilium and directors on nodes: Cilium leaves the Service to those nodes.</td></tr></tbody></table></div>
 <p>A dual-stack Service (<code>spec.ipFamilies</code>) gets one VIP for each family, from that family's pool.</p>

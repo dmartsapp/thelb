@@ -7,7 +7,7 @@
 <text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb generate commands</tspan></text>
 <text x="16" y="73">#!/bin/sh</text>
 <text x="16" y="91"># theLB: the commands that create the pools, services and assignments of the</text>
-<text x="16" y="109"># cluster lab again, as they were at 2026-11-14T21:36:33Z, on d1.</text>
+<text x="16" y="109"># cluster lab again, as they were at 2026-11-15T20:54:31Z, on d1.</text>
 <text x="16" y="127">#</text>
 <text x="16" y="145"># For a cluster created again after every director stopped: run them, as root,</text>
 <text x="16" y="163"># on one of its directors - once its nodes are approved, and the backends'</text>

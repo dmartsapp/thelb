@@ -7,10 +7,10 @@
 <text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb status vips</tspan></text>
 <text x="16" y="73"><tspan class="h"> vip         | purpose | pool | interface | held by | since</tspan></text>
 <text x="16" y="91"><tspan class="d">-------------+---------+------+-----------+---------+--------------------</tspan></text>
-<text x="16" y="109"> 198.18.0.10 <tspan class="d">|</tspan> control <tspan class="d">|</tspan> -    <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-14 21:35:49</text>
-<text x="16" y="127"> 198.18.0.20 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-14 21:35:59</text>
-<text x="16" y="145"> 198.18.0.21 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-14 21:36:00</text>
-<text x="16" y="163"> 198.18.0.22 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-14 21:36:01</text>
+<text x="16" y="109"> 198.18.0.10 <tspan class="d">|</tspan> control <tspan class="d">|</tspan> -    <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-15 20:53:48</text>
+<text x="16" y="127"> 198.18.0.20 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-15 20:53:58</text>
+<text x="16" y="145"> 198.18.0.21 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-15 20:53:59</text>
+<text x="16" y="163"> 198.18.0.22 <tspan class="d">|</tspan> service <tspan class="d">|</tspan> lab  <tspan class="d">|</tspan> eth0      <tspan class="d">|</tspan> d1      <tspan class="d">|</tspan> 2026-11-15 20:54:01</text>
 <text x="16" y="199"><tspan class="h"> service | vip         | port   | scheduler | method | backends up</tspan></text>
 <text x="16" y="217"><tspan class="d">---------+-------------+--------+-----------+--------+-------------</tspan></text>
 <text x="16" y="235"> web     <tspan class="d">|</tspan> 198.18.0.20 <tspan class="d">|</tspan> tcp/80 <tspan class="d">|</tspan> wrr       <tspan class="d">|</tspan> direct <tspan class="d">|</tspan> 3 of 3</text>

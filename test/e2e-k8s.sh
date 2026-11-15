@@ -233,7 +233,6 @@ check "status: the VIP, a Kubernetes one, held by the leader" "is d2 \"[(v['vip'
 check "status: the cluster's watch of Kubernetes" "is d2 \"s['cluster']['kubernetes']\" '1 Services'"
 if shot k8s-status "d1 - a Kubernetes Service, and the nodes serving it"; then
 	shown "sudo thelb status vips" on d1 "$bin" status vips
-	shown "sudo thelb status services" on d1 "$bin" status services
 	shown "sudo thelb status backends" on d1 "$bin" status backends
 fi
 

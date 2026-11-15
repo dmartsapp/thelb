@@ -2,5 +2,5 @@ b1
 $ sudo thelb status
  role    | cluster | state                   | offer    | port     | check  | own check | offered | service          | node fingerprint
 ---------+---------+-------------------------+----------+----------+--------+-----------+---------+------------------+------------------
- backend | lab     | a member of the cluster | tcp-80   | tcp/80   | http / | ok        | yes     | far, web         | 13fb773a2f1602be
- backend | lab     | a member of the cluster | tcp-8080 | tcp/8080 | http / | ok        | yes     | mapped (port 80) | 13fb773a2f1602be
+ backend | lab     | a member of the cluster | tcp-80   | tcp/80   | http / | ok        | yes     | far, web         | 0beaab3f6d2dfb43
+ backend | lab     | a member of the cluster | tcp-8080 | tcp/8080 | http / | ok        | yes     | mapped (port 80) | 0beaab3f6d2dfb43

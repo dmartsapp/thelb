@@ -58,8 +58,8 @@ theLB doctor, for a director and a backend on this node - it changes nothing:
  parameters | net.ipv4.vs.expire_quiescent_template | info  | theLB sets 1 while it runs; now 0; from boot: not set
  parameters | net.ipv4.conf.all.arp_ignore          | info  | theLB sets 1 while it runs; now 1; from boot: not set
  parameters | net.ipv4.conf.all.arp_announce        | info  | theLB sets 2 while it runs; now 2; from boot: not set
- theLB      | the director                          | warn  | process 11140, started by hand: a crash, a reboot or a closed terminal stops it
- theLB      | the backend                           | warn  | process 12090, started by hand: a crash, a reboot or a closed terminal stops it
+ theLB      | the director                          | warn  | process 90524, started by hand: a crash, a reboot or a closed terminal stops it
+ theLB      | the backend                           | warn  | process 91487, started by hand: a crash, a reboot or a closed terminal stops it
  firewall   | firewall                              | ok    | none found dropping by default (ufw, firewalld, nftables)
  in the way | others                                | ok    | no keepalived, kube-proxy, Cilium or kube-router here
  network    | listeners on every address            | warn  | TCP 80: they answer on every VIP this director holds
@@ -71,7 +71,7 @@ theLB doctor, for a director and a backend on this node - it changes nothing:
  link       | director d1 answers ARP               | ok    | 198.18.0.11 answers probes: its silence would mean its machine is down
  link       | director d3 answers ARP               | ok    | 198.18.0.13 answers probes: its silence would mean its machine is down
  link       | connection sync                       | ok    | backup on eth0; 29 connection entries here
- link       | gratuitous ARP                        | ok    | this node's cache points the control VIP at the leader (1a:45:77:7a:8f:bf): its announcements arrive
+ link       | gratuitous ARP                        | ok    | this node's cache points the control VIP at the leader (82:89:43:24:7b:db): its announcements arrive
  plan       | control VIP                           | info  | while it leads: 198.18.0.10 on eth0 - label eth0:thelb, protocol 116, leased 6s, renewed every third of it - announced by gratuitous ARP
  plan       | service VIPs                          | info  | while it leads: the VIPs of 3 services on their pools' interfaces, leased the same, once a backend serves them
  plan       | IPVS                                  | info  | while it leads: the cluster's services and their backends, over netlink

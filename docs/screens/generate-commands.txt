@@ -2,7 +2,7 @@ d1
 $ sudo thelb generate commands
 #!/bin/sh
 # theLB: the commands that create the pools, services and assignments of the
-# cluster lab again, as they were at 2026-11-14T21:36:33Z, on d1.
+# cluster lab again, as they were at 2026-11-15T20:54:31Z, on d1.
 #
 # For a cluster created again after every director stopped: run them, as root,
 # on one of its directors - once its nodes are approved, and the backends'

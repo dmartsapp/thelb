@@ -4,26 +4,26 @@
 <path d="M0 8a8 8 0 0 1 8-8h894A8 8 0 0 1 910 8v22H0z" fill="#161b22"/>
 <circle cx="18" cy="15" r="5.5" fill="#ff5f57"/><circle cx="36" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
 <text class="bar" x="455" y="19.5" text-anchor="middle">d2 - the new leader's log, after d1 was killed</text>
-<text x="16" y="55"><tspan class="d">2026-11-14T21:36:34.468Z </tspan><tspan class="m">[raft] </tspan><tspan class="wa">WARN</tspan> rejecting pre-vote request since we have a leader <tspan class="k">from=</tspan>198.18.0.13:7443</text>
-<text x="16" y="73">    <tspan class="k">leader=</tspan>198.18.0.11:7443 <tspan class="k">leader-id=</tspan>d1-74a7b4d5</text>
-<text x="16" y="91"><tspan class="d">2026-11-14T21:36:36.040Z </tspan><tspan class="m">[raft] </tspan><tspan class="wa">WARN</tspan> heartbeat timeout reached, starting election</text>
-<text x="16" y="109">    <tspan class="k">last-leader-addr=</tspan>198.18.0.11:7443 <tspan class="k">last-leader-id=</tspan>d1-74a7b4d5</text>
-<text x="16" y="127"><tspan class="d">2026-11-14T21:36:36.070Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
-<text x="16" y="145">    <tspan class="k">vip=</tspan>198.18.0.22 <tspan class="k">reason=</tspan>"1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more -</text>
+<text x="16" y="55"><tspan class="d">2026-11-15T20:54:33.150Z </tspan><tspan class="m">[raft] </tspan><tspan class="wa">WARN</tspan> rejecting pre-vote request since we have a leader <tspan class="k">from=</tspan>198.18.0.13:7443</text>
+<text x="16" y="73">    <tspan class="k">leader=</tspan>198.18.0.11:7443 <tspan class="k">leader-id=</tspan>d1-eb0e9509</text>
+<text x="16" y="91"><tspan class="d">2026-11-15T20:54:33.870Z </tspan><tspan class="m">[raft] </tspan><tspan class="wa">WARN</tspan> heartbeat timeout reached, starting election</text>
+<text x="16" y="109">    <tspan class="k">last-leader-addr=</tspan>198.18.0.11:7443 <tspan class="k">last-leader-id=</tspan>d1-eb0e9509</text>
+<text x="16" y="127"><tspan class="d">2026-11-15T20:54:33.894Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for the control VIP: this leader waits</text>
+<text x="16" y="145">    <tspan class="k">vip=</tspan>198.18.0.10 <tspan class="k">reason=</tspan>"82:89:43:24:7b:db still answers for it: this leader takes it once it is no more -</text>
 <text x="16" y="163">    within the 6s lease, if a theLB that stopped left it"</text>
-<text x="16" y="181"><tspan class="d">2026-11-14T21:36:36.070Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
-<text x="16" y="199">    <tspan class="k">vip=</tspan>198.18.0.21 <tspan class="k">reason=</tspan>"1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more -</text>
+<text x="16" y="181"><tspan class="d">2026-11-15T20:54:33.898Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
+<text x="16" y="199">    <tspan class="k">vip=</tspan>198.18.0.22 <tspan class="k">reason=</tspan>"82:89:43:24:7b:db still answers for it: this leader takes it once it is no more -</text>
 <text x="16" y="217">    within the 6s lease, if a theLB that stopped left it"</text>
-<text x="16" y="235"><tspan class="d">2026-11-14T21:36:36.070Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
-<text x="16" y="253">    <tspan class="k">vip=</tspan>198.18.0.20 <tspan class="k">reason=</tspan>"1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more -</text>
+<text x="16" y="235"><tspan class="d">2026-11-15T20:54:33.898Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
+<text x="16" y="253">    <tspan class="k">vip=</tspan>198.18.0.21 <tspan class="k">reason=</tspan>"82:89:43:24:7b:db still answers for it: this leader takes it once it is no more -</text>
 <text x="16" y="271">    within the 6s lease, if a theLB that stopped left it"</text>
-<text x="16" y="289"><tspan class="d">2026-11-14T21:36:36.071Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for the control VIP: this leader waits</text>
-<text x="16" y="307">    <tspan class="k">vip=</tspan>198.18.0.10 <tspan class="k">reason=</tspan>"1a:45:77:7a:8f:bf still answers for it: this leader takes it once it is no more -</text>
+<text x="16" y="289"><tspan class="d">2026-11-15T20:54:33.898Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> another machine answers for a service VIP: this leader waits</text>
+<text x="16" y="307">    <tspan class="k">vip=</tspan>198.18.0.20 <tspan class="k">reason=</tspan>"82:89:43:24:7b:db still answers for it: this leader takes it once it is no more -</text>
 <text x="16" y="325">    within the 6s lease, if a theLB that stopped left it"</text>
-<text x="16" y="343"><tspan class="d">2026-11-14T21:36:42.217Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> the control VIP is no more: taking it <tspan class="k">vip=</tspan>198.18.0.10</text>
-<text x="16" y="361"><tspan class="d">2026-11-14T21:36:42.219Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> leader <tspan class="k">node=</tspan>d2 <tspan class="k">term=</tspan>3 <tspan class="k">member=</tspan>d2-3ac448fb</text>
-<text x="16" y="379"><tspan class="d">2026-11-14T21:36:42.219Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> control VIP taken <tspan class="k">vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443 <tspan class="k">interface=</tspan>eth0</text>
-<text x="16" y="397"><tspan class="d">2026-11-14T21:36:46.219Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> director gone: out of the vote, so the others keep their majority;</text>
-<text x="16" y="415">    it rejoins without approval when it starts again <tspan class="k">node=</tspan>d1 <tspan class="k">member=</tspan>d1-74a7b4d5 <tspan class="k">voters=</tspan>2 <tspan class="k">reason=</tspan>"d1's control</text>
+<text x="16" y="343"><tspan class="d">2026-11-15T20:54:40.125Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> the control VIP is no more: taking it <tspan class="k">vip=</tspan>198.18.0.10</text>
+<text x="16" y="361"><tspan class="d">2026-11-15T20:54:40.126Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> leader <tspan class="k">node=</tspan>d2 <tspan class="k">term=</tspan>3 <tspan class="k">member=</tspan>d2-7517a90e</text>
+<text x="16" y="379"><tspan class="d">2026-11-15T20:54:40.126Z </tspan><tspan class="m">[director] </tspan><tspan class="ok">OK</tspan> control VIP taken <tspan class="k">vip=</tspan>198.18.0.10 <tspan class="k">port=</tspan>7443 <tspan class="k">interface=</tspan>eth0</text>
+<text x="16" y="397"><tspan class="d">2026-11-15T20:54:44.127Z </tspan><tspan class="m">[director] </tspan><tspan class="wa">WARN</tspan> director gone: out of the vote, so the others keep their majority;</text>
+<text x="16" y="415">    it rejoins without approval when it starts again <tspan class="k">node=</tspan>d1 <tspan class="k">member=</tspan>d1-eb0e9509 <tspan class="k">voters=</tspan>2 <tspan class="k">reason=</tspan>"d1's control</text>
 <text x="16" y="433">    port refuses connections: its theLB is not running"</text>
 </svg>

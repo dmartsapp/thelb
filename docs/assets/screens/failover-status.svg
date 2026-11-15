@@ -7,18 +7,18 @@
 <text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb status directors</tspan></text>
 <text x="16" y="73"><tspan class="h"> cluster | id       | created             | leader | term | leader since        | vip lease</tspan></text>
 <text x="16" y="91"><tspan class="d">---------+----------+---------------------+--------+------+---------------------+----------</tspan></text>
-<text x="16" y="109"> lab     <tspan class="d">|</tspan> b98a54ee <tspan class="d">|</tspan> 2026-11-14 21:35:48 <tspan class="d">|</tspan> d2     <tspan class="d">|</tspan>    3 <tspan class="d">|</tspan> 2026-11-14 21:36:36 <tspan class="d">|</tspan>        6s</text>
+<text x="16" y="109"> lab     <tspan class="d">|</tspan> ac7940f8 <tspan class="d">|</tspan> 2026-11-15 20:53:47 <tspan class="d">|</tspan> d2     <tspan class="d">|</tspan>    3 <tspan class="d">|</tspan> 2026-11-15 20:54:33 <tspan class="d">|</tspan>        6s</text>
 <text x="16" y="145"><tspan class="h"> node | role     | address     | state | version | node fingerprint | last check-in</tspan></text>
 <text x="16" y="163"><tspan class="d">------+----------+-------------+-------+---------+------------------+---------------</tspan></text>
-<text x="16" y="181"> d1   <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 198.18.0.11 <tspan class="d">|</tspan> <tspan class="er">down</tspan>  <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> 54cbcbbb78ad3cc6 <tspan class="d">|</tspan> 10.3 s ago</text>
-<text x="16" y="199"> d2   <tspan class="d">|</tspan> leader   <tspan class="d">|</tspan> 198.18.0.12 <tspan class="d">|</tspan> <tspan class="ok">up</tspan>    <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> 0ecf672c4027c77f <tspan class="d">|</tspan> -</text>
-<text x="16" y="217"> d3   <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 198.18.0.13 <tspan class="d">|</tspan> <tspan class="ok">up</tspan>    <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> 664e742c52376e33 <tspan class="d">|</tspan> 0.8 s ago</text>
+<text x="16" y="181"> d1   <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 198.18.0.11 <tspan class="d">|</tspan> <tspan class="er">down</tspan>  <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> fa65c24eecea87db <tspan class="d">|</tspan> 10.5 s ago</text>
+<text x="16" y="199"> d2   <tspan class="d">|</tspan> leader   <tspan class="d">|</tspan> 198.18.0.12 <tspan class="d">|</tspan> <tspan class="ok">up</tspan>    <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> 0d01fb995174b13f <tspan class="d">|</tspan> -</text>
+<text x="16" y="217"> d3   <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 198.18.0.13 <tspan class="d">|</tspan> <tspan class="ok">up</tspan>    <tspan class="d">|</tspan> 0.1.0   <tspan class="d">|</tspan> 87880f68e96e94b8 <tspan class="d">|</tspan> 0.8 s ago</text>
 <text x="16" y="253"><tspan class="h"> pending | role | address | mac | node fingerprint | waiting</tspan></text>
 <text x="16" y="271"><tspan class="d">---------+------+---------+-----+------------------+---------</tspan></text>
 <text x="16" y="307"><tspan class="h"> certificate  | kind     | fingerprint      | not after</tspan></text>
 <text x="16" y="325"><tspan class="d">--------------+----------+------------------+---------------------</tspan></text>
-<text x="16" y="343"> theLB lab CA <tspan class="d">|</tspan> ca       <tspan class="d">|</tspan> 587cd93f8c26fb25 <tspan class="d">|</tspan> 2036-11-11 21:35:48</text>
-<text x="16" y="361"> d1           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 0387929998603c0c <tspan class="d">|</tspan> 2026-11-15 21:35:48</text>
-<text x="16" y="379"> d2           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> d06fcdbad86930cb <tspan class="d">|</tspan> 2026-11-15 21:35:53</text>
-<text x="16" y="397"> d3           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 7cf26cda1c8a20b9 <tspan class="d">|</tspan> 2026-11-15 21:35:53</text>
+<text x="16" y="343"> theLB lab CA <tspan class="d">|</tspan> ca       <tspan class="d">|</tspan> 88701f2376f6a200 <tspan class="d">|</tspan> 2036-11-12 20:53:47</text>
+<text x="16" y="361"> d1           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 84d9f095d83497bd <tspan class="d">|</tspan> 2026-11-16 20:53:47</text>
+<text x="16" y="379"> d2           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 3ed8d68d8eb537e7 <tspan class="d">|</tspan> 2026-11-16 20:53:52</text>
+<text x="16" y="397"> d3           <tspan class="d">|</tspan> director <tspan class="d">|</tspan> 14d4e4152322a864 <tspan class="d">|</tspan> 2026-11-16 20:53:52</text>
 </svg>

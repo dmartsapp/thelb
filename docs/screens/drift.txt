@@ -1,4 +1,4 @@
 d1 - the leader's log
-2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.22:80 scheduler=wrr
-2026-11-14T21:36:31.897Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.21:80 scheduler=wrr
-2026-11-14T21:36:31.898Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.20:80 scheduler=wrr
+2026-11-15T20:54:30.009Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.22:80 scheduler=wrr
+2026-11-15T20:54:30.009Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.21:80 scheduler=wrr
+2026-11-15T20:54:30.010Z [dataplane] WARN drift repaired: an IPVS service was removed; added again service=tcp/198.18.0.20:80 scheduler=wrr

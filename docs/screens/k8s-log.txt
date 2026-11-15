@@ -1,0 +1,7 @@
+d1 - the leader's log: a Service gets its VIP; n2 loses its pod, and gets it back
+$ journalctl -u thelb-director -o cat
+2026-11-15T20:55:08.578Z [director] OK Kubernetes Service given its VIPs service=default/web vips=198.18.0.50
+2026-11-15T20:55:08.579Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n1 at=198.18.0.31:80 weight=2
+2026-11-15T20:55:08.580Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 weight=1
+2026-11-15T20:55:16.736Z [director] WARN node not serving: weight 0 service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 reason="its health port answers no 200: no ready pod of the Service there"
+2026-11-15T20:55:20.742Z [director] OK node serving service=default/web vip=198.18.0.50 port=tcp/80 node=n2 at=198.18.0.32:80 weight=1

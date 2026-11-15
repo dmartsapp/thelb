@@ -7,7 +7,7 @@
 <text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb status</tspan></text>
 <text x="16" y="73"><tspan class="h"> cluster | id       | created             | leader | term | leader since        | vip lease</tspan></text>
 <text x="16" y="91"><tspan class="d">---------+----------+---------------------+--------+------+---------------------+----------</tspan></text>
-<text x="16" y="109"> lab     <tspan class="d">|</tspan> b98a54ee <tspan class="d">|</tspan> 2026-11-14 21:35:48 <tspan class="d">|</tspan> d1     <tspan class="d">|</tspan>    2 <tspan class="d">|</tspan> 2026-11-14 21:35:49 <tspan class="d">|</tspan>        6s</text>
+<text x="16" y="109"> lab     <tspan class="d">|</tspan> ac7940f8 <tspan class="d">|</tspan> 2026-11-15 20:53:47 <tspan class="d">|</tspan> d1     <tspan class="d">|</tspan>    2 <tspan class="d">|</tspan> 2026-11-15 20:53:48 <tspan class="d">|</tspan>        6s</text>
 <text x="16" y="145"><tspan class="h"> what      | total | up | down | pending</tspan></text>
 <text x="16" y="163"><tspan class="d">-----------+-------+----+------+---------</tspan></text>
 <text x="16" y="181"> directors <tspan class="d">|</tspan>     3 <tspan class="d">|</tspan>  3 <tspan class="d">|</tspan>    0 <tspan class="d">|</tspan>       0</text>

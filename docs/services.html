@@ -57,13 +57,13 @@
 <figure class="screen"><img src="assets/screens/status-offers.svg" width="692" height="232" alt="Every backend&#x27;s offers, their own checks, and the services they are assigned to." loading="lazy"><figcaption>Every backend's offers, their own checks, and the services they are assigned to.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb status offers
  node | offer    | address     | port     | check  | own check | service  | since
 ------+----------+-------------+----------+--------+-----------+----------+--------
- b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 11.8 s
- b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 11.8 s
- b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 11.8 s
- b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 11.8 s
- b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.8 s
- b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.5 s</code></pre></details></figure>
+ b1   | tcp-80   | 198.18.0.31 | tcp/80   | http / | ok        | far, web | 12.0 s
+ b1   | tcp-8080 | 198.18.0.31 | tcp/8080 | http / | ok        | mapped   | 12.0 s
+ b2   | tcp-80   | 198.18.0.32 | tcp/80   | http / | ok        | web      | 12.0 s
+ b2   | tcp-9090 | 198.18.0.32 | tcp/9090 | http / | ok        | mapped   | 11.9 s
+ b3   | tcp-7070 | 198.18.0.33 | tcp/7070 | http / | ok        | mapped   | 12.0 s
+ b3   | tcp-80   | 198.18.0.33 | tcp/80   | http / | ok        | web      | 11.9 s
+ b4   | tcp-80   | 198.19.0.41 | tcp/80   | http / | ok        | far      | 11.6 s</code></pre></details></figure>
 <h2 id="port-mapping">Port mapping<a class="anchor" href="#port-mapping" aria-label="Link to this section">#</a></h2>
 <p>A backend's application can listen on a different port than the service's. Assign <code>web-1:tcp/8080</code> to a service on port 80, and the backend maps port 80 to 8080 itself, in its own nftables table. The director never changes the port. Each backend can use a port of its own:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin service add mapped <span class="tok-flag">--pool</span> main <span class="tok-flag">--proto</span> tcp <span class="tok-flag">--port</span> 80
@@ -86,7 +86,7 @@ table inet thelb {
 <figure class="screen"><img src="assets/screens/generate-commands.svg" width="918" height="538" alt="The `thelb admin` commands that create the cluster&#x27;s pools, services and assignments again." loading="lazy"><figcaption>The <code>thelb admin</code> commands that create the cluster's pools, services and assignments again.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb generate commands
 #!/bin/sh
 # theLB: the commands that create the pools, services and assignments of the
-# cluster lab again, as they were at 2026-11-14T21:36:33Z, on d1.
+# cluster lab again, as they were at 2026-11-15T20:54:31Z, on d1.
 #
 # For a cluster created again after every director stopped: run them, as root,
 # on one of its directors - once its nodes are approved, and the backends'

@@ -7,7 +7,7 @@
 <text x="16" y="55"><tspan class="p">$ </tspan><tspan class="c">sudo thelb status pending</tspan></text>
 <text x="16" y="73"><tspan class="h"> pending | role    | address     | mac               | node fingerprint | waiting</tspan></text>
 <text x="16" y="91"><tspan class="d">---------+---------+-------------+-------------------+------------------+--------</tspan></text>
-<text x="16" y="109"> d2-web  <tspan class="d">|</tspan> backend <tspan class="d">|</tspan> 198.18.0.12 <tspan class="d">|</tspan> b6:df:e6:99:04:4e <tspan class="d">|</tspan> 0ecf672c4027c77f <tspan class="d">|</tspan> 0.2 s</text>
+<text x="16" y="109"> d2-web  <tspan class="d">|</tspan> backend <tspan class="d">|</tspan> 198.18.0.12 <tspan class="d">|</tspan> 8e:7f:28:02:95:30 <tspan class="d">|</tspan> 0d01fb995174b13f <tspan class="d">|</tspan> 0.2 s</text>
 <text x="16" y="127"><tspan class="p">$ </tspan><tspan class="c">sudo thelb admin approve d2-web</tspan></text>
 <text x="16" y="145">approved: d2-web</text>
 <text x="16" y="163"><tspan class="p">$ </tspan><tspan class="c">sudo thelb admin assign web d2-web:tcp/80</tspan></text>
