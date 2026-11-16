@@ -2,7 +2,10 @@
 
 Where the code is, what is broken, and what comes next - kept up to date at every pause, so work can resume from here. Last updated: 2026-11-15: `main` = 7e80fa9 (the documentation site, Go 1.27.4), and the Kubernetes design rewritten after a hand test on the user's cluster. The user's JH binary is replaced only when they ask - they asked for this one ("ok build in jh please").
 
-## Now: Kubernetes, then v0.1.0
+## Now: v0.1.0-alpha.1 is out; then v0.1.0
+
+**2026-11-16: v0.1.0-alpha.1 released** - a GitHub pre-release (tag on `release/v0.1` at dd07608), 13 files, the image `ghcr.io/dmartsapp/thelb:0.1.0-alpha.1` only (pre-releases get no `X.Y` or `latest`), Slack told, Pages rebuilt; one binary and the image checked with `sha256sum -c` and `gh attestation verify`. The first run stopped at the SBOMs (`sbom.py` took only `vX.Y.Z`); fixed, and the tag moved - nothing had been published. A stray `*.dockerbuild` (the image job's build record) was removed from the release page, and the workflow downloads only `thelb-linux-*` now (6533b25). **On 6533b25, `make remote-e2e` on JH: 291/291** (259 + 32 Kubernetes). **Left for the user**: make the `thelb` package public on GitHub (Packages - `thelb` - Package settings - Change visibility). **Next**: the input-sanitizing audit (below); then v0.1.0. The user's Go registrator (DockerConsulRegistrator) is a separate project, studied, waiting on their choices.
+
 
 The user, 2026-11-15: "complete kubernetes part completely and commit for 0.1.0 release ready". v0.1.0 is **not tagged**; the release settings are done (Pages on, `SLACK_WEBHOOK_URL` set, private vulnerability reporting on). The design's [Kubernetes](design.md#kubernetes) section, with its [example](design.md#example), is the specification.
 
