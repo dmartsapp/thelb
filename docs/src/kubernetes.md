@@ -288,6 +288,7 @@ Or run the directors on these nodes under systemd, with a kubeconfig.
 - **A Service has no `EXTERNAL-IP`.** `kubectl describe service <name>` shows theLB's events: `AllocationFailed` says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.
 - **A warning `NoDirectorExclusion`.** Directors run on labelled nodes, and the Service lacks the Cilium annotation.
 - **Nodes get no traffic.** `sudo thelb status backends` shows each node's check and weight. With `Local`, a node without a ready pod has weight 0 - by design.
+- **A client's connection to the VIP hangs, and `thelb status backends` counts 0 packets.** A firewall on the leader drops the Service's port before IPVS sees it. Allow it to the VIP, on every director: `sudo ufw allow proto tcp from any to 10.0.0.50 port 80`.
 - **`thelb status`** shows, in the cluster table, how the director's watch of Kubernetes goes: the number of theLB Services, or what is wrong.
 
 The design behind all this - the choices and their reasons - is in [docs/design.md](https://github.com/dmartsapp/thelb/blob/main/docs/design.md#kubernetes).
