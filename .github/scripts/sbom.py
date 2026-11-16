@@ -40,7 +40,7 @@ LICENSE = "MIT"
 SUPPLIER = "dmartsapp"
 TOOL = "sbom.py"
 TOOL_GROUP = "github.com/dmartsapp/thelb/.github/scripts"
-TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+TAG_RE = re.compile(r"\Av\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.]*)?\Z")  # v0.1.0, or a pre-release: v0.1.0-alpha.1
 SPDXID_BAD = re.compile(r"[^A-Za-z0-9.-]")
 PURL_SAFE = re.compile(r"[^A-Za-z0-9.\-_~/]")
 
@@ -310,7 +310,7 @@ def write(path, doc):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Write CycloneDX and SPDX SBOMs of theLB release binaries.")
     ap.add_argument("binaries", nargs="+", metavar="binary")
-    ap.add_argument("--version", help="the release, vX.Y.Z (default: the version Go recorded for the main module)")
+    ap.add_argument("--version", help="the release, vX.Y.Z or vX.Y.Z-alpha.N (default: the version Go recorded for the main module)")
     ap.add_argument("--lifecycle", choices=["build", "post-build"], default="build",
                     help="build: in the release workflow; post-build: from a published binary, after the release")
     ap.add_argument("--out-dir", help="where to write them (default: next to each binary)")
@@ -322,7 +322,7 @@ def main(argv=None):
         info = build_info(binary)
         version = a.version or (info.get("Main") or {}).get("Version", "")
         if not TAG_RE.match(version):
-            raise SystemExit("sbom.py: %s: say which release it is with --version vX.Y.Z (Go recorded %r)" % (binary, version))
+            raise SystemExit("sbom.py: %s: say which release it is with --version vX.Y.Z or vX.Y.Z-alpha.N (Go recorded %r)" % (binary, version))
         if not go_release(info).startswith("go"):
             raise SystemExit("sbom.py: %s: Go recorded no Go release (%r)" % (binary, info.get("GoVersion")))
         s = Subject(binary, version, info)

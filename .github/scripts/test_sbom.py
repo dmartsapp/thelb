@@ -184,6 +184,12 @@ class Binaries(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 sbom.main(["--version", "v1.0.0", f.name])
 
+    def test_releases_and_pre_releases(self):
+        for ok in ("v0.1.0", "v12.3.45", "v0.1.0-alpha.1", "v0.1.0-beta.2", "v1.0.0-rc.1"):
+            self.assertRegex(ok, sbom.TAG_RE)
+        for bad in ("0.1.0", "v0.1", "v0.1.0-", "v0.1.0-alpha_1", "v0.1.0 x", "(devel)", "v0.1.0-dev\n"):
+            self.assertNotRegex(bad, sbom.TAG_RE)
+
     def test_a_release_is_named(self):
         with self.assertRaises(SystemExit):
             orig = sbom.build_info
