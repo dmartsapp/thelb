@@ -13,6 +13,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/ipvs"
 	"github.com/dmartsapp/thelb/internal/kube"
+	"github.com/dmartsapp/thelb/internal/logx"
 )
 
 // The names theLB reads in a cluster.
@@ -130,10 +131,60 @@ func (n *node) kubeStart(ctx context.Context, c *kube.Client, self netip.Addr) e
 			}
 		}
 	}
-	n.log.OK("serving Kubernetes Services of class "+kubeClass, "api", c.Config().Server.String(), "version", git, "credential", src)
+	n.log.OK("connected to Kubernetes: serving Services of class "+kubeClass, "api", c.Config().Server.String(), "version", git,
+		"credential", src, "permissions", fmt.Sprintf("all %d", len(kubeAccess)))
 	n.kube = newKubeView(c)
 	n.kube.run(ctx)
+	go n.kube.report(ctx, n.log)
 	return nil
+}
+
+// report logs how this director's watch of the cluster goes: once it has read
+// it all, what it found; when it is lost, and when it is back - each once.
+// thelb status shows how it goes now.
+func (k *kubeView) report(ctx context.Context, log *logx.Logger) {
+	read, lost := false, false
+	for {
+		changed := k.changed(ctx)
+		if !read && k.services.Synced() && k.nodes.Synced() && k.slices.Synced() {
+			read = true
+			theirs, ready := 0, 0
+			for _, s := range k.services.Items() {
+				if eligible(s) {
+					theirs++
+				}
+			}
+			nodes := k.nodes.Items()
+			for _, n := range nodes {
+				if n.Ready() {
+					ready++
+				}
+			}
+			log.OK("watching Kubernetes: the cluster read", "services", theirs, "nodes", len(nodes), "ready", ready)
+		}
+		why := ""
+		for _, c := range []struct {
+			what string
+			err  string
+		}{{"services", k.services.Err()}, {"nodes", k.nodes.Err()}, {"endpointslices", k.slices.Err()}} {
+			if c.err != "" && why == "" {
+				why = c.what + ": " + c.err
+			}
+		}
+		switch {
+		case why != "" && !lost:
+			lost = true
+			log.Warn("Kubernetes watch lost: retrying - meanwhile the leader serves what it last read", "reason", why)
+		case why == "" && lost:
+			lost = false
+			log.OK("Kubernetes watch back")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-changed:
+		}
+	}
 }
 
 // eligible is whether a Service is theLB's to serve.

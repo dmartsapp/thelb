@@ -59,11 +59,13 @@ func (k *Cache[T]) Run(ctx context.Context) {
 				return
 			}
 			if err != nil {
-				k.fail(err)
-				if !IsGone(err) && !sleep(ctx, wait) {
-					return
-				}
+				// 410 Gone is routine - the resource version is too old to
+				// watch from - and no failure: list again, at once.
 				if !IsGone(err) {
+					k.fail(err)
+					if !sleep(ctx, wait) {
+						return
+					}
 					wait = min(2*wait, backoffMax)
 				}
 				break

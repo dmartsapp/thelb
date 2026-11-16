@@ -222,9 +222,12 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 	w.kube = f.client()
 	w.start(t)
 	eventually(t, "it leads", func() bool { return strings.Contains(w.logs.String(), "OK control VIP taken") })
-	if !strings.Contains(w.logs.String(), "OK serving Kubernetes Services of class dmarts.app/thelb") {
-		t.Fatalf("not serving Kubernetes:\n%s", w.logs)
+	if !strings.Contains(w.logs.String(), "OK connected to Kubernetes: serving Services of class dmarts.app/thelb api="+f.srv.URL+" version=v1.36.4 credential=\"the test\" permissions=\"all 13\"") {
+		t.Fatalf("not connected to Kubernetes:\n%s", w.logs)
 	}
+	eventually(t, "the cluster read", func() bool {
+		return strings.Contains(w.logs.String(), "OK watching Kubernetes: the cluster read services=1 nodes=4 ready=3")
+	})
 	resp, err := localsock.Call(w.run, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "pool.add", Pool: "k8s", VIP: "10.0.0.50/24", Count: 4, Default: true}})
 	if err != nil || resp.Error != "" {
 		t.Fatalf("pool: %v %s", err, resp.Error)
@@ -292,6 +295,17 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 	resp, _ = localsock.Call(w.run, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "service.add", Names: []string{"plain"}, Proto: "tcp", Port: 81, VIP: "10.0.0.50"}})
 	if !strings.Contains(resp.Error, "Kubernetes Service default/web") {
 		t.Errorf("a plain service on the Kubernetes VIP: %q", resp.Error)
+	}
+
+	// The watch lost - the API server fails - and back: each said once.
+	f.watches["/api/v1/services"] <- `{"type":"ERROR","object":{"kind":"Status","code":500,"message":"etcd is down"}}`
+	eventually(t, "the watch lost, then back", func() bool {
+		l := w.logs.String()
+		return strings.Contains(l, `WARN Kubernetes watch lost: retrying - meanwhile the leader serves what it last read reason="services: the API server answered 500: etcd is down"`) &&
+			strings.Contains(l, "OK Kubernetes watch back")
+	})
+	if n := strings.Count(w.logs.String(), "Kubernetes watch lost"); n != 1 {
+		t.Errorf("the lost watch said %d times", n)
 	}
 
 	// The Service deleted: its VIP goes back, and its IPVS service.

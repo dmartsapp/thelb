@@ -210,7 +210,8 @@ state "$WEB" "$SLICES"
 echo "== a Service of theLB's class gets its VIP"
 : >"$tmp/d1.log"
 start d1 "$tmp/d1.log" --bootstrap
-check "the director checks the API server and serves Kubernetes" "within 20 logged $tmp/d1.log 'OK serving Kubernetes Services of class dmarts.app/thelb .*version=v1.36.0-e2e'"
+check "the director checks the API server and serves Kubernetes" "within 20 logged $tmp/d1.log 'OK connected to Kubernetes: serving Services of class dmarts.app/thelb .*version=v1.36.0-e2e.*permissions=.all 13.'"
+check "it says once it has read the cluster" "within 20 logged $tmp/d1.log 'OK watching Kubernetes: the cluster read services=1 nodes=5 ready=5'"
 check "it leads" "within 20 logged $tmp/d1.log 'OK control VIP taken'"
 copy() { install -m 0600 "$tmp/d1/director.secret" "$tmp/d1/backend.secret" "$tmp/$1/"; }
 copy d2
@@ -222,6 +223,7 @@ check "d2 joins, approved" "within 20 is d1 \"sum(1 for n in s['nodes'] if n['st
 on d1 "$bin" admin pool add k8s --vip $NET.50/24 --vippool-count 4 --default >/dev/null
 check "status.loadBalancer.ingress: the pool's first address, ipMode VIP" "within 20 status_is default/web $NET.50:VIP"
 check "an event says so" "within 10 logged $tmp/api/events.log 'Normal default/web IPAllocated theLB gave it $NET.50'"
+check "n3's pod gets no traffic - n3 is excluded - and a warning says why" "within 10 logged $tmp/api/events.log 'Warning default/web NodesExcluded .*1 on n3 - n3 has the label node.kubernetes.io/exclude-from-external-load-balancers'"
 check "IPVS: n1 with its two ready pods, weight 2" "within 20 weight_is d1 $NET.50 80 n1 2"
 check "IPVS: n2 with one, weight 1" "weight_is d1 $NET.50 80 n2 1"
 check "n3, excluded by its label, is not a backend" "! in_ipvs d1 n3"

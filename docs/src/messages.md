@@ -1,7 +1,7 @@
 ---
 title: Log messages
 lead: The messages that need you to do something - what each one means, and what to do.
-description: theLB's log and error messages that need action - preflight, secrets, the control VIP, offers, assignments, failover, drift - with their fixes.
+description: theLB's log and error messages that need action - preflight, secrets, the control VIP, offers, assignments, failover, drift, Kubernetes - with their fixes.
 section: Reference
 order: 6
 nav: Log messages
@@ -71,3 +71,19 @@ Search this page for the words in your message. Values that change - names, addr
 |---|---|
 | `WARN drift repaired: ...` | Something else changed theLB's kernel setup, and theLB put it back. Find what did it: the two will undo each other every 10 seconds. |
 | `ERROR a loop has stopped ...` | A part of theLB stopped working. Under systemd, theLB is restarted. Please [report it](https://github.com/dmartsapp/thelb/issues) with the log around it. |
+
+## Kubernetes
+
+| Message | What it means, and what to do |
+|---|---|
+| `OK connected to Kubernetes: serving Services of class dmarts.app/thelb api=... version=... credential=... permissions="all 13"` | A director started with `--kubeconfig` reached the API server, found a release it serves, and holds every permission it needs. Nothing to do. |
+| `OK watching Kubernetes: the cluster read services=N nodes=N ready=N` | Its watch has read the cluster: `services` is the number of Services of theLB's class, `nodes` and `ready` the cluster's nodes. Nothing to do. |
+| `WARN Kubernetes watch lost: retrying - meanwhile the leader serves what it last read reason=...` | The director lost the API server. It tries again, and says `OK Kubernetes watch back` once it reads again. Meanwhile the VIPs keep working, from what it read last; changes in the cluster wait. `thelb status` shows how the watch goes. |
+| `the Kubernetes API server ... does not answer: ...` | At start. Check the kubeconfig's `server:`, and that this machine reaches it - a firewall, or a name it cannot resolve. |
+| `the Kubernetes API server runs ...: theLB serves Kubernetes 1.35 and later` | Upgrade the cluster, or run directors without `--kubeconfig`. |
+| `the Kubernetes credential (...) lacks permissions theLB needs: ...` | Each one is named. Apply what `thelb generate k8s` prints again. |
+| `this director runs on the Kubernetes node ..., which is not labelled as a director: ...` | Prepare the node: `thelb generate k8s node <node>` prints the script - see [Kubernetes](kubernetes.md#3-one-director-on-a-node). |
+| `WARN Kubernetes Service: ... reason=AllocationFailed` | The Service got no VIP: no default pool, an address in no pool or taken, a port another Service on a shared VIP has. `kubectl describe service` shows it too. |
+| `WARN Kubernetes Service: ready pods of this Service on nodes theLB sends no traffic to ... reason=NodesExcluded` | Pods on a node theLB leaves out get no traffic from outside. The message says why for each node, and what to do - most often kubeadm's label on a control-plane node: see [Which nodes get traffic](kubernetes.md#which-nodes-get-traffic). |
+| `WARN Kubernetes Service: directors run on nodes labelled ... reason=NoDirectorExclusion` | With Cilium, director nodes take the Service's packets before theLB. Add the annotation `service.cilium.io/node-selector: "!dmarts.app/thelb-director"` to the Service. |
+| `WARN node not serving: weight 0 ... reason=...` | A node gets no new connections: with `Local`, it runs no ready pod of the Service - by design; with `Cluster`, its node port does not answer. |
