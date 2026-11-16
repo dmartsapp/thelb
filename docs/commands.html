@@ -15,7 +15,7 @@
 <header class="topbar">
   <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
   <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
-  <span class="version">v0.1.0-alpha.1</span>
+  <span class="version">v0.1.0-alpha.2</span>
   <nav class="toplinks" aria-label="Site">
     <a href="install.html">Install</a>
     <a href="quickstart.html">Docs</a>
@@ -33,7 +33,7 @@
 <h1>Commands</h1>
 <p class="lead">Every theLB command and flag on one page.</p>
 <h2 id="overview">Overview<a class="anchor" href="#overview" aria-label="Link to this section">#</a></h2>
-<p>Every command except <code>--help</code> and <code>--version</code> runs only as root. The exit status is <code>0</code> when it worked, <code>1</code> when it failed, and <code>2</code> when the command was used wrongly. <code>thelb &lt;command&gt; --help</code> shows a command's flags, and <code>thelb generate k8s --help</code> the Kubernetes forms.</p>
+<p>Every command except <code>--help</code> and <code>--version</code> runs only as root. The exit status is <code>0</code> when it worked, <code>1</code> when it failed, and <code>2</code> when the command was used wrongly. <code>thelb --help</code> lists the commands; <code>thelb &lt;command&gt; --help</code> lists a command's subcommands, or its options; <code>thelb &lt;command&gt; &lt;subcommand&gt; --help</code> shows one subcommand's usage, options and examples - <code>thelb admin service add --help</code>, <code>thelb generate k8s service --help</code>. <code>thelb help &lt;command&gt; [&lt;subcommand&gt;]</code> shows the same. A command that needs a subcommand - <code>thelb admin</code>, <code>thelb generate</code>, <code>thelb offer</code> - shows its page when given none. Arguments with control characters are refused before any command reads them (<a href="security.html#what-thelb-checks">What theLB checks</a>).</p>
 <div class="codeblock lang-text"><div class="codebar"><span class="codelabel">Output</span></div><pre><code>thelb director --vip &lt;address|name&gt; --port &lt;port&gt; --secret-file &lt;file&gt; --backend-secret-file &lt;file&gt;
                [--bootstrap [--bootstrap-wait &lt;duration&gt;]] [--cluster &lt;name&gt;] [--name &lt;name&gt;] [--interface &lt;name&gt;]
                [--metrics &lt;address:port&gt;] <span class="tok-mod">[--debug]</span> [--kubeconfig &lt;file&gt;|in-cluster]
@@ -83,34 +83,32 @@ thelb --version</code></pre></div>
 <p>Changes the cluster. Runs on a director; on a director that is not the leader, the change goes to the leader, recorded under that director's name.</p>
 <div class="tablewrap"><table><thead><tr><th>Command</th><th>Does</th></tr></thead><tbody><tr><td><code>approve &lt;name&gt; ...</code> / <code>--match '&lt;regex&gt;' [--yes]</code></td><td>approve waiting nodes - <a href="approval.html">Secrets and approval</a></td></tr><tr><td><code>refuse &lt;name&gt;</code></td><td>refuse a waiting node; it stops</td></tr><tr><td><code>remove &lt;name&gt;</code></td><td>remove a member; its certificate is revoked</td></tr><tr><td><code>pool add</code> / <code>pool remove</code></td><td><a href="services.html#pools">pools</a></td></tr><tr><td><code>service add</code> / <code>service remove</code></td><td><a href="services.html#services">services</a></td></tr><tr><td><code>assign</code> / <code>unassign</code></td><td><a href="services.html#assignments">assignments</a>; an offer is <code>node:name</code> or <code>node:proto/port</code></td></tr><tr><td><code>lease &lt;seconds&gt;</code></td><td>the VIP lease, 3 to 3600 seconds - <a href="directors.html#the-leader-and-the-vip-lease">The leader and the VIP lease</a></td></tr><tr><td><code>secret show --role director|backend</code></td><td>print a secret, to repair a node's file</td></tr></tbody></table></div>
 <h2 id="thelb-help"><code>thelb --help</code><a class="anchor" href="#thelb-help" aria-label="Link to this section">#</a></h2>
-<figure class="screen"><img src="assets/screens/help.svg" width="660" height="502" alt="The built-in help." loading="lazy"><figcaption>The built-in help.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --help
+<figure class="screen"><img src="assets/screens/help.svg" width="676" height="466" alt="The built-in help." loading="lazy"><figcaption>The built-in help.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --help
+Usage: thelb &lt;command&gt; [&lt;subcommand&gt;] [options]
+
 theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
 
-Usage:
-  thelb &lt;command&gt; [flags]
-
 Commands:
-  director   run this node as a director
-  backend    run this node as a backend
-  status     show the cluster, from the theLB running on this node
-  doctor     check this node for theLB, and say what to do
-  offer      on a backend: offer an application to the cluster, or withdraw it
-  generate   print a file's content, and write nothing: secret, commands,
-             systemd, sysctl, modules, k8s
-  admin      change the cluster, on a director: approve, refuse, remove,
-             pool, service, assign, unassign, lease, secret show
+  director    Run this node as a director
+  backend     Run this node as a backend
+  status      Show the cluster, as this node sees it
+  doctor      Check this node for theLB, and say what to fix
+  offer       Offer an application to the cluster, or withdraw it (on a backend)
+  generate    Print a file theLB needs - it writes nothing
+  admin       Change the cluster (on a director)
+  help        Show the help of a command
 
-Every command runs only as root (effective user ID 0); this help and --version
-run for anyone.
+Options:
+  -h, --help       Show this help
+  -v, --version    Show the version, the commit, Go and the platform
 
-  thelb &lt;command&gt; --help        a command's flags; or thelb help &lt;command&gt;
-  thelb generate k8s --help     the Kubernetes manifests, scripts and Services
-  thelb --version               the version, the commit, Go and the platform
+Run 'thelb &lt;command&gt; --help' for more about a command.
+Every command but help and --version runs as root.
 
-The documentation: https://dmartsapp.github.io/thelb/</code></pre></details></figure>
+Documentation: https://dmartsapp.github.io/thelb/</code></pre></details></figure>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="troubleshooting.html"><span>Previous</span>Troubleshooting</a><a class="next" href="changelog.html"><span>Next</span>Changelog</a></nav>
-<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/commands.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.1 &middot; MIT License</span></footer>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/commands.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.2 &middot; MIT License</span></footer>
 </main>
 <aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#overview">Overview</a></li><li class="toc2"><a href="#thelb-director"><code>thelb director</code></a></li><li class="toc2"><a href="#thelb-backend"><code>thelb backend</code></a></li><li class="toc2"><a href="#thelb-offer"><code>thelb offer</code></a></li><li class="toc2"><a href="#thelb-status"><code>thelb status</code></a></li><li class="toc2"><a href="#thelb-doctor"><code>thelb doctor</code></a></li><li class="toc2"><a href="#thelb-generate"><code>thelb generate</code></a></li><li class="toc2"><a href="#thelb-admin"><code>thelb admin</code></a></li><li class="toc2"><a href="#thelb-help"><code>thelb --help</code></a></li></ul></aside>
 </div>

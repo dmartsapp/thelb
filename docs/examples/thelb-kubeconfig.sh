@@ -1,5 +1,5 @@
 #!/bin/sh
-# theLB 0.1.0-alpha.1, as `thelb generate k8s kubeconfig` printed it. Run it where kubectl
+# theLB 0.1.0-alpha.2, as `thelb generate k8s kubeconfig` printed it. Run it where kubectl
 # reaches the cluster, after applying what `thelb generate k8s` prints: it prints
 # the kubeconfig of directors outside the cluster, or under systemd on its
 # nodes - with the token of the ServiceAccount thelb-director.

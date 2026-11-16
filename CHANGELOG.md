@@ -2,6 +2,21 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
+## v0.1.0-alpha.2 - 2026-11-16
+
+**An alpha**: to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.
+
+- **Everything theLB is given is checked where it comes in, and quoted or cleaned where it goes out** ([What theLB checks](https://dmartsapp.github.io/thelb/docs/security.html#what-thelb-checks)):
+  - **command-line arguments with a control character** - a newline, a terminal's escape, a character that reorders text - or longer than 4096 bytes are refused before any command reads them (exit `2`); **`--interface` takes letters, digits, dots, hyphens and underscores**, up to 15;
+  - **an HTTP check's path is printable ASCII** - from `/`, no spaces, up to 512 characters;
+  - **a joining node's MAC address, hostname and version are checked**, and its member identity must be its name and hexadecimal; a node sends its hostname only when it is one, so no node is refused for its hostname. A member's reported version is shown as `?` when it is not a version; a heartbeat lists at most 4096 VIPs and checks; a backend checks the leader's orders - VIP, protocol, ports - before it changes the kernel;
+  - **a Kubernetes object an API server would never send is left out** - a Service, Node or EndpointSlice with a name, namespace, port, protocol or policy that is not one - and the director logs `WARN a Kubernetes object left out`. A Service's `dmarts.app/thelb-shared-vip` key is like a label's value; `dmarts.app/thelb-pool` and `dmarts.app/thelb-ip` name at most two each;
+  - **kubeconfigs, and the files they name, are regular files of at most 1 MiB**, nested at most 32 deep; **tokens are printable ASCII without spaces**, up to 16 KiB, and **never a theLB secret** - a kubeconfig naming a secret file as its `tokenFile` is refused; in a pod, `KUBERNETES_SERVICE_HOST` and `_PORT` are checked;
+  - **`generate commands` quotes every value** as one shell word; `generate systemd` quotes `ReadWritePaths=` as systemd reads it;
+  - **log values with anything not printable are quoted**, the characters escaped - a value can no longer end a log line; tables in `status` and `doctor`, and the errors `thelb` prints, show control characters as `?`.
+- **The help is a tree**, in the usual layout: `thelb --help` lists the commands; `thelb <command> --help` a command's subcommands, or its options; `thelb <command> <subcommand> --help` - `thelb admin service add --help` - one subcommand's usage, options and examples. `thelb help <words>` shows the same. **`thelb admin`, `thelb generate` and `thelb offer` without a subcommand show their page** (exit `0`), and a usage error says which page to read: `Run 'thelb admin pool add --help' for usage.`
+- Fixed: `service.remove` without a name, sent to the leader, stopped it - now refused. `make screens` reads a pre-release version from the changelog.
+
 ## v0.1.0-alpha.1 - 2026-11-16
 
 **An alpha**: the first release, to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.

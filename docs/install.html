@@ -15,7 +15,7 @@
 <header class="topbar">
   <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
   <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
-  <span class="version">v0.1.0-alpha.1</span>
+  <span class="version">v0.1.0-alpha.2</span>
   <nav class="toplinks" aria-label="Site">
     <a href="install.html">Install</a>
     <a href="quickstart.html">Docs</a>
@@ -41,13 +41,13 @@
 <div class="callout callout-warning"><p class="callout-title">Keep the directors' network trusted</p><p>The kernel's connection-sync messages are not authenticated. A machine on the directors' network could add entries to their connection tables. Keep the directors on a network that only trusted machines share.</p></div>
 <h2 id="download-a-release">Download a release<a class="anchor" href="#download-a-release" aria-label="Link to this section">#</a></h2>
 <p>Each <a href="https://github.com/dmartsapp/thelb/releases">release</a> has one binary for each processor:</p>
-<div class="tablewrap"><table><thead><tr><th>File</th><th>For</th></tr></thead><tbody><tr><td><code>thelb-0.1.0-alpha.1-linux-amd64</code></td><td>64-bit Intel and AMD</td></tr><tr><td><code>thelb-0.1.0-alpha.1-linux-arm64</code></td><td>64-bit ARM (AWS Graviton, Ampere, Raspberry Pi 4 and 5 with a 64-bit OS)</td></tr><tr><td><code>thelb-0.1.0-alpha.1-linux-arm</code></td><td>32-bit ARM, ARMv7 and later (32-bit Raspberry Pi OS on a Pi 2, 3 or 4); not ARMv6 (Pi 1, Pi Zero)</td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>File</th><th>For</th></tr></thead><tbody><tr><td><code>thelb-0.1.0-alpha.2-linux-amd64</code></td><td>64-bit Intel and AMD</td></tr><tr><td><code>thelb-0.1.0-alpha.2-linux-arm64</code></td><td>64-bit ARM (AWS Graviton, Ampere, Raspberry Pi 4 and 5 with a 64-bit OS)</td></tr><tr><td><code>thelb-0.1.0-alpha.2-linux-arm</code></td><td>32-bit ARM, ARMv7 and later (32-bit Raspberry Pi OS on a Pi 2, 3 or 4); not ARMv6 (Pi 1, Pi Zero)</td></tr></tbody></table></div>
 <p>Next to each binary are its SHA-256 checksum (<code>.sha256</code>) and two software bills of materials (<code>.cdx.json</code>, CycloneDX, and <code>.spdx.json</code>, SPDX). <code>SHA256SUMS</code> lists the checksums of all three binaries.</p>
 <p>Download, check and install - here for amd64:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0-alpha.1/thelb-0.1.0-alpha.1-linux-amd64
-<span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0-alpha.1/SHA256SUMS
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0-alpha.2/thelb-0.1.0-alpha.2-linux-amd64
+<span class="tok-cmd">curl</span> <span class="tok-flag">-LO</span> https://github.com/dmartsapp/thelb/releases/download/v0.1.0-alpha.2/SHA256SUMS
 <span class="tok-cmd">sha256sum</span> <span class="tok-flag">-c</span> SHA256SUMS <span class="tok-flag">--ignore-missing</span>
-<span class="tok-cmd">sudo</span> install <span class="tok-flag">-m</span> 0755 thelb-0.1.0-alpha.1-linux-amd64 /usr/local/bin/thelb
+<span class="tok-cmd">sudo</span> install <span class="tok-flag">-m</span> 0755 thelb-0.1.0-alpha.2-linux-amd64 /usr/local/bin/thelb
 <span class="tok-cmd">thelb</span> <span class="tok-flag">--version</span></code></pre></div>
 <p><code>sha256sum</code> must say <code>OK</code>. Then <code>thelb --version</code> shows the version, the commit it was built from, and the Go release:</p>
 <figure class="screen"><img src="assets/screens/version.svg" width="515" height="88" alt="The version, the commit and the Go release the binary was built with." loading="lazy"><figcaption>The version, the commit and the Go release the binary was built with.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --version
@@ -55,8 +55,8 @@ thelb 0.1.0 (commit 7034d7d, go1.27.4 linux/amd64)</code></pre></details></figur
 <p>Copy the same file to every director and backend, as <code>/usr/local/bin/thelb</code>.</p>
 <h3 id="check-where-it-came-from-optional">Check where it came from (optional)<a class="anchor" href="#check-where-it-came-from-optional" aria-label="Link to this section">#</a></h3>
 <p>GitHub signs a statement for each binary, saying which workflow built it, from which commit. With the <a href="https://cli.github.com">GitHub CLI</a>:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.1-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
-<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.1-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.2-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.2-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
 <p>The first checks the build itself; the second checks that the CycloneDX SBOM describes this exact file. See <a href="security.html">Security</a> for more.</p>
 <h2 id="build-it-yourself">Build it yourself<a class="anchor" href="#build-it-yourself" aria-label="Link to this section">#</a></h2>
 <p>You need Go 1.27.4 or later, and <code>make</code>:</p>
@@ -69,7 +69,7 @@ thelb 0.1.0 (commit 7034d7d, go1.27.4 linux/amd64)</code></pre></details></figur
 <p>Next: the <a href="quickstart.html">quick start</a>.</p>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="index.html"><span>Previous</span>theLB</a><a class="next" href="quickstart.html"><span>Next</span>Quick start</a></nav>
-<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/install.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.1 &middot; MIT License</span></footer>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/install.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.2 &middot; MIT License</span></footer>
 </main>
 <aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#what-you-need">What you need</a></li><li class="toc3"><a href="#open-these-in-your-firewalls">Open these in your firewalls</a></li><li class="toc2"><a href="#download-a-release">Download a release</a></li><li class="toc3"><a href="#check-where-it-came-from-optional">Check where it came from (optional)</a></li><li class="toc2"><a href="#build-it-yourself">Build it yourself</a></li><li class="toc2"><a href="#what-gets-installed">What gets installed</a></li></ul></aside>
 </div>
