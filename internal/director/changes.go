@@ -14,6 +14,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/join"
+	"github.com/dmartsapp/thelb/internal/safe"
 	"github.com/hashicorp/raft"
 )
 
@@ -50,6 +51,9 @@ func (s *session) change(by string, c api.Change) (api.Result, error) {
 	case "service.add":
 		return s.serviceAdd(by, c)
 	case "service.remove":
+		if len(c.Names) != 1 {
+			return api.Result{}, errors.New("remove one service at a time")
+		}
 		if err := s.apply(cluster.TypeServiceRemove, by, cluster.Name{Name: c.Names[0]}); err != nil {
 			return api.Result{}, err
 		}
@@ -140,6 +144,9 @@ var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 func (s *session) poolAdd(by string, c api.Change) (api.Result, error) {
 	if !nameRE.MatchString(c.Pool) {
 		return api.Result{}, fmt.Errorf("a pool's name is lowercase letters, digits and hyphens: %q", c.Pool)
+	}
+	if c.Interface != "" && !safe.IfName(c.Interface) {
+		return api.Result{}, fmt.Errorf("--interface %q is not an interface's name", c.Interface)
 	}
 	p, err := netip.ParsePrefix(c.VIP)
 	if err != nil {

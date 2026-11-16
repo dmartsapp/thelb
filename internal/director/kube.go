@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/ipvs"
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/logx"
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // The names theLB reads in a cluster.
@@ -162,6 +164,14 @@ func (k *kubeView) report(ctx context.Context, log *logx.Logger) {
 			}
 			log.OK("watching Kubernetes: the cluster read", "services", theirs, "nodes", len(nodes), "ready", ready)
 		}
+		for _, r := range []struct {
+			kind    string
+			refused map[string]string
+		}{{"Service", k.services.Refused()}, {"Node", k.nodes.Refused()}, {"EndpointSlice", k.slices.Refused()}} {
+			for _, key := range sortedNames(r.refused) {
+				log.Warn("a Kubernetes object left out: it is not one an API server sends", "kind", r.kind, "object", safe.Short(key, 100), "reason", r.refused[key])
+			}
+		}
 		why := ""
 		for _, c := range []struct {
 			what string
@@ -204,6 +214,9 @@ func familyOf(a netip.Addr) string {
 	}
 	return "IPv6"
 }
+
+// shareRE is a dmarts.app/thelb-shared-vip value: as a label's value.
+var shareRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$`)
 
 func splitList(v string) []string {
 	var out []string
@@ -434,18 +447,25 @@ func (s *session) kubeAllocate(svc *kube.Service, ks kubeState) (cluster.KubeSer
 	if had && old.UID != svc.Meta.UID {
 		had = false // a Service created again under the same name: a new one
 	}
+	if want.Share != "" && !shareRE.MatchString(want.Share) {
+		return want, fmt.Sprintf("%s %q: a name for the Services sharing a VIP is up to 63 letters, digits, dots, hyphens and underscores", annotationShare, safe.Short(want.Share, 70))
+	}
 	poolNames := splitList(svc.Meta.Annotations[annotationPool])
+	asks := splitList(svc.Meta.Annotations[annotationIP])
+	if len(poolNames) > 2 || len(asks) > 2 {
+		return want, fmt.Sprintf("%s and %s name at most two each: one for each IP family", annotationPool, annotationIP)
+	}
 	var asked []netip.Addr
-	for _, x := range splitList(svc.Meta.Annotations[annotationIP]) {
+	for _, x := range asks {
 		a, err := netip.ParseAddr(x)
-		if err != nil {
-			return want, fmt.Sprintf("%s %q is not an address", annotationIP, x)
+		if err != nil || a.Zone() != "" {
+			return want, fmt.Sprintf("%s %q is not an address", annotationIP, safe.Short(x, 70))
 		}
 		asked = append(asked, a.Unmap())
 	}
 	for _, name := range poolNames {
 		if _, ok := ks.pools[name]; !ok {
-			return want, fmt.Sprintf("%s names %s, and no pool has that name", annotationPool, name)
+			return want, fmt.Sprintf("%s names %q, and no pool has that name", annotationPool, safe.Short(name, 70))
 		}
 	}
 	for _, fam := range families(svc) {

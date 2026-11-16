@@ -10,11 +10,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // InCluster is what --kubeconfig says for a director in a pod: the pod's own
@@ -25,8 +30,58 @@ const InCluster = "in-cluster"
 var (
 	saDir    = "/var/run/secrets/kubernetes.io/serviceaccount"
 	getenv   = os.Getenv
-	readFile = os.ReadFile
+	readFile = readSmall
 )
+
+// maxFile is the largest file a kubeconfig is, or names: far more than any
+// kubeconfig, certificate or token.
+const maxFile = 1 << 20
+
+// readSmall reads a regular file of at most maxFile bytes: never a device, a
+// pipe or a file that does not end.
+func readSmall(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxFile {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, maxFile)
+	}
+	return b, nil
+}
+
+// TokenProblem is what is wrong with a bearer token, or "": one that is
+// empty, longer than 16 KiB, or holds anything but printable ASCII without
+// spaces - or that is a theLB secret, which a kubeconfig naming the wrong file
+// would send to the API server.
+func TokenProblem(t string) string {
+	switch {
+	case t == "":
+		return "it is empty"
+	case len(t) > 16<<10:
+		return "it is longer than 16 KiB"
+	case strings.HasPrefix(t, "thelb1:"):
+		return "it is a theLB secret, not a Kubernetes token - theLB sends its secrets nowhere"
+	}
+	for i := 0; i < len(t); i++ {
+		if t[i] <= ' ' || t[i] >= 0x7f {
+			return "it holds a character a token does not"
+		}
+	}
+	return ""
+}
 
 // Config is how to reach the API server, and who to be there.
 type Config struct {
@@ -81,6 +136,12 @@ func inCluster() (*Config, error) {
 	if host == "" || port == "" {
 		return nil, errors.New("--kubeconfig in-cluster: not in a pod - KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set")
 	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return nil, fmt.Errorf("--kubeconfig in-cluster: KUBERNETES_SERVICE_PORT %q is not a port", safe.Short(port, 40))
+	}
+	if _, err := netip.ParseAddr(host); err != nil && !SubdomainOK(host) {
+		return nil, fmt.Errorf("--kubeconfig in-cluster: KUBERNETES_SERVICE_HOST %q is neither an address nor a name", safe.Short(host, 80))
+	}
 	u, err := url.Parse("https://" + net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, err
@@ -98,7 +159,11 @@ func inCluster() (*Config, error) {
 		return nil, fmt.Errorf("--kubeconfig in-cluster: the pod's ServiceAccount: %w", err)
 	}
 	ns, _ := readFile(filepath.Join(saDir, "namespace"))
-	return &Config{Server: u, RootCAs: pool, TokenFile: tokenFile, Namespace: strings.TrimSpace(string(ns)), Source: "the pod's ServiceAccount"}, nil
+	namespace := strings.TrimSpace(string(ns))
+	if !dns1123Label.MatchString(namespace) {
+		namespace = ""
+	}
+	return &Config{Server: u, RootCAs: pool, TokenFile: tokenFile, Namespace: namespace, Source: "the pod's ServiceAccount"}, nil
 }
 
 // parseKubeconfig reads a kubeconfig's context - the one named, or its current
@@ -168,10 +233,19 @@ func parseKubeconfig(b []byte, dir, context string) (*Config, error) {
 		}
 	}
 	c.Token = str(us["token"])
+	if c.Token != "" {
+		if p := TokenProblem(c.Token); p != "" {
+			return nil, fmt.Errorf("the user %q's token: %s", userName, p)
+		}
+	}
 	if f := str(us["tokenFile"]); f != "" && c.Token == "" {
 		c.TokenFile = rel(dir, f)
-		if _, err := readFile(c.TokenFile); err != nil {
+		b, err := readFile(c.TokenFile)
+		if err != nil {
 			return nil, fmt.Errorf("the user %q's tokenFile: %w", userName, err)
+		}
+		if p := TokenProblem(strings.TrimSpace(string(b))); p != "" {
+			return nil, fmt.Errorf("the user %q's tokenFile %s: %s", userName, c.TokenFile, p)
 		}
 	}
 	certPEM, keyPEM := []byte(nil), []byte(nil)

@@ -44,12 +44,30 @@ func Parse(spec, proto string) (string, error) {
 			return "", fmt.Errorf("an http check is for a tcp offer, not %s", proto)
 		}
 		path := strings.TrimPrefix(spec, "http:")
-		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " \t\n") {
-			return "", fmt.Errorf("an http check's path starts with /, without spaces: %q", spec)
+		if !PathOK(path) {
+			return "", fmt.Errorf("an http check's path starts with /, and is up to %d printable ASCII characters, without spaces: %q", maxPath, spec)
 		}
 		return spec, nil
 	}
 	return "", fmt.Errorf("a check is tcp, none or http:<path>, not %q", spec)
+}
+
+const maxPath = 512
+
+// PathOK is whether path can be an http check's: it begins with "/" and is
+// printable ASCII - no space, no control character - up to 512 characters. A
+// backend chooses it, and it reaches the leader's requests, status, logs and
+// the scripts generate prints.
+func PathOK(path string) bool {
+	if !strings.HasPrefix(path, "/") || len(path) > maxPath {
+		return false
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] <= ' ' || path[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // Describe is a check as status shows it: "tcp", "http /healthz".

@@ -298,7 +298,7 @@ func (s *session) admit(w *wire.Conn, claim cluster.Claim, csr *x509.Certificate
 			return
 		}
 	}
-	if !strings.HasPrefix(ready.RaftID, claim.Name+"-") {
+	if !join.MemberOK(ready.RaftID, claim.Name) {
 		_ = w.Send(join.State{State: join.Refused, Message: "its member identity is not its own"})
 		return
 	}

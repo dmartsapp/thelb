@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dmartsapp/thelb/internal/safe"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/table"
 )
@@ -56,7 +57,7 @@ func Render(fs []Finding) string {
 	for _, f := range fs {
 		rows = append(rows, []string{f.Area, f.Check, f.State, f.Detail})
 		if f.Fix != "" && (f.State == Warn || f.State == Fail) {
-			todo = append(todo, fmt.Sprintf("  %s - %s: %s", f.State, f.Check, f.Fix))
+			todo = append(todo, safe.Text(fmt.Sprintf("  %s - %s: %s", f.State, f.Check, f.Fix)))
 		}
 	}
 	out := table.Render([]string{"area", "check", "state", "detail"}, rows)

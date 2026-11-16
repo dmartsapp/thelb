@@ -34,6 +34,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/preflight"
+	"github.com/dmartsapp/thelb/internal/safe"
 	"github.com/dmartsapp/thelb/internal/secret"
 	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/version"
@@ -81,10 +82,14 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
 	}
-	_, _ = fmt.Fprintln(stderr, "thelb: "+err.Error())
+	_, _ = fmt.Fprintln(stderr, "thelb: "+safe.Text(err.Error()))
 	var u usageError
 	if errors.As(err, &u) {
-		_, _ = fmt.Fprintln(stderr, `run "thelb --help" for the commands, or "thelb <command> --help" for one`)
+		if _, n := helpFor(args); n > 0 && !strings.HasPrefix(args[0], "-") && args[0] != "help" {
+			_, _ = fmt.Fprintf(stderr, "Run 'thelb %s --help' for usage.\n", strings.Join(args[:n], " "))
+		} else {
+			_, _ = fmt.Fprintln(stderr, "Run 'thelb --help' for usage.")
+		}
 		return 2
 	}
 	return 1
@@ -94,6 +99,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stdout, helpText)
 		return nil
+	}
+	// Every argument is checked before any command reads it: none takes a
+	// control character, and each may reach a unit, a script or a log line.
+	for i, a := range args {
+		if err := safe.Arg(a); err != nil {
+			return usagef("argument %d %v: theLB takes none like it", i+1, err)
+		}
 	}
 	switch args[0] {
 	case "-h", "-help", "--help", "help":
@@ -107,13 +119,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if _, ok := commandHelps[cmd]; !ok {
+	if _, ok := helpPages[cmd]; !ok {
 		return usagef("%q is not a theLB command", cmd)
 	}
 	for _, a := range rest {
 		if a == "-h" || a == "-help" || a == "--help" {
 			return commandHelp(args, stdout)
 		}
+	}
+	// A command that needs a subcommand, given none, shows its page.
+	if h, n := helpFor(args); n == len(args) && helpGroups[strings.Join(args, " ")] {
+		_, _ = fmt.Fprint(stdout, h)
+		return nil
 	}
 	if geteuid() != 0 {
 		return fmt.Errorf("thelb %s runs only as root (effective user ID 0); the help and --version run for anyone", cmd)
@@ -136,19 +153,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// commandHelp prints the help of the command words name: a subcommand's own
-// page if it has one (generate k8s), or the command's.
+// commandHelp prints the page of the command words: the deepest subcommand
+// named that has a page of its own, or the command's.
 func commandHelp(words []string, stdout io.Writer) error {
-	h, ok := commandHelps[words[0]]
-	if !ok {
+	h, n := helpFor(words)
+	switch {
+	case n > 0:
+		_, _ = fmt.Fprint(stdout, h)
+	case len(words) == 0 || strings.HasPrefix(words[0], "-"):
+		_, _ = fmt.Fprint(stdout, helpText)
+	default:
 		return usagef("%q is not a theLB command", words[0])
 	}
-	if len(words) > 1 {
-		if sub, ok := subcommandHelps[words[0]+" "+words[1]]; ok {
-			h = sub
-		}
-	}
-	_, _ = fmt.Fprint(stdout, h)
 	return nil
 }
 
@@ -227,6 +243,9 @@ func directorConfig(ctx context.Context, cmd string, args []string) (director.Co
 		return cfg, usagef("thelb director: unexpected %q", fs.Arg(0))
 	}
 
+	if *iface != "" && !safe.IfName(*iface) {
+		return cfg, usagef("thelb director: --interface %q is not an interface's name", *iface)
+	}
 	switch {
 	case *vip == "":
 		return cfg, usagef("thelb director: --vip, the control VIP, is required")
@@ -448,7 +467,7 @@ func offerCmd(args []string, stdout io.Writer) error {
 		return err
 	}
 	if r := resp.Result; r != nil && r.Message != "" {
-		_, _ = fmt.Fprintln(stdout, r.Message)
+		_, _ = fmt.Fprintln(stdout, safe.Text(r.Message))
 	}
 	return nil
 }
@@ -496,6 +515,9 @@ func backendConfig(ctx context.Context, cmd string, args []string) (backend.Conf
 	}
 	if fs.NArg() > 0 {
 		return cfg, usagef("thelb backend: unexpected %q", fs.Arg(0))
+	}
+	if *iface != "" && !safe.IfName(*iface) {
+		return cfg, usagef("thelb backend: --interface %q is not an interface's name", *iface)
 	}
 	host, portText, err := net.SplitHostPort(*joinTo)
 	port, perr := strconv.Atoi(portText)
@@ -656,7 +678,7 @@ func change(stdout io.Writer, c api.Change) error {
 		return err
 	}
 	if r := resp.Result; r != nil && r.Message != "" {
-		_, _ = fmt.Fprintln(stdout, r.Message)
+		_, _ = fmt.Fprintln(stdout, safe.Text(r.Message))
 	}
 	return nil
 }
@@ -684,7 +706,7 @@ func adminCmd(args []string, stdout io.Writer) error {
 		if resp.Result != nil && len(resp.Result.Names) > 0 {
 			done = resp.Result.Names
 		}
-		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], strings.Join(done, ", "))
+		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], safe.Text(strings.Join(done, ", ")))
 		return nil
 	case "pool":
 		return poolCmd(args[1:], stdout)
@@ -803,6 +825,9 @@ func poolCmd(args []string, stdout io.Writer) error {
 	if *count < 1 {
 		return usagef("thelb admin pool add: --vippool-count, how many addresses, is required")
 	}
+	if *iface != "" && !safe.IfName(*iface) {
+		return usagef("thelb admin pool add: --interface %q is not an interface's name", *iface)
+	}
 	return change(stdout, api.Change{Op: "pool.add", Pool: name, VIP: *vip, Count: *count, Interface: *iface, Default: *def})
 }
 
@@ -898,7 +923,7 @@ func approveCmd(args []string, stdout io.Writer) error {
 		done = slices.Clone(resp.Result.Names)
 	}
 	slices.Sort(done) // by name, not by the order they asked in
-	_, _ = fmt.Fprintf(stdout, "approved: %s\n", strings.Join(done, ", "))
+	_, _ = fmt.Fprintf(stdout, "approved: %s\n", safe.Text(strings.Join(done, ", ")))
 	return nil
 }
 

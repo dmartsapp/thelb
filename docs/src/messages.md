@@ -71,6 +71,8 @@ Search this page for the words in your message. Values that change - names, addr
 |---|---|
 | `WARN drift repaired: ...` | Something else changed theLB's kernel setup, and theLB put it back. Find what did it: the two will undo each other every 10 seconds. |
 | `ERROR a loop has stopped ...` | A part of theLB stopped working. Under systemd, theLB is restarted. Please [report it](https://github.com/dmartsapp/thelb/issues) with the log around it. |
+| `WARN an order the leader sent is not one: skipped service=... vip=...` | On a backend: the leader sent an assignment with a VIP, protocol or port that is not one, and the backend did not plumb it. A leader of the same version never does: please [report it](https://github.com/dmartsapp/thelb/issues). |
+| `thelb: argument N holds the control character ...` | An argument held a newline, a terminal's escape or another control character - often from a copy and paste. Type it again. See [What theLB checks](security.md#what-thelb-checks). |
 
 ## Kubernetes
 
@@ -87,3 +89,4 @@ Search this page for the words in your message. Values that change - names, addr
 | `WARN Kubernetes Service: ready pods of this Service on nodes theLB sends no traffic to ... reason=NodesExcluded` | Pods on a node theLB leaves out get no traffic from outside. The message says why for each node, and what to do - most often kubeadm's label on a control-plane node: see [Which nodes get traffic](kubernetes.md#which-nodes-get-traffic). |
 | `WARN Kubernetes Service: directors run on nodes labelled ... reason=NoDirectorExclusion` | With Cilium, director nodes take the Service's packets before theLB. Add the annotation `service.cilium.io/node-selector: "!dmarts.app/thelb-director"` to the Service. |
 | `WARN node not serving: weight 0 ... reason=...` | A node gets no new connections: with `Local`, it runs no ready pod of the Service - by design; with `Cluster`, its node port does not answer. |
+| `WARN a Kubernetes object left out: it is not one an API server sends kind=... object=... reason=...` | The API server sent a Service, Node or EndpointSlice with a name, port or field no Kubernetes API server allows, and theLB ignores it. Look at what answers at the kubeconfig's `server:` - a proxy, or not an API server. |

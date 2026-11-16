@@ -6,12 +6,22 @@ package table
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // Render returns headers and rows as a table in psql's style. The columns listed
 // in right are right-aligned (numbers); every other column is left-aligned, and
 // headers always are. A row shorter than the headers is padded with empty cells.
 func Render(headers []string, rows [][]string, right ...int) string {
+	// Cells hold names other nodes and the Kubernetes API chose: no cell may
+	// end a line or reach the terminal as an escape.
+	headers = cleaned(headers)
+	clean := make([][]string, len(rows))
+	for i, row := range rows {
+		clean[i] = cleaned(row)
+	}
+	rows = clean
 	alignRight := make(map[int]bool, len(right))
 	for _, i := range right {
 		alignRight[i] = true
@@ -58,4 +68,12 @@ func Render(headers []string, rows [][]string, right ...int) string {
 		line(row, false)
 	}
 	return b.String()
+}
+
+func cleaned(cells []string) []string {
+	out := make([]string, len(cells))
+	for i, c := range cells {
+		out[i] = safe.Text(c)
+	}
+	return out
 }

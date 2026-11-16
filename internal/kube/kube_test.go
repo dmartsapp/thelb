@@ -153,6 +153,17 @@ func TestKubeconfig(t *testing.T) {
 	if tok, _ := New(c).token(); tok != "filetoken" {
 		t.Fatalf("token %q", tok)
 	}
+	// A kubeconfig naming a theLB secret file as its token file would send the
+	// secret to whatever server it names: refused.
+	if err := os.WriteFile(filepath.Join(dir, "director.secret"), []byte("thelb1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    tokenFile: director.secret")), dir, ""); err == nil || !strings.Contains(err.Error(), "theLB secret") {
+		t.Errorf("a theLB secret as the token file: %v", err)
+	}
+	if _, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    token: \"a\\nb\"")), dir, ""); err == nil {
+		t.Error("a token with a newline: taken")
+	}
 	for user, says := range map[string]string{
 		"    exec:\n      command: aws":    "exec",
 		"    username: a\n    password: b": "username",

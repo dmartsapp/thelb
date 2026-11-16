@@ -48,6 +48,28 @@ These are not vulnerabilities, but you should run theLB with them in mind.
 - **The secret files.** A secret lets a machine ask to join; it never lets one in by itself - every new node waits for approval. Keep the files owned by root, mode `0600` (theLB refuses others). After a leak, see [If a secret leaks](approval.md#if-a-secret-leaks).
 - **Root on the nodes.** theLB runs as root, with only the capabilities it needs under the unit `thelb generate systemd` prints. Anyone with root on a director can act as that director.
 - **The metrics endpoint** is plain HTTP without authentication. Give `--metrics` an address only your monitoring reaches.
+- **Kubeconfig files.** A kubeconfig says which server to talk to and which files to send it. Like `kubectl`, theLB trusts the kubeconfig you give it: use only kubeconfigs from people you trust. theLB refuses to send one of its own secrets as a token.
+
+## What theLB checks
+
+theLB checks what it is given where it comes in, and quotes or cleans it where it goes out. Nothing it is given can add a command to a script, a line to a unit or a log, or an escape sequence to your terminal.
+
+| What comes in | What theLB checks |
+|---|---|
+| Command-line arguments | Before any command reads them: UTF-8, no control characters (newlines, terminal escapes), no characters that reorder text, at most 4096 bytes. Names, addresses, ports and interface names are checked for what they are. |
+| Another node's messages | A joining node's name, address, MAC address, fingerprint, hostname, version and member identity; a backend's offers (name, protocol, port, check), heartbeats (at most 4096 VIPs and checks) and version; every message is at most 1 MiB. A backend checks the leader's orders before it changes the kernel. |
+| The Kubernetes API | Each Service, Node and EndpointSlice: names, namespaces, ports, protocols, policies. An object an API server would never send is left out, and the director logs `a Kubernetes object left out`. theLB's annotations are checked before use: at most two pools and addresses, and a shared-VIP key like a label's value. |
+| Files | Secret files: owned by root, mode `0600`, a regular file. Kubeconfigs and the files they name: regular files, at most 1 MiB, nested at most 32 deep; tokens are printable ASCII without spaces, at most 16 KiB. |
+| Health checks | An HTTP check's path: printable ASCII from `/`, at most 512 characters. |
+
+| What goes out | How theLB makes it safe |
+|---|---|
+| `generate commands` | Every value from the cluster's state is one shell word, quoted where needed. |
+| `generate systemd` | Arguments quoted as systemd reads them; `%` and `$` escaped. |
+| `generate k8s` | What the cluster says is checked before it goes into a file or a script; strings in YAML are quoted. |
+| Logs | Values with spaces, quotes or anything not printable are quoted, with the characters escaped. |
+| `status`, `doctor`, errors | Control characters shown as `?`. |
+| Metrics | Label values escaped as Prometheus reads them. |
 
 ## What is in scope
 

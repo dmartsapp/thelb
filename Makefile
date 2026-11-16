@@ -121,7 +121,7 @@ lab-down:
 # screens: the documentation's screenshots - the real output of a build of this
 # tree, versioned as the changelog's newest release, in the lab - as
 # docs/screens/*.txt; python3 docs/build.py draws them (docs/src/tech-docs.md).
-screens: VERSION = $(shell sed -n 's/^## v\([0-9][0-9.]*\) .*/\1/p' CHANGELOG.md | head -1)
+screens: VERSION = $(shell sed -n 's/^## v\([0-9][0-9A-Za-z.-]*\) .*/\1/p' CHANGELOG.md | head -1)
 screens:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/screens/thelb ./cmd/thelb
 	@sudo -n docs/screens/capture.sh bin/screens/thelb

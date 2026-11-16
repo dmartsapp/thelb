@@ -133,20 +133,28 @@ func TestGenerateK8sNode(t *testing.T) {
 }
 
 func TestHelpOfGenerateK8s(t *testing.T) {
-	for _, args := range [][]string{{"generate", "k8s", "--help"}, {"help", "generate", "k8s"}, {"generate", "k8s", "service", "web", "-h"}} {
-		code, out, _ := as(t, 1000, args...)
-		if code != 0 || !strings.HasPrefix(out, subcommandHelps["generate k8s"]) {
-			t.Errorf("%v: exit %d, not the k8s page:\n%s", args, code, out)
+	for _, c := range []struct {
+		args []string
+		page string
+	}{
+		{[]string{"generate", "k8s", "--help"}, "generate k8s"},
+		{[]string{"help", "generate", "k8s"}, "generate k8s"},
+		{[]string{"generate", "k8s", "service", "web", "-h"}, "generate k8s service"},
+		{[]string{"help", "generate", "k8s", "node"}, "generate k8s node"},
+		{[]string{"generate", "--help"}, "generate"},
+	} {
+		code, out, _ := as(t, 1000, c.args...)
+		if code != 0 || out != helpPages[c.page] {
+			t.Errorf("%v: exit %d, not the %s page:\n%s", c.args, code, c.page, out)
 		}
 	}
-	// Every form, and every flag of service, is in it.
-	for _, want := range []string{"generate k8s kubeconfig", "generate k8s director", "generate k8s node <name>", "generate k8s service <name>",
-		"--namespace", "--port", "--selector", "--policy", "--pool", "--ip", "--shared-vip"} {
-		if !strings.Contains(subcommandHelps["generate k8s"], want) {
-			t.Errorf("the k8s help lacks %q", want)
+	// Every form is listed, and each has its page.
+	for _, form := range []string{"kubeconfig", "director", "node <name>", "service <name>"} {
+		if !strings.Contains(helpPages["generate k8s"], "  "+form) {
+			t.Errorf("the k8s page lacks the form %q", form)
 		}
-	}
-	if code, out, _ := as(t, 1000, "generate", "--help"); code != 0 || out != commandHelps["generate"] {
-		t.Errorf("generate --help: exit %d, not the generate page", code)
+		if helpPages["generate k8s "+strings.Fields(form)[0]] == "" {
+			t.Errorf("the form %q has no page", form)
+		}
 	}
 }

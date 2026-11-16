@@ -19,6 +19,7 @@ type Cache[T any] struct {
 	err     string    // why it is not watching, if it is not
 	at      time.Time // when it last heard from the API server
 	changed chan struct{}
+	refused map[string]string // objects left out, not yet reported: key -> why
 }
 
 // NewCache is a cache of the objects at path, keyed by key.
@@ -90,10 +91,13 @@ func sleep(ctx context.Context, d time.Duration) bool {
 
 func (k *Cache[T]) replace(items []T) {
 	m := make(map[string]*T, len(items))
+	k.mu.Lock()
 	for i := range items {
+		if k.refuseLocked(&items[i]) {
+			continue
+		}
 		m[k.key(&items[i])] = &items[i]
 	}
-	k.mu.Lock()
 	k.items, k.synced, k.err, k.at = m, true, "", time.Now()
 	k.signalLocked()
 	k.mu.Unlock()
@@ -103,7 +107,7 @@ func (k *Cache[T]) apply(ch Change[T]) {
 	obj := ch.Object
 	key := k.key(&obj)
 	k.mu.Lock()
-	if ch.Type == "DELETED" {
+	if ch.Type == "DELETED" || k.refuseLocked(&obj) {
 		delete(k.items, key)
 	} else {
 		k.items[key] = &obj
@@ -111,6 +115,36 @@ func (k *Cache[T]) apply(ch Change[T]) {
 	k.err, k.at = "", time.Now()
 	k.signalLocked()
 	k.mu.Unlock()
+}
+
+// refuseLocked is whether obj is left out - it says what is wrong with it - and
+// records why, for Refused. k.mu is held.
+func (k *Cache[T]) refuseLocked(obj *T) bool {
+	c, ok := any(obj).(Checked)
+	if !ok {
+		return false
+	}
+	why := c.Problem()
+	if why == "" {
+		return false
+	}
+	if k.refused == nil {
+		k.refused = map[string]string{}
+	}
+	if len(k.refused) < 100 { // reported in batches: a flood is not logged whole
+		k.refused[k.key(obj)] = why
+	}
+	return true
+}
+
+// Refused is the objects left out since it was last asked - by key, with what
+// is wrong with each - for the director to say once.
+func (k *Cache[T]) Refused() map[string]string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	r := k.refused
+	k.refused = nil
+	return r
 }
 
 func (k *Cache[T]) fail(err error) {

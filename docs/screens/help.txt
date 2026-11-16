@@ -1,26 +1,24 @@
 d1
 $ thelb --help
+Usage: thelb <command> [<subcommand>] [options]
+
 theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
 
-Usage:
-  thelb <command> [flags]
-
 Commands:
-  director   run this node as a director
-  backend    run this node as a backend
-  status     show the cluster, from the theLB running on this node
-  doctor     check this node for theLB, and say what to do
-  offer      on a backend: offer an application to the cluster, or withdraw it
-  generate   print a file's content, and write nothing: secret, commands,
-             systemd, sysctl, modules, k8s
-  admin      change the cluster, on a director: approve, refuse, remove,
-             pool, service, assign, unassign, lease, secret show
+  director    Run this node as a director
+  backend     Run this node as a backend
+  status      Show the cluster, as this node sees it
+  doctor      Check this node for theLB, and say what to fix
+  offer       Offer an application to the cluster, or withdraw it (on a backend)
+  generate    Print a file theLB needs - it writes nothing
+  admin       Change the cluster (on a director)
+  help        Show the help of a command
 
-Every command runs only as root (effective user ID 0); this help and --version
-run for anyone.
+Options:
+  -h, --help       Show this help
+  -v, --version    Show the version, the commit, Go and the platform
 
-  thelb <command> --help        a command's flags; or thelb help <command>
-  thelb generate k8s --help     the Kubernetes manifests, scripts and Services
-  thelb --version               the version, the commit, Go and the platform
+Run 'thelb <command> --help' for more about a command.
+Every command but help and --version runs as root.
 
-The documentation: https://dmartsapp.github.io/thelb/
+Documentation: https://dmartsapp.github.io/thelb/

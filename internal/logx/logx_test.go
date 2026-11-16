@@ -65,3 +65,18 @@ func TestDebugLinesOnlyWhenOn(t *testing.T) {
 		t.Errorf("with debugging on: %q", b.String())
 	}
 }
+
+// TestAValueCannotForgeALine: a value from another node or the API - a newline,
+// a carriage return, a terminal's escape - is quoted with its characters
+// escaped: one event, one line, nothing for the terminal to run.
+func TestAValueCannotForgeALine(t *testing.T) {
+	line := Line(time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), "thelb", Warn, "join refused\nforged", "node", "web\r2026-11-16T00:00:00.000Z [thelb] OK all fine", "mac", "\x1b[2J", "name", "x\u202ey")
+	if strings.ContainsAny(line, "\n\r\x1b\u202e") {
+		t.Fatalf("the line holds a control character: %q", line)
+	}
+	for _, want := range []string{`node="web\r2026`, `mac="\x1b[2J"`, `name="x\u202ey"`, "join refused?forged"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("%q lacks %q", line, want)
+		}
+	}
+}

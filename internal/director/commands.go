@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dmartsapp/thelb/internal/cluster"
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // Commands is a shell script of the `thelb admin` commands that would create
@@ -29,7 +30,7 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 # on one of its directors - once its nodes are approved, and the backends'
 # offers are listed by "thelb status backends": an assignment needs its
 # backend's offer. theLB prints this; it never reads it.
-`, name, at.UTC().Format(time.RFC3339), from)
+`, safe.Text(name), at.UTC().Format(time.RFC3339), safe.Text(from))
 
 	var others []string
 	for _, n := range sortedNames(st.Nodes) {
@@ -38,7 +39,7 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 		}
 	}
 	if len(others) > 0 {
-		fmt.Fprintf(&b, "#\n# The nodes that were members, to approve - after comparing fingerprints - once\n# they ask:\n#   thelb admin approve --match '%s'\n", strings.Join(others, "|"))
+		fmt.Fprintf(&b, "#\n# The nodes that were members, to approve - after comparing fingerprints - once\n# they ask:\n#   thelb admin approve --match %s\n", safe.Text(safe.Shell(strings.Join(others, "|"))))
 	}
 
 	if st.Cluster != nil && st.Cluster.Lease != 0 {
@@ -50,9 +51,9 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 	}
 	for _, n := range sortedNames(st.Pools) {
 		p := st.Pools[n]
-		fmt.Fprintf(&b, "thelb admin pool add %s --vip %s/%d --vippool-count %d", p.Name, p.First, p.Bits, p.Count)
+		fmt.Fprintf(&b, "thelb admin pool add %s --vip %s --vippool-count %d", sh(p.Name), sh(fmt.Sprintf("%s/%d", p.First, p.Bits)), p.Count)
 		if p.Interface != "" {
-			fmt.Fprintf(&b, " --interface %s", p.Interface)
+			fmt.Fprintf(&b, " --interface %s", sh(p.Interface))
 		}
 		if p.Default {
 			b.WriteString(" --default")
@@ -70,7 +71,7 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 			method = "direct"
 		}
 		fmt.Fprintf(&b, "thelb admin service add %s --pool %s --vip %s --proto %s --port %d --scheduler %s --method %s\n",
-			v.Name, v.Pool, v.VIP, v.Proto, v.Port, v.Scheduler, method)
+			sh(v.Name), sh(v.Pool), sh(v.VIP), sh(v.Proto), v.Port, sh(v.Scheduler), sh(method))
 	}
 
 	byService := map[string][]*cluster.Assignment{}
@@ -85,19 +86,25 @@ func Commands(st *cluster.State, from string, at time.Time) string {
 		sort.Slice(as, func(i, j int) bool { return as[i].Node < as[j].Node })
 		var offers, weights []string
 		for _, a := range as {
-			offers = append(offers, fmt.Sprintf("%s:%s/%d", a.Node, a.Proto, a.Port))
+			offers = append(offers, sh(fmt.Sprintf("%s:%s/%d", a.Node, a.Proto, a.Port)))
 			if a.Weight != 1 {
 				weights = append(weights, fmt.Sprintf("%s=%d", a.Node, a.Weight))
 			}
 		}
-		fmt.Fprintf(&b, "thelb admin assign %s %s", svc, strings.Join(offers, " "))
+		fmt.Fprintf(&b, "thelb admin assign %s %s", sh(svc), strings.Join(offers, " "))
 		if len(weights) > 0 {
-			fmt.Fprintf(&b, " --weight %s", strings.Join(weights, ","))
+			fmt.Fprintf(&b, " --weight %s", sh(strings.Join(weights, ",")))
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
 }
+
+// sh is a value of the cluster's state as one word of the script. The leader
+// checks every name before it records it; the script quotes them all the same,
+// so that nothing in the state - from an older version, or a member that
+// misbehaves - can run as a command when the user runs the script.
+func sh(s string) string { return safe.Shell(s) }
 
 // Generate prints what `thelb generate` asks of the running director.
 func (n *node) Generate(what string) (string, error) {

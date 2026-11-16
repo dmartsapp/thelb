@@ -56,14 +56,22 @@ type yline struct {
 }
 
 type yparser struct {
-	ls []yline
-	i  int
+	ls    []yline
+	i     int
+	depth int
 }
+
+// maxDepth is how deeply a kubeconfig may nest: a kubeconfig nests four deep.
+const maxDepth = 32
 
 func isItem(text string) bool { return text == "-" || strings.HasPrefix(text, "- ") }
 
 // block reads the mapping or sequence whose lines are at indent.
 func (p *yparser) block(indent int) (any, error) {
+	if p.depth++; p.depth > maxDepth {
+		return nil, fmt.Errorf("line %d: nested more than %d deep", p.ls[p.i].n, maxDepth)
+	}
+	defer func() { p.depth-- }()
 	if isItem(p.ls[p.i].text) {
 		return p.sequence(indent)
 	}

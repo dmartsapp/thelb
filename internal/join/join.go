@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -271,12 +273,60 @@ func Problem(c cluster.Claim, role string, from netip.Addr) string {
 		return fmt.Sprintf("a %s's secret cannot join a %s", role, c.Role)
 	case len(c.Fingerprint) != 16 || !hex(c.Fingerprint):
 		return "the node fingerprint is not one"
+	case !MACOK(c.MAC):
+		return "the MAC address claimed is not one"
+	case !HostnameOK(c.Hostname):
+		return "the hostname claimed is not a host's name"
+	case !VersionOK(c.Version):
+		return "the version claimed is not a version"
 	}
 	a, err := netip.ParseAddr(c.Address)
 	if err != nil || a.Unmap() != from.Unmap() {
 		return fmt.Sprintf("the connection comes from %s, not from the address claimed, %s", from, c.Address)
 	}
 	return ""
+}
+
+// MACOK is whether mac is a MAC address as a node reports its own: lowercase
+// hexadecimal, colon-separated, as Go writes them - or "" for an interface
+// without one (a tunnel's).
+func MACOK(mac string) bool {
+	if mac == "" {
+		return true
+	}
+	hw, err := net.ParseMAC(mac)
+	return err == nil && hw.String() == mac
+}
+
+// Hostname is h as a node reports it: "" when it is not one HostnameOK takes -
+// it is a label for people, and no reason to refuse a node.
+func Hostname(h string) string {
+	if !HostnameOK(h) {
+		return ""
+	}
+	return h
+}
+
+var (
+	hostnameRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9_-]{0,62}))*$`)
+	versionRE  = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
+)
+
+// HostnameOK is whether h can be the hostname a node reports - a label for
+// people, shown in status and logs: up to 253 characters, dot-separated labels
+// of letters, digits, hyphens and underscores; or "".
+func HostnameOK(h string) bool { return h == "" || (len(h) <= 253 && hostnameRE.MatchString(h)) }
+
+// VersionOK is whether v can be the version of theLB a node reports: up to
+// 64 letters, digits, dots, pluses, hyphens and underscores - 0.1.0-alpha.2,
+// 0.1.0-dev.
+func VersionOK(v string) bool { return versionRE.MatchString(v) }
+
+// MemberOK is whether id can be the member identity of the node named name:
+// its name, a hyphen, and hexadecimal - as the node makes it.
+func MemberOK(id, name string) bool {
+	suffix, ok := strings.CutPrefix(id, name+"-")
+	return ok && len(suffix) >= 8 && len(suffix) <= 32 && hex(suffix)
 }
 
 func hex(s string) bool {

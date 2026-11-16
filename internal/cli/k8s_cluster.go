@@ -14,10 +14,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/kube"
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // fromCluster is how thelb generate k8s may read the cluster, to fit what it
@@ -85,18 +85,7 @@ var (
 
 // clean is text from the cluster, fit to show: control characters - a
 // newline, a terminal's escape - each a "?", and at most 200 characters.
-func clean(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-			return '?'
-		}
-		return r
-	}, s)
-	if r := []rune(s); len(r) > 200 {
-		s = string(r[:200]) + "..."
-	}
-	return s
-}
+func clean(s string) string { return safe.Short(s, 200) }
 
 // yamlString is s as a YAML string, quoted: JSON's quoting, which YAML reads.
 func yamlString(s string) string { b, _ := json.Marshal(s); return string(b) }

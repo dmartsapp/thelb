@@ -11,6 +11,7 @@ import (
 
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/cluster"
+	"github.com/dmartsapp/thelb/internal/join"
 	"github.com/dmartsapp/thelb/internal/version"
 	"github.com/dmartsapp/thelb/internal/wire"
 	"github.com/hashicorp/raft"
@@ -135,6 +136,16 @@ func (s *session) leave(name, raftID string) error {
 	return nil
 }
 
+// reported is the version a member reports, as status shows it: "?" for one
+// that is not a version - a member's words reach the terminal of whoever runs
+// status.
+func reported(v string) string {
+	if !join.VersionOK(v) {
+		return "?"
+	}
+	return v
+}
+
 // serveCheckIns records a director's check-ins, while this director leads, and
 // promotes a non-voter to voter once it has caught up with its admission.
 func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.Request) {
@@ -155,7 +166,7 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.
 			return
 		}
 		s.mu.Lock()
-		s.checkIns[name] = checkIn{Name: name, RaftID: req.RaftID, At: time.Now(), Applied: req.Applied, Version: req.Version}
+		s.checkIns[name] = checkIn{Name: name, RaftID: req.RaftID, At: time.Now(), Applied: req.Applied, Version: reported(req.Version)}
 		p := s.plane
 		s.mu.Unlock()
 		if req.Applied >= n.AdmitIndex {

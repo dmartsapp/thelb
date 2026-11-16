@@ -215,7 +215,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 		return err
 	}
 	b.claim = cluster.Claim{Name: cfg.Name, Role: "backend", Address: addr.Prefix.Addr().String(), MAC: addr.MAC,
-		Fingerprint: fingerprint.Compute(in), Hostname: in.Hostname, Version: version.Version}
+		Fingerprint: fingerprint.Compute(in), Hostname: join.Hostname(in.Hostname), Version: version.Version}
 	exists, err := secret.Exists(cfg.SecretFile)
 	if err != nil {
 		return err
@@ -649,8 +649,9 @@ func (b *agent) obey(as []api.Assignment) {
 	var clamps []nft.Clamp
 	tunnel := false
 	for _, a := range as {
-		v, err := netip.ParseAddr(a.VIP)
-		if err != nil {
+		v, ok := orderOK(a)
+		if !ok {
+			b.log.Warn("an order the leader sent is not one: skipped", "service", a.Service, "vip", a.VIP, "proto", a.Proto, "port", a.Port, "app_port", a.AppPort)
 			continue
 		}
 		if !slices.Contains(vips, v) {
@@ -861,6 +862,24 @@ func (b *agent) Generate(string) (string, error) {
 	return "", errors.New("thelb generate commands runs on a director")
 }
 
+// orderOK is an assignment's VIP, and whether the assignment is one a backend
+// can serve: a VIP that can be a host's address - not unspecified, multicast
+// or broadcast - a protocol theLB serves, ports in range. The leader sends
+// only those; a backend checks before it plumbs anything with them.
+func orderOK(a api.Assignment) (netip.Addr, bool) {
+	v, err := netip.ParseAddr(a.VIP)
+	if v = v.Unmap(); err != nil || v.Zone() != "" || v.IsUnspecified() || v.IsMulticast() || v == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
+		return netip.Addr{}, false
+	}
+	switch {
+	case a.Proto != "tcp" && a.Proto != "udp" && a.Proto != "sctp":
+		return netip.Addr{}, false
+	case a.Port < 1 || a.Port > 65535 || a.AppPort < 0 || a.AppPort > 65535:
+		return netip.Addr{}, false
+	}
+	return v, true
+}
+
 // take takes the orders' offers: what the cluster holds for this backend. The
 // first orders of a membership also hand back what the cluster kept from
 // before this backend started; then whatever the backend offers and the
@@ -870,6 +889,9 @@ func (b *agent) take(ctx context.Context, m *membership, offers []cluster.Offer)
 	b.mu.Lock()
 	rec := map[string]cluster.Offer{}
 	for _, o := range offers {
+		if _, err := check.Parse(o.Check, o.Proto); err != nil || !cluster.OfferNameOK(o.Name) || o.Port < 1 || o.Port > 65535 {
+			continue // the leader checks offers before it records them: not one of those
+		}
 		rec[o.Name] = o
 	}
 	b.recorded = rec

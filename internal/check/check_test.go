@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +72,18 @@ func TestRiseAndFall(t *testing.T) {
 	s.Observe(fail)
 	if !s.Observe(fail) || s.Healthy || s.Word() != "fail" {
 		t.Error("still healthy after three failures in a row")
+	}
+}
+
+func TestAnHTTPCheckPathIsPrintableASCII(t *testing.T) {
+	for _, ok := range []string{"http:/", "http:/healthz", "http:/a?b=c&d=%20", "http:/~x/@y"} {
+		if _, err := Parse(ok, "tcp"); err != nil {
+			t.Errorf("Parse(%q): %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"http:healthz", "http:/a b", "http:/a\rb", "http:/\x1b[2J", "http:/é", "http:/" + strings.Repeat("a", 512)} {
+		if _, err := Parse(bad, "tcp"); err == nil {
+			t.Errorf("Parse(%q): accepted", bad)
+		}
 	}
 }

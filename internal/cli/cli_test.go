@@ -76,9 +76,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b", "--cluster", "Prod"},
 		{"director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b", "--name", "LB_1"},
 		{"status", "secrets"},
-		{"generate"},
 		{"generate", "password"},
-		{"admin"},
 		{"admin", "secret", "show"},
 		{"admin", "secret", "show", "--role", "root"},
 		{"admin", "approve"},
@@ -506,7 +504,6 @@ func TestOfferAsksTheBackend(t *testing.T) {
 		t.Errorf("remove: exit %d, %q, %v", code, errOut, offerCalls)
 	}
 	for _, args := range [][]string{
-		{"offer"},
 		{"offer", "add", "shop"},
 		{"offer", "add", "tcp/8080", "shop"},
 		{"offer", "add", "shop", "web=tcp/8080"},
@@ -565,5 +562,114 @@ func TestDirectorKubeFlags(t *testing.T) {
 	}
 	if _, err := directorConfig(context.Background(), "director", []string{"--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d", "--backend-secret-file", "/etc/thelb/b", "--bootstrap-wait", "40s"}); err == nil || !strings.Contains(err.Error(), "give --bootstrap too") {
 		t.Fatalf("--bootstrap-wait without --bootstrap: %v", err)
+	}
+}
+
+// TestArgumentsAreCheckedFirst: no command reads an argument with a control
+// character in it - it could add a line to a unit, a script or a log - and
+// interface names are interface names.
+func TestArgumentsAreCheckedFirst(t *testing.T) {
+	for _, args := range [][]string{
+		{"admin", "service", "add", "web\nthelb admin remove lb-1", "--pool", "main", "--proto", "tcp", "--port", "80"},
+		{"generate", "systemd", "director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d\nExecStartPre=/bin/sh -c id", "--backend-secret-file", "/etc/thelb/b"},
+		{"status", "\x1b[2J"},
+		{"admin", "approve", "web\u202e1"},
+	} {
+		code, out, errOut := as(t, 0, args...)
+		if code != 2 || out != "" || !strings.Contains(errOut, "control character") {
+			t.Errorf("%q: exit %d, %q %q", args, code, out, errOut)
+		}
+		if strings.ContainsAny(errOut, "\x1b\u202e") || strings.Count(errOut, "\n") != 2 {
+			t.Errorf("%q: the error shows the argument as it is: %q", args, errOut)
+		}
+	}
+	for _, args := range [][]string{
+		{"generate", "systemd", "director", "--vip", "10.0.0.10", "--port", "7443", "--secret-file", "/etc/thelb/d", "--backend-secret-file", "/etc/thelb/b", "--interface", "eth0;id"},
+		{"admin", "pool", "add", "main", "--vip", "10.0.0.20/24", "--vippool-count", "4", "--interface", "../eth0"},
+	} {
+		if code, _, errOut := as(t, 0, args...); code != 2 || !strings.Contains(errOut, "not an interface's name") {
+			t.Errorf("%q: exit %d, %q", args, code, errOut)
+		}
+	}
+}
+
+func TestSystemdPathQuotesOnlyWhatReadWritePathsReads(t *testing.T) {
+	for in, want := range map[string]string{
+		"/etc/thelb":     "/etc/thelb",
+		"/etc/the lb":    `"/etc/the lb"`,
+		"/etc/100%":      "/etc/100%%",
+		"/etc/$HOME":     "/etc/$HOME",
+		`/etc/a"b`:       `"/etc/a\"b"`,
+		`/etc/back\path`: `"/etc/back\\path"`,
+	} {
+		if got := systemdPath(in); got != want {
+			t.Errorf("systemdPath(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// TestTheHelpIsATree: thelb --help lists every command; a command's page
+// lists its subcommands, each with a page; each page names every option its
+// command reads - so that the help and the code do not drift apart.
+func TestTheHelpIsATree(t *testing.T) {
+	for _, cmd := range commands() {
+		if !strings.Contains(helpText, "\n  "+cmd+" ") {
+			t.Errorf("thelb --help lacks %s", cmd)
+		}
+	}
+	for page, h := range helpPages {
+		if !strings.HasPrefix(h, "Usage: thelb "+page) {
+			t.Errorf("the page %q does not begin with its usage: %.60q", page, h)
+		}
+		if !strings.HasSuffix(h, "\n") || strings.Contains(h, "\t") {
+			t.Errorf("the page %q: tabs, or no final newline", page)
+		}
+		for _, line := range strings.Split(h, "\n") {
+			if len([]rune(line)) > 100 {
+				t.Errorf("the page %q has a line of %d characters: %q", page, len([]rune(line)), line)
+			}
+		}
+	}
+	for group := range helpGroups {
+		for _, line := range strings.Split(strings.SplitN(helpPages[group], "Subcommands:\n", 2)[1], "\n") {
+			if !strings.HasPrefix(line, "  ") {
+				break
+			}
+			if sub := group + " " + strings.Fields(line)[0]; helpPages[sub] == "" {
+				t.Errorf("%s is listed, and has no page", sub)
+			}
+		}
+	}
+	for page, flags := range map[string][]string{
+		"director":             {"--vip", "--port", "--secret-file", "--backend-secret-file", "--bootstrap", "--bootstrap-wait", "--cluster", "--name", "--interface", "--metrics", "--kubeconfig", "--debug"},
+		"backend":              {"--join", "--secret-file", "--offer", "--name", "--interface", "--metrics"},
+		"status":               {"--json", "--watch", "--role"},
+		"doctor":               {"--role", "--vip", "--port", "--json"},
+		"admin approve":        {"--match", "--yes"},
+		"admin pool add":       {"--vip", "--vippool-count", "--interface", "--default"},
+		"admin service add":    {"--proto", "--port", "--pool", "--vip", "--scheduler", "--method"},
+		"admin assign":         {"--weight"},
+		"admin secret":         {"--role"},
+		"generate k8s":         {"--from-kubeconfig", "--from-context", "--yes"},
+		"generate k8s service": {"--namespace", "--port", "--selector", "--policy", "--pool", "--ip", "--shared-vip"},
+	} {
+		for _, f := range flags {
+			if !strings.Contains(helpPages[page], f+" ") && !strings.Contains(helpPages[page], f+"\n") {
+				t.Errorf("the page %q lacks %s", page, f)
+			}
+		}
+	}
+	// Bare, a command that needs a subcommand shows its page - for anyone.
+	for _, args := range [][]string{{"admin"}, {"admin", "pool"}, {"offer"}, {"generate"}} {
+		if code, out, _ := as(t, 1000, args...); code != 0 || out != helpPages[strings.Join(args, " ")] {
+			t.Errorf("%v: exit %d, %.40q", args, code, out)
+		}
+	}
+	// A mistake points at the page of what was typed.
+	if code, _, errOut := as(t, 0, "admin", "pool", "add", "main", "--vip", "nonsense", "--vippool-count", "3"); code != 2 || !strings.Contains(errOut, "Run 'thelb admin pool add --help' for usage.") {
+		t.Errorf("exit %d, %q", code, errOut)
+	}
+	if code, _, _ := as(t, 1000, "help", "nonsense"); code != 2 {
+		t.Errorf("help nonsense: exit %d", code)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
+	"github.com/dmartsapp/thelb/internal/join"
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
@@ -279,7 +280,7 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 	}
 	n.claim = cluster.Claim{
 		Name: cfg.Name, Role: "director", Address: addr.Prefix.Addr().String(), MAC: addr.MAC,
-		Fingerprint: fingerprint.Compute(in), Hostname: in.Hostname, Version: version.Version,
+		Fingerprint: fingerprint.Compute(in), Hostname: join.Hostname(in.Hostname), Version: version.Version,
 	}
 	if n.net, err = d.Network(addr); err != nil {
 		return err

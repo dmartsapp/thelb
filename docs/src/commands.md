@@ -9,7 +9,7 @@ nav: Commands
 
 ## Overview
 
-Every command except `--help` and `--version` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly. `thelb <command> --help` shows a command's flags, and `thelb generate k8s --help` the Kubernetes forms.
+Every command except `--help` and `--version` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly. `thelb --help` lists the commands; `thelb <command> --help` lists a command's subcommands, or its options; `thelb <command> <subcommand> --help` shows one subcommand's usage, options and examples - `thelb admin service add --help`, `thelb generate k8s service --help`. `thelb help <command> [<subcommand>]` shows the same. A command that needs a subcommand - `thelb admin`, `thelb generate`, `thelb offer` - shows its page when given none. Arguments with control characters are refused before any command reads them ([What theLB checks](security.md#what-thelb-checks)).
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>

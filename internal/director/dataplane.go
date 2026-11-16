@@ -827,6 +827,10 @@ func (s *session) liveNow(brief bool) ([]api.CheckIn, []api.Live, []api.Own) {
 	return cis, live, own
 }
 
+// maxBeatItems is the most VIPs, and the most checks, one heartbeat may list:
+// far more than a backend serves.
+const maxBeatItems = 4096
+
 // serveBackend takes a backend's heartbeats, while this director leads, and
 // answers each with what the backend is to serve, and the offers the cluster
 // holds for it.
@@ -870,7 +874,12 @@ func (s *session) serveBackend(c *tls.Conn, w *wire.Conn, name string, req api.R
 		}
 		now := time.Now()
 		s.mu.Lock()
-		s.checkIns[name] = checkIn{Name: name, RaftID: b.Member, At: now, Version: b.Version}
+		if len(b.Holding) > maxBeatItems || len(b.Checks) > maxBeatItems {
+			s.mu.Unlock()
+			_ = w.Send(api.Response{V: wire.Version, Error: fmt.Sprintf("a heartbeat holds at most %d VIPs and %d checks", maxBeatItems, maxBeatItems)})
+			return
+		}
+		s.checkIns[name] = checkIn{Name: name, RaftID: b.Member, At: now, Version: reported(b.Version)}
 		holding := make(map[string]bool, len(b.Holding))
 		for _, v := range b.Holding {
 			holding[v] = true

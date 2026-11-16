@@ -14,6 +14,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/doctor"
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // generateSystemd prints a systemd unit that runs a role with the flags given,
@@ -57,6 +58,9 @@ func generateSystemd(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if b, err := filepath.EvalSymlinks(bin); err == nil {
 		bin = b
+	}
+	if err := safe.Arg(bin); err != nil {
+		return fmt.Errorf("thelb %s: this binary's path %v: a unit cannot hold it - move the binary to /usr/local/bin", cmd, err)
 	}
 	_, _ = fmt.Fprint(stdout, systemdUnit(role, bin, flags, paths, writable, restart))
 	return nil
@@ -118,7 +122,7 @@ func systemdUnit(role, bin string, flags, paths, writable []string, restart stri
 	w("NoNewPrivileges=yes")
 	w("ProtectSystem=full")
 	for _, d := range writable {
-		w("ReadWritePaths=-%s", systemdArg(d))
+		w("ReadWritePaths=-%s", systemdPath(d))
 	}
 	if under("/home/", "/root/", "/run/user/") {
 		w("# Read-only, not hidden: a file it needs is in a home directory.")
@@ -154,6 +158,17 @@ func systemdArg(a string) string {
 		return a
 	}
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(a) + `"`
+}
+
+// systemdPath is a path as ReadWritePaths= reads it: specifiers (%) doubled,
+// quoted where it has spaces, quotes or backslashes. No variables there: a "$"
+// stays a "$".
+func systemdPath(p string) string {
+	p = strings.ReplaceAll(p, "%", "%%")
+	if p != "" && !strings.ContainsAny(p, " \t\"'\\") {
+		return p
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(p) + `"`
 }
 
 // Kernel parameters and modules, by role: what theLB sets and loads while it

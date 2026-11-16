@@ -13,7 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // MinMinor is the oldest Kubernetes theLB serves: 1.35.
@@ -81,7 +82,11 @@ func (c *Client) token() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("the token file: %w", err)
 		}
-		return strings.TrimSpace(string(b)), nil
+		t := strings.TrimSpace(string(b))
+		if p := TokenProblem(t); p != "" {
+			return "", fmt.Errorf("the token file %s: %s", c.cfg.TokenFile, p)
+		}
+		return t, nil
 	}
 	return c.cfg.Token, nil
 }
@@ -139,14 +144,7 @@ func apiError(code int, b []byte) error {
 
 // printable is what the API server says, fit for a log line or a terminal:
 // each control character - a newline, a terminal's escape - a "?".
-func printable(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return '?'
-		}
-		return r
-	}, s)
-}
+func printable(s string) string { return safe.Text(s) }
 
 // do makes a request and decodes its answer into out, unless out is nil.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, in, out any, contentType string) error {

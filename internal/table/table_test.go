@@ -1,6 +1,9 @@
 package table
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRenderLooksLikePsql(t *testing.T) {
 	got := Render([]string{"service", "vip", "port", "weight"}, [][]string{
@@ -31,5 +34,12 @@ func TestRenderPadsShortRows(t *testing.T) {
 	want := " a    | b\n------+---\n only |\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCellsCannotReachTheTerminal(t *testing.T) {
+	out := Render([]string{"node", "version"}, [][]string{{"web\x1b]0;owned\x07", "0.1\n0"}})
+	if strings.ContainsAny(out, "\x1b\x07") || strings.Count(out, "\n") != 3 {
+		t.Fatalf("%q", out)
 	}
 }

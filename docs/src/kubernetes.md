@@ -415,7 +415,7 @@ The Service gets its VIP; n2 loses its pod - its health port says 503 - and gets
 |---|---|
 | `dmarts.app/thelb-pool: <pool>` | takes the VIP from that pool, not the default. A dual-stack Service names one pool for each family, separated by commas. |
 | `dmarts.app/thelb-ip: <address>` | asks for that address of the pool. One for each family, separated by commas. |
-| `dmarts.app/thelb-shared-vip: <key>` | Services with the same key share one VIP, as long as their ports are different. |
+| `dmarts.app/thelb-shared-vip: <key>` | Services with the same key share one VIP, as long as their ports are different. The key is like a label's value: up to 63 letters, digits, dots, hyphens and underscores. |
 | `service.cilium.io/node-selector: "!dmarts.app/thelb-director"` | with Cilium and directors on nodes: Cilium leaves the Service to those nodes. |
 
 A dual-stack Service (`spec.ipFamilies`) gets one VIP for each family, from that family's pool.

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/dmartsapp/thelb/internal/safe"
 )
 
 // Level is how a line reads at a glance.
@@ -90,7 +92,7 @@ func (l *Logger) log(level Level, msg string, kv []any) {
 
 // Line formats one log line.
 func Line(t time.Time, module string, level Level, msg string, kv ...any) string {
-	s := t.UTC().Format("2006-01-02T15:04:05.000Z07:00") + " [" + module + "] " + string(level) + " " + msg
+	s := t.UTC().Format("2006-01-02T15:04:05.000Z07:00") + " [" + safe.Text(module) + "] " + string(level) + " " + safe.Text(msg)
 	if f := Fields(kv...); f != "" {
 		s += " " + f
 	}
@@ -102,7 +104,7 @@ func Line(t time.Time, module string, level Level, msg string, kv ...any) string
 func Fields(kv ...any) string {
 	parts := make([]string, 0, (len(kv)+1)/2)
 	for i := 0; i < len(kv); i += 2 {
-		key := fmt.Sprint(kv[i])
+		key := safe.Text(fmt.Sprint(kv[i]))
 		if i+1 >= len(kv) {
 			parts = append(parts, key+"=!MISSING")
 			break
@@ -130,7 +132,9 @@ func value(v any) string {
 	default:
 		s = fmt.Sprint(x)
 	}
-	if s == "" || strings.ContainsAny(s, " \t\n\"=") {
+	if s == "" || strings.ContainsAny(s, " \"=") || safe.Text(s) != s {
+		// Go's quoting escapes every character that is not printable: a value
+		// can neither end the line nor reach the terminal as an escape.
 		return strconv.Quote(s)
 	}
 	return s
