@@ -93,9 +93,11 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 		return nil
 	case "service":
 		return generateK8sService(args[1:], stdout)
+	case "node":
+		return generateK8sNode(args[1:], stdout)
 	case "director":
 	default:
-		return usagef("thelb generate k8s [director <the flags it runs with> | kubeconfig | service <name> [flags]]")
+		return usagef("thelb generate k8s [kubeconfig | director <the flags it runs with> | node <name> | service <name> [flags]]")
 	}
 	flags := args[1:]
 	cmd := "generate k8s director"
@@ -129,8 +131,8 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 	metricsAt := netip.MustParseAddrPort(cfg.Metrics)
 	host, port := metricsAt.Addr().String(), metricsAt.Port()
 	ds := fmt.Sprintf(`---
-# The directors, on the nodes labelled for them:
-#   kubectl label node <node> dmarts.app/thelb-director=true
+# The directors, on the nodes labelled for them. thelb generate k8s node <node>
+# prints the script that makes a node one: its label, and the rest.
 # Its secret files come from the Secret thelb-secrets - the cluster's two
 # secret files, copied from a director:
 #   kubectl -n thelb create secret generic thelb-secrets \

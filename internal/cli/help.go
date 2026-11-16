@@ -12,18 +12,101 @@ Commands:
   doctor     check this node for theLB, and say what to do
   offer      on a backend: offer an application to the cluster, or withdraw it
   generate   print a file's content, and write nothing: secret, commands,
-             systemd, sysctl, modules
+             systemd, sysctl, modules, k8s
   admin      change the cluster, on a director: approve, refuse, remove,
              pool, service, assign, unassign, lease, secret show
 
 Every command runs only as root (effective user ID 0); this help and --version
 run for anyone.
 
-  thelb <command> --help   a command's flags
-  thelb --version          the version, the commit, Go and the platform
+  thelb <command> --help        a command's flags; or thelb help <command>
+  thelb generate k8s --help     the Kubernetes manifests, scripts and Services
+  thelb --version               the version, the commit, Go and the platform
 
 The documentation: https://dmartsapp.github.io/thelb/
 `
+
+// subcommandHelps are the help of a subcommand with a page of its own, by its
+// words: thelb generate k8s --help, thelb help generate k8s.
+var subcommandHelps = map[string]string{
+	"generate k8s": `Usage:
+  thelb generate k8s
+  thelb generate k8s kubeconfig
+  thelb generate k8s director <the flags thelb director runs with>
+  thelb generate k8s node <name>
+  thelb generate k8s service <name> [--namespace <ns>] [--port <port> ...] [--selector <key=value>]
+                     [--policy Local|Cluster] [--pool <pool>] [--ip <address>] [--shared-vip <key>]
+
+Prints what theLB needs in a Kubernetes cluster, and writes nothing - to disk or
+to the cluster: apply it with kubectl, or run it. A director serves the
+cluster's Services of class dmarts.app/thelb with --kubeconfig (thelb director
+--help), and sends their traffic to the nodes that run their pods. Those nodes
+need nothing: no label, and no thelb backend - the directors read them from the
+API, and check them at the Service's health port. Only a node that runs a
+director is prepared, with node.
+
+  (alone)      the directors' identity and permissions: the namespace thelb, the
+               ServiceAccount thelb-director, a ClusterRole - reading Services,
+               Nodes and EndpointSlices, writing a Service's status and events,
+               never a Service itself - its binding, and the Secret
+               thelb-director-token, the token of directors outside the cluster:
+               thelb generate k8s > thelb-k8s.yaml
+               kubectl apply -f thelb-k8s.yaml
+  kubeconfig   a script to run where kubectl reaches the cluster, once the
+               identity is applied: it prints the kubeconfig of directors outside
+               the cluster - kubectl's API server, and thelb-director's token:
+               thelb generate k8s kubeconfig > thelb-kubeconfig.sh
+               sh thelb-kubeconfig.sh > thelb.kubeconfig
+               then on each director, readable by root only, and with
+               --kubeconfig /etc/thelb/kubeconfig in its flags:
+               sudo install -D -m 600 thelb.kubeconfig /etc/thelb/kubeconfig
+  director     the identity, and a DaemonSet that runs a director on each node
+               labelled dmarts.app/thelb-director, with the flags given - checked
+               as thelb director checks them, and these too:
+                 --kubeconfig in-cluster    the pod's own ServiceAccount
+                 --metrics <address:port>   the pod's readiness probe asks /readyz
+                 no --name                  each director is named after its node
+                 two secret files of different names: the two keys of the Secret
+                 thelb-secrets, which you create from a director's files
+                 --bootstrap only with --bootstrap-wait 31s or more
+               thelb generate k8s director --vip 10.0.0.10 --port 7443 \
+                 --secret-file /etc/thelb/director.secret \
+                 --backend-secret-file /etc/thelb/backend.secret \
+                 --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml
+  node         a script to run where kubectl reaches the cluster, before a
+               director runs on the node - in the DaemonSet, or under systemd:
+               a worker tainted dmarts.app/thelb-director and drained, so that
+               nothing else runs there (a control-plane node is left as it is);
+               with kube-proxy, kube-proxy's DaemonSet kept off the node, which
+               is then rebooted; the label dmarts.app/thelb-director=true; with
+               Cilium, theLB's Services touched, so that Cilium on the node
+               leaves them to theLB. Its last lines say how to give it back:
+               thelb generate k8s node cp1 > thelb-node.sh
+               sh thelb-node.sh
+  service      a Service of type LoadBalancer and class dmarts.app/thelb, with
+               the annotation that keeps Cilium off directors' nodes:
+               thelb generate k8s service web > web-service.yaml
+               kubectl apply -f web-service.yaml
+
+Flags of service:
+  --namespace <ns>         its namespace (default default)
+  --port <port>[/tcp|udp|sctp][:<pods' port>]
+                           a port, as often as needed - 80, 53/udp, 80:8080
+                           (port 80 to the pods' 8080), 443/tcp:8443 (default 80)
+  --selector <key=value>   the pods it sends to (default app=<name>)
+  --policy Local|Cluster   its externalTrafficPolicy (default Local: only nodes
+                           with a ready pod get traffic, and the client's
+                           address reaches the pod; Cluster: every ready node,
+                           and the client's address is lost)
+  --pool <pool>            its VIP from this theLB pool, not the default - the
+                           annotation dmarts.app/thelb-pool
+  --ip <address>           this address of the pool - dmarts.app/thelb-ip
+  --shared-vip <key>       one VIP for the Services with this key, on different
+                           ports - dmarts.app/thelb-shared-vip
+
+The guide: https://dmartsapp.github.io/thelb/docs/kubernetes.html
+`,
+}
 
 var commandHelps = map[string]string{
 	"director": `Usage:
@@ -164,11 +247,11 @@ work.
   thelb generate systemd director|backend <the flags it runs with>
   thelb generate sysctl director|backend
   thelb generate modules director|backend
-  thelb generate k8s [director <the flags it runs with>]
+  thelb generate k8s
   thelb generate k8s kubeconfig
-  thelb generate k8s service <name> [--namespace <ns>] [--port <port>[/tcp|udp|sctp][:<pods' port>]]...
-                     [--selector <key=value>] [--policy Local|Cluster] [--pool <pool>] [--ip <address>]
-                     [--shared-vip <key>]
+  thelb generate k8s director <the flags it runs with>
+  thelb generate k8s node <name>
+  thelb generate k8s service <name> [flags]
 
 Prints a file's content, and writes nothing.
 
@@ -187,16 +270,13 @@ Prints a file's content, and writes nothing.
   sysctl      a sysctl.d file with the kernel parameters theLB sets while it
               runs, for them from boot
   modules     a modules-load.d file with the modules it uses
-  k8s         the directors' identity and permissions in a Kubernetes cluster, to
-              apply with kubectl; with director and its flags, also a DaemonSet that
-              runs directors on the nodes labelled dmarts.app/thelb-director:
-              thelb generate k8s director --vip 10.0.0.10 --port 7443 ... \
-                --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml
-              with kubeconfig, a script to run where kubectl works: it prints the
-              kubeconfig of directors outside the cluster, with the token of
-              theLB's ServiceAccount; with service, a Service of theLB's class
-              (default: port 80, the pods labelled app=<name>, policy Local):
-              thelb generate k8s service web > web-service.yaml
+  k8s         what theLB needs in a Kubernetes cluster, to apply with kubectl:
+              the directors' identity and permissions; with kubeconfig, a script
+              that prints the kubeconfig of directors outside the cluster; with
+              director, a DaemonSet that runs directors on labelled nodes; with
+              node, a script that makes a node a director's node; with service,
+              a Service of theLB's class. Their flags and examples:
+              thelb generate k8s --help
 `,
 	"admin": `Usage:
   thelb admin approve <name> ...
@@ -205,7 +285,8 @@ Prints a file's content, and writes nothing.
   thelb admin remove <name>
   thelb admin pool add <name> --vip <first address/prefix> --vippool-count <n> [--interface <name>] [--default]
   thelb admin pool remove <name>
-  thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr] [--method direct|tunnel]
+  thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>]
+                          [--scheduler wrr|rr|wlc|lc|sh|mh] [--method direct|tunnel]
   thelb admin service remove <name>
   thelb admin assign <service> <node>:<offer> ... [--weight <node>=<n>,...]
   thelb admin unassign <service> <node>
@@ -225,12 +306,17 @@ leader, under this director's identity.
                   asks again
   pool add        registers addresses for service VIPs: --vip 10.10.1.20/24
                   --vippool-count 10 is 10.10.1.20 to 10.10.1.29, on the
-                  director's interface in 10.10.1.0/24
-  service add     creates a service: the lowest free address of its pool (or
-                  --vip), probed on the network first, a protocol and a port;
+                  director's interface in 10.10.1.0/24 - or --interface; with
+                  --default, the pool a service, or a Kubernetes Service, takes
+                  its VIP from when it names none: one for each address family
+  pool remove     removes a pool that no service or Kubernetes Service uses
+  service add     creates a service: the lowest free address of its pool -
+                  --pool, or the default pool - or --vip, probed on the network
+                  first, a protocol and a port;
                   --scheduler wrr (the default), rr, wlc, lc, sh or mh;
                   --method direct (the default: backends on the director's
                   network) or tunnel (IP-in-IP: backends anywhere routed, IPv4)
+  service remove  removes a service: its VIP, its IPVS service, its assignments
   assign          assigns backends' offers to a service - each by the name its
                   backend gave it (web-1:nginx), or its protocol and port
                   (web-1:tcp/8080); thelb status offers lists them - weight 1

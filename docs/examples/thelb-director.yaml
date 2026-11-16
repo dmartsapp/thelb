@@ -51,8 +51,8 @@ metadata:
     kubernetes.io/service-account.name: thelb-director
 type: kubernetes.io/service-account-token
 ---
-# The directors, on the nodes labelled for them:
-#   kubectl label node <node> dmarts.app/thelb-director=true
+# The directors, on the nodes labelled for them. thelb generate k8s node <node>
+# prints the script that makes a node one: its label, and the rest.
 # Its secret files come from the Secret thelb-secrets - the cluster's two
 # secret files, copied from a director:
 #   kubectl -n thelb create secret generic thelb-secrets \
@@ -100,6 +100,9 @@ spec:
             - "10.0.0.10"
             - "--port"
             - "7443"
+            - "--bootstrap"
+            - "--bootstrap-wait"
+            - "31s"
             - "--secret-file"
             - "/etc/thelb/director.secret"
             - "--backend-secret-file"

@@ -98,7 +98,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "-h", "-help", "--help", "help":
 		if len(args) > 1 {
-			return commandHelp(args[1], stdout)
+			return commandHelp(args[1:], stdout)
 		}
 		_, _ = fmt.Fprint(stdout, helpText)
 		return nil
@@ -112,7 +112,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	for _, a := range rest {
 		if a == "-h" || a == "-help" || a == "--help" {
-			return commandHelp(cmd, stdout)
+			return commandHelp(args, stdout)
 		}
 	}
 	if geteuid() != 0 {
@@ -136,10 +136,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func commandHelp(cmd string, stdout io.Writer) error {
-	h, ok := commandHelps[cmd]
+// commandHelp prints the help of the command words name: a subcommand's own
+// page if it has one (generate k8s), or the command's.
+func commandHelp(words []string, stdout io.Writer) error {
+	h, ok := commandHelps[words[0]]
 	if !ok {
-		return usagef("%q is not a theLB command", cmd)
+		return usagef("%q is not a theLB command", words[0])
+	}
+	if len(words) > 1 {
+		if sub, ok := subcommandHelps[words[0]+" "+words[1]]; ok {
+			h = sub
+		}
 	}
 	_, _ = fmt.Fprint(stdout, h)
 	return nil

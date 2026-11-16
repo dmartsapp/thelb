@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kubernetes · theLB</title>
-<meta name="description" content="Run theLB as the load balancer of a Kubernetes cluster - the manifests thelb generate k8s prints, directors outside the cluster or on its nodes, Services of class dmarts.app/thelb, and how nodes are chosen.">
+<meta name="description" content="Run theLB as the load balancer of a Kubernetes cluster - one or several directors, outside the cluster or on its nodes, step by step with what thelb generate k8s prints; Services of class dmarts.app/thelb, and how nodes are chosen.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/style.css">
@@ -38,19 +38,22 @@
 <p><strong>Nothing runs on the nodes</strong>: no agent, no approval. theLB reads the cluster's nodes, Services and endpoints from the Kubernetes API, and checks each node at the Service's health port. A new node gets traffic as soon as it runs a ready pod.</p>
 <p>What you need:</p>
 <ul><li><strong>Kubernetes 1.35</strong> or later.</li><li><strong>Directors on the nodes' network</strong>: direct routing sends packets to a node's MAC address. IP-in-IP is not used for Kubernetes.</li><li><strong>Cilium</strong> as kube-proxy replacement, or <strong>kube-proxy</strong>. kube-proxy in IPVS mode needs <code>strictARP: true</code> - see <a href="#with-kube-proxy">With kube-proxy</a>.</li></ul>
-<h2 id="where-the-directors-run">Where the directors run<a class="anchor" href="#where-the-directors-run" aria-label="Link to this section">#</a></h2>
-<p>You choose. A cluster can mix them.</p>
-<div class="tablewrap"><table><thead><tr><th>Directors</th><th>How</th><th>What it takes</th></tr></thead><tbody><tr><td>On machines outside the cluster</td><td>under systemd</td><td>a kubeconfig - <a href="#2a-directors-outside-the-cluster">step 2a</a></td></tr><tr><td>On nodes of the cluster</td><td>a DaemonSet, or systemd on the node</td><td>the node labelled, and kept for theLB - <a href="#2b-directors-on-nodes-as-a-daemonset">step 2b</a></td></tr></tbody></table></div>
-<p><strong>Why a director's node is special.</strong> The node's own proxy takes every packet for a Service's VIP - on every node, before theLB's IPVS sees it. On a director's node, it must leave theLB's Services alone:</p>
-<ul><li><strong>With Cilium</strong>, the node is labelled <code>dmarts.app/thelb-director</code>, and each theLB Service has the annotation <code>service.cilium.io/node-selector: "!dmarts.app/thelb-director"</code>. Cilium then skips those Services on the labelled nodes only. <code>thelb generate k8s service</code> writes the annotation for you.</li><li><strong>With kube-proxy</strong>, kube-proxy must not run on the director's node at all - see <a href="#with-kube-proxy">With kube-proxy</a>.</li></ul>
+<h2 id="what-runs-where">What runs where<a class="anchor" href="#what-runs-where" aria-label="Link to this section">#</a></h2>
+<p>Every setup has the same parts:</p>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>What it is</th><th>What theLB puts there</th></tr></thead><tbody><tr><td><strong>A director</strong></td><td>a machine or a node that runs <code>thelb director</code></td><td>under systemd: the two secret files, the kubeconfig and the unit, in <code>/etc/thelb</code> and <code>/etc/systemd/system</code>. In a DaemonSet: nothing on the node - the pod reads the secret files from a Secret</td></tr><tr><td><strong>The kubectl machine</strong></td><td>any machine where <code>kubectl</code> reaches the cluster as its administrator - your laptop, a control-plane node</td><td>the files <code>thelb generate</code> prints, to apply or run</td></tr><tr><td><strong>The nodes</strong></td><td>the cluster's nodes, which receive the traffic</td><td><strong>nothing</strong>: no theLB, no backend, no label. Only a node that runs a director is prepared for it</td></tr><tr><td><strong>A client</strong></td><td>any machine that connects to a Service's VIP</td><td>nothing</td></tr></tbody></table></div>
+<p><code>thelb generate</code> prints a file and writes nothing. Run it as root on any Linux machine with theLB - a director will do - and copy what it prints to where it is used.</p>
+<h2 id="choose-a-setup">Choose a setup<a class="anchor" href="#choose-a-setup" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Setup</th><th>Directors</th><th>If a director fails</th><th>On the nodes</th></tr></thead><tbody><tr><td><a href="#1-one-director-outside-the-cluster">1. One director outside the cluster</a></td><td>one machine, under systemd</td><td>the VIPs are gone until it is back</td><td>nothing</td></tr><tr><td><a href="#2-several-directors-outside-the-cluster">2. Several directors outside the cluster</a></td><td>two or three machines, under systemd</td><td>another takes over in seconds</td><td>nothing</td></tr><tr><td><a href="#3-one-director-on-a-node">3. One director on a node</a></td><td>one node: under systemd, or a DaemonSet</td><td>the VIPs are gone until it is back</td><td>the director's node is kept for theLB</td></tr><tr><td><a href="#4-several-directors-on-nodes">4. Several directors on nodes</a></td><td>two or three nodes: a DaemonSet, or systemd</td><td>another takes over in seconds</td><td>the directors' nodes are kept for theLB</td></tr></tbody></table></div>
+<p>Directors outside the cluster are the simplest: the nodes stay as they are. <strong>Why a director's node is special:</strong> the node's own proxy takes every packet for a Service's VIP - on every node, before theLB's IPVS sees it. On a director's node, it must leave theLB's Services alone:</p>
+<ul><li><strong>With Cilium</strong>, the node is labelled <code>dmarts.app/thelb-director</code>, and each theLB Service has the annotation <code>service.cilium.io/node-selector: "!dmarts.app/thelb-director"</code>. Cilium then skips those Services on the labelled nodes only. <code>thelb generate k8s service</code> writes the annotation; <code>thelb generate k8s node</code> prepares the node.</li><li><strong>With kube-proxy</strong>, kube-proxy must not run on the director's node at all - see <a href="#with-kube-proxy">With kube-proxy</a>.</li></ul>
 <p>On a director's node, pods cannot reach theLB's Services by their cluster IP either. So keep these nodes for theLB: a control-plane node is a good choice, because it runs no workloads already.</p>
 <div class="callout callout-note"><p class="callout-title">A director checks its node</p><p>A director that finds its own address on a node of the cluster refuses to start unless the node has the label <code>dmarts.app/thelb-director</code>.</p></div>
-<h2 id="step-by-step">Step by step<a class="anchor" href="#step-by-step" aria-label="Link to this section">#</a></h2>
-<p>The example: directors <code>lb1</code> (outside the cluster) and <code>cp1</code> (the control-plane node), control VIP <code>10.0.0.10:7443</code>, Service VIPs from <code>10.0.0.50</code>. Every file below is what <code>thelb generate k8s</code> prints - copy it, or download it.</p>
-<h3 id="1-the-directors-identity">1. The directors' identity<a class="anchor" href="#1-the-directors-identity" aria-label="Link to this section">#</a></h3>
-<p>On a director, print the manifests. Apply them wherever <code>kubectl</code> works:</p>
+<p>The examples use the control VIP <code>10.0.0.10:7443</code>, the network <code>10.0.0.0/24</code>, a pool from <code>10.0.0.50</code>, the machines <code>lb1</code> to <code>lb3</code>, the control-plane nodes <code>cp1</code> to <code>cp3</code>, and a Service <code>web</code> on port 80. Every file below is what <code>thelb generate k8s</code> prints - copy it, or download it.</p>
+<h2 id="1-one-director-outside-the-cluster">1. One director outside the cluster<a class="anchor" href="#1-one-director-outside-the-cluster" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>Files</th><th>Runs</th></tr></thead><tbody><tr><td><code>lb1</code></td><td><code>/etc/thelb/director.secret</code> and <code>backend.secret</code> (its first start writes them), <code>/etc/thelb/kubeconfig</code>, <code>/etc/systemd/system/thelb-director.service</code></td><td><code>thelb director</code></td></tr><tr><td>the kubectl machine</td><td><code>thelb-k8s.yaml</code>, <code>thelb-kubeconfig.sh</code>, <code>web-service.yaml</code></td><td><code>kubectl</code></td></tr><tr><td>the nodes</td><td>nothing</td><td>-</td></tr></tbody></table></div>
+<p><strong>Step 1 - on <code>lb1</code>:</strong> print the directors' identity, and the script that builds their kubeconfig:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s &gt; thelb-k8s.yaml
-<span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-k8s.yaml</code></pre></div>
+<span class="tok-cmd">sudo</span> thelb generate k8s kubeconfig &gt; thelb-kubeconfig.sh</code></pre></div>
 <div class="example"><p class="example-caption">A namespace, a ServiceAccount, the permissions - reading, and a Service's status, never a Service itself - and a token for directors outside the cluster.</p><div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-com"># theLB 0.1.0, as `thelb generate k8s` printed it: the directors' identity and</span>
 <span class="tok-com"># permissions in the cluster. Apply it: kubectl apply -f &lt;this file&gt;</span>
 <span class="tok-key">apiVersion</span>: v1
@@ -103,10 +106,6 @@
 <span class="tok-key">  annotations</span>:
     kubernetes.io/service-account.name: thelb-director
 <span class="tok-key">type</span>: kubernetes.io/service-account-token</code></pre></div><p class="example-file"><a href="examples/thelb-k8s.yaml" download>thelb-k8s.yaml</a></p></div>
-<h3 id="2a-directors-outside-the-cluster">2a. Directors outside the cluster<a class="anchor" href="#2a-directors-outside-the-cluster" aria-label="Link to this section">#</a></h3>
-<p>A director outside the cluster needs a kubeconfig with the token from step 1. theLB prints a script that builds it - run it where <code>kubectl</code> works:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s kubeconfig &gt; thelb-kubeconfig.sh
-<span class="tok-cmd">sh</span> thelb-kubeconfig.sh &gt; thelb.kubeconfig</code></pre></div>
 <div class="example"><p class="example-caption">The script: it reads the API server's address and the token, and prints the kubeconfig.</p><div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-com">#!/bin/sh</span>
 <span class="tok-com"># theLB 0.1.0, as `thelb generate k8s kubeconfig` printed it. Run it where kubectl</span>
 <span class="tok-com"># reaches the cluster, after applying what `thelb generate k8s` prints: it prints</span>
@@ -143,30 +142,171 @@
       user: thelb-director
 <span class="tok-cmd">current-context</span>: thelb
 <span class="tok-cmd">EOF</span></code></pre></div><p class="example-file"><a href="examples/thelb-kubeconfig.sh" download>thelb-kubeconfig.sh</a></p></div>
-<p>Copy <code>thelb.kubeconfig</code> to the director, readable by root only, and add <code>--kubeconfig</code> to its flags:</p>
+<p><strong>Step 2 - on the kubectl machine:</strong> apply the identity, then build the kubeconfig. Copy <code>thelb.kubeconfig</code> to <code>lb1</code>.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-k8s.yaml
+<span class="tok-cmd">sh</span> thelb-kubeconfig.sh &gt; thelb.kubeconfig</code></pre></div>
+<p><strong>Step 3 - on <code>lb1</code>:</strong> install the kubeconfig, readable by root only, and start the director under systemd with <code>--kubeconfig</code>:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> install <span class="tok-flag">-D</span> <span class="tok-flag">-m</span> 600 thelb.kubeconfig /etc/thelb/kubeconfig
 <span class="tok-cmd">sudo</span> thelb generate systemd director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 <span class="tok-flag">--bootstrap</span> \
   <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret \
   <span class="tok-flag">--kubeconfig</span> /etc/thelb/kubeconfig | sudo tee /etc/systemd/system/thelb-director.service
 <span class="tok-cmd">sudo</span> systemctl daemon-reload
+<span class="tok-cmd">sudo</span> systemctl enable <span class="tok-flag">--now</span> thelb-director
+<span class="tok-cmd">sudo</span> thelb status</code></pre></div>
+<p><code>thelb status</code> shows, in the cluster table, <code>kubernetes: 0 Services</code>. If the director does not start, it says why - see <a href="#when-something-is-wrong">When something is wrong</a>.</p>
+<p><strong>Step 4 - on <code>lb1</code>:</strong> a pool for the Services' VIPs, and the Service's port open in the firewall, if one is active:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin pool add k8s <span class="tok-flag">--vip</span> 10.0.0.50/24 <span class="tok-flag">--vippool-count</span> 10 <span class="tok-flag">--default</span>
+<span class="tok-cmd">sudo</span> ufw allow proto tcp from any to 10.0.0.50 port 80 comment <span class="tok-str">'thelb web'</span></code></pre></div>
+<p>Open each Service's port to its VIP only: a rule for every port of the VIP would also open whatever listens on all of the director's addresses.</p>
+<p><strong>Step 5 - a Service:</strong> print it on <code>lb1</code>, apply it on the kubectl machine:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s service web &gt; web-service.yaml
+<span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> web-service.yaml
+<span class="tok-cmd">kubectl</span> get service web</code></pre></div>
+<div class="example"><p class="example-caption"><code>thelb generate k8s service web</code>: port 80, the pods labelled <code>app: web</code>.</p><div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-com"># theLB 0.1.0, as `thelb generate k8s service` printed it: a Service of theLB's</span>
+<span class="tok-com"># class. Apply it: kubectl apply -f &lt;this file&gt;</span>
+<span class="tok-key">apiVersion</span>: v1
+<span class="tok-key">kind</span>: Service
+<span class="tok-key">metadata</span>:
+<span class="tok-key">  name</span>: web
+<span class="tok-key">  namespace</span>: default
+<span class="tok-key">  annotations</span>:
+    <span class="tok-com"># With directors on nodes of the cluster, and Cilium: Cilium leaves this</span>
+    <span class="tok-com"># Service to the directors there. Harmless anywhere else.</span>
+    service.cilium.io/node-selector: <span class="tok-str">"!dmarts.app/thelb-director"</span>
+    <span class="tok-com"># dmarts.app/thelb-pool: &lt;pool&gt;   a pool other than the default</span>
+    <span class="tok-com"># dmarts.app/thelb-ip: &lt;address&gt;   a particular address of the pool</span>
+    <span class="tok-com"># dmarts.app/thelb-shared-vip: &lt;key&gt;   one VIP for the Services that give the same key, their ports apart</span>
+<span class="tok-key">spec</span>:
+<span class="tok-key">  type</span>: LoadBalancer
+<span class="tok-key">  loadBalancerClass</span>: dmarts.app/thelb
+  <span class="tok-com"># Local: only the nodes with a ready pod of the Service get its traffic,</span>
+  <span class="tok-com"># weighted by their pods, and the pods see each client's own address.</span>
+<span class="tok-key">  externalTrafficPolicy</span>: Local
+<span class="tok-key">  selector</span>:
+<span class="tok-key">    app</span>: <span class="tok-str">"web"</span>
+<span class="tok-key">  ports</span>:
+<span class="tok-key">    - name</span>: tcp-80
+<span class="tok-key">      protocol</span>: TCP
+<span class="tok-key">      port</span>: 80
+<span class="tok-key">      targetPort</span>: 80</code></pre></div><p class="example-file"><a href="examples/web-service.yaml" download>web-service.yaml</a></p></div>
+<p><strong>Step 6 - from a client:</strong> <code>curl http://10.0.0.50/</code>. On <code>lb1</code>, <code>sudo thelb status backends</code> shows the nodes serving it - see <a href="#services">Services</a>.</p>
+<h2 id="2-several-directors-outside-the-cluster">2. Several directors outside the cluster<a class="anchor" href="#2-several-directors-outside-the-cluster" aria-label="Link to this section">#</a></h2>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>Files</th><th>Runs</th></tr></thead><tbody><tr><td><code>lb1</code>, <code>lb2</code>, <code>lb3</code></td><td>the same on each: both secret files, copied from <code>lb1</code>; the kubeconfig; the unit</td><td><code>thelb director</code></td></tr><tr><td>the kubectl machine</td><td>as in setup 1</td><td><code>kubectl</code></td></tr><tr><td>the nodes</td><td>nothing</td><td>-</td></tr></tbody></table></div>
+<p><strong>Step 1 - <code>lb1</code> and the kubectl machine:</strong> setup 1, steps 1 to 3. <code>lb1</code> creates the cluster, and writes the secret files.</p>
+<p><strong>Step 2 - on <code>lb2</code> and <code>lb3</code>:</strong> copy <code>/etc/thelb/director.secret</code>, <code>/etc/thelb/backend.secret</code> and <code>thelb.kubeconfig</code> from <code>lb1</code>, and install them readable by root only. One kubeconfig serves every director:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> install <span class="tok-flag">-D</span> <span class="tok-flag">-m</span> 600 director.secret /etc/thelb/director.secret
+<span class="tok-cmd">sudo</span> install <span class="tok-flag">-D</span> <span class="tok-flag">-m</span> 600 backend.secret /etc/thelb/backend.secret
+<span class="tok-cmd">sudo</span> install <span class="tok-flag">-D</span> <span class="tok-flag">-m</span> 600 thelb.kubeconfig /etc/thelb/kubeconfig
+<span class="tok-cmd">rm</span> director.secret backend.secret thelb.kubeconfig</code></pre></div>
+<p><strong>Step 3 - on every director:</strong> open the firewall, if one is active - the control port and connection sync between the directors, and each Service's port, because any director may lead. <code>sudo thelb doctor</code> prints these for the machine it runs on:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> ufw allow from 10.0.0.0/24 to any port 7443 proto tcp comment <span class="tok-str">'thelb control'</span>
+<span class="tok-cmd">sudo</span> ufw allow in on eth0 from 10.0.0.0/24 to 224.0.0.81 port 8848 proto udp comment <span class="tok-str">'thelb connection sync'</span>
+<span class="tok-cmd">sudo</span> ufw allow proto tcp from any to 10.0.0.50 port 80 comment <span class="tok-str">'thelb web'</span></code></pre></div>
+<p><strong>Step 4 - on <code>lb2</code> and <code>lb3</code>:</strong> the same unit as <code>lb1</code>, <code>--kubeconfig</code> included:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate systemd director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 <span class="tok-flag">--bootstrap</span> \
+  <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret \
+  <span class="tok-flag">--kubeconfig</span> /etc/thelb/kubeconfig | sudo tee /etc/systemd/system/thelb-director.service
+<span class="tok-cmd">sudo</span> systemctl daemon-reload
 <span class="tok-cmd">sudo</span> systemctl enable <span class="tok-flag">--now</span> thelb-director</code></pre></div>
-<p>A director under systemd <strong>on a node</strong> of the cluster is set up the same way - and its node is labelled, as in step 2b.</p>
-<h3 id="2b-directors-on-nodes-as-a-daemonset">2b. Directors on nodes, as a DaemonSet<a class="anchor" href="#2b-directors-on-nodes-as-a-daemonset" aria-label="Link to this section">#</a></h3>
-<p>Label each node that runs a director. A node other than a control-plane node is also tainted, so that nothing else runs there:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> label node cp1 dmarts.app/thelb-director=true
-<span class="tok-com"># a worker kept for theLB:</span>
-<span class="tok-com"># kubectl taint node &lt;node&gt; dmarts.app/thelb-director=true:NoSchedule</span></code></pre></div>
-<p>The pods read the cluster's two secret files from a Secret. Copy them from a director (<code>lb1</code> here), then:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb create secret generic thelb-secrets \
-  <span class="tok-flag">--from-file</span>=director.secret=./director.secret \
-  <span class="tok-flag">--from-file</span>=backend.secret=./backend.secret
-<span class="tok-cmd">rm</span> director.secret backend.secret</code></pre></div>
-<p>Print the DaemonSet with the flags the directors run with, and apply it:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 \
+<p><strong>Every director needs <code>--kubeconfig</code></strong>: a leader without it serves no Kubernetes Service.</p>
+<p><strong>Step 5 - on <code>lb1</code>:</strong> approve them:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending
+<span class="tok-cmd">sudo</span> thelb admin approve lb2 lb3</code></pre></div>
+<p><strong>Step 6 - a pool and a Service:</strong> setup 1, steps 4 to 6, once, on any director.</p>
+<p>Three directors are best - see <a href="directors.html#how-many-directors">How many directors?</a>.</p>
+<h2 id="3-one-director-on-a-node">3. One director on a node<a class="anchor" href="#3-one-director-on-a-node" aria-label="Link to this section">#</a></h2>
+<p>The director runs on <code>cp1</code>, a control-plane node: under systemd, with files on the node like a director outside, or as a DaemonSet, with nothing on the node but the pod. Either way, prepare the node first.</p>
+<p><code>thelb generate k8s node cp1</code> prints the script that prepares it. It keeps a worker for theLB (tainted and drained); with kube-proxy, keeps kube-proxy off it; labels it; and with Cilium, touches theLB's Services, so that Cilium on the node takes the label. It finds out by itself which of these the cluster needs.</p>
+<div class="example"><p class="example-caption"><code>thelb generate k8s node cp1</code>. Its last lines say how to give the node back.</p><div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-com">#!/bin/sh</span>
+<span class="tok-com"># theLB 0.1.0, as `thelb generate k8s node cp1` printed it. Run it where kubectl</span>
+<span class="tok-com"># reaches the cluster, before a director runs on the node cp1 - in the</span>
+<span class="tok-com"># DaemonSet, or under systemd: it makes cp1 a director's node.</span>
+<span class="tok-com">#   sh thelb-node.sh</span>
+<span class="tok-com"># A node that only receives traffic needs none of this: no label, and nothing</span>
+<span class="tok-com"># of theLB - the directors read it from the API, and check it themselves.</span>
+<span class="tok-cmd">set</span> <span class="tok-flag">-eu</span>
+<span class="tok-cmd">node</span>=cp1
+<span class="tok-cmd">selector</span>=<span class="tok-str">'!dmarts.app/thelb-director'</span>
+
+<span class="tok-cmd">kubectl</span> get node <span class="tok-str">"$node"</span> &gt;/dev/null
+
+<span class="tok-com"># 1. A worker is kept for theLB: tainted, so that nothing else is scheduled</span>
+<span class="tok-com">#    there, and drained of the pods it runs - a pod on a director's node cannot</span>
+<span class="tok-com">#    reach theLB's Services. A control-plane node runs no workloads already.</span>
+<span class="tok-cmd">if</span> kubectl get nodes <span class="tok-flag">-l</span> node-role.kubernetes.io/control-plane <span class="tok-flag">-o</span> name | grep <span class="tok-flag">-qx</span> <span class="tok-str">"node/$node"</span>; then
+	echo <span class="tok-str">"$node is a control-plane node: not tainted, not drained"</span>
+<span class="tok-cmd">else</span>
+	kubectl taint node <span class="tok-str">"$node"</span> dmarts.app/thelb-director=true:NoSchedule <span class="tok-flag">--overwrite</span>
+	kubectl drain <span class="tok-str">"$node"</span> <span class="tok-flag">--ignore-daemonsets</span> <span class="tok-flag">--delete-emptydir-data</span>
+	kubectl uncordon <span class="tok-str">"$node"</span>
+<span class="tok-cmd">fi</span>
+
+<span class="tok-com"># 2. With kube-proxy: kube-proxy cannot leave some Services to theLB, so it</span>
+<span class="tok-com">#    must not run on the node. Its DaemonSet is kept off the labelled nodes -</span>
+<span class="tok-com">#    patch it again after a kubeadm upgrade - and the node is rebooted, to</span>
+<span class="tok-com">#    clear the rules kube-proxy left. A director in a pod there reaches the API</span>
+<span class="tok-com">#    server only at the server's own address: see the guide.</span>
+<span class="tok-cmd">kubeproxy</span>=no
+<span class="tok-cmd">if</span> kubectl <span class="tok-flag">-n</span> kube-system get daemonset kube-proxy &gt;/dev/null 2&gt;&amp;1; then
+	kubeproxy=yes
+	kubectl <span class="tok-flag">-n</span> kube-system patch daemonset kube-proxy <span class="tok-flag">--type</span>=strategic <span class="tok-flag">-p</span> \
+		<span class="tok-str">'{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"dmarts.app/thelb-director","operator":"DoesNotExist"}]}]}}}}}}}'</span>
+<span class="tok-cmd">fi</span>
+
+<span class="tok-com"># 3. The label: the DaemonSet runs a director on the nodes that have it, a</span>
+<span class="tok-com">#    director refuses to start on a node of the cluster without it, and theLB</span>
+<span class="tok-com">#    sends no Service's traffic to the node.</span>
+<span class="tok-cmd">kubectl</span> label node <span class="tok-str">"$node"</span> dmarts.app/thelb-director=true <span class="tok-flag">--overwrite</span>
+
+<span class="tok-com"># 4. With Cilium: Cilium reads a node's labels only when a Service changes, so</span>
+<span class="tok-com">#    every theLB Service is touched - then Cilium on the node leaves them to</span>
+<span class="tok-com">#    theLB. Each needs the annotation service.cilium.io/node-selector:</span>
+<span class="tok-com">#    "!dmarts.app/thelb-director", as thelb generate k8s service writes it.</span>
+<span class="tok-cmd">if</span> kubectl get ciliumnodes.cilium.io <span class="tok-str">"$node"</span> &gt;/dev/null 2&gt;&amp;1; then
+	kubectl get services <span class="tok-flag">-A</span> <span class="tok-flag">-o</span> jsonpath=<span class="tok-str">'{range .items[?(@.spec.loadBalancerClass=="dmarts.app/thelb")]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.metadata.annotations.service\.cilium\.io/node-selector}{"\n"}{end}'</span> |
+		while read <span class="tok-flag">-r</span> ns name sel; do
+			if [ <span class="tok-str">"$sel"</span> != <span class="tok-str">"$selector"</span> ]; then
+				echo <span class="tok-str">"warning: the Service $ns/$name lacks the annotation service.cilium.io/node-selector: \"$selector\" - Cilium on $node takes its packets before theLB"</span> &gt;&amp;2
+			fi
+			kubectl <span class="tok-flag">-n</span> <span class="tok-str">"$ns"</span> annotate service <span class="tok-str">"$name"</span> <span class="tok-flag">--overwrite</span> dmarts.app/thelb-touched=<span class="tok-str">"$(date +%s)"</span>
+		done
+<span class="tok-cmd">fi</span>
+
+<span class="tok-cmd">if</span> [ <span class="tok-str">"$kubeproxy"</span> = yes ]; then
+	echo <span class="tok-str">"$node is a director's node once rebooted - kube-proxy left its rules there. Then start its director, and approve it on a director: sudo thelb status pending"</span>
+<span class="tok-cmd">else</span>
+	echo <span class="tok-str">"$node is a director's node. Start its director, and approve it on a director: sudo thelb status pending"</span>
+<span class="tok-cmd">fi</span>
+
+<span class="tok-com"># To give the node back:</span>
+<span class="tok-com">#   kubectl label node cp1 dmarts.app/thelb-director-</span>
+<span class="tok-com">#   kubectl taint node cp1 dmarts.app/thelb-director-    (a worker)</span>
+<span class="tok-com"># then touch theLB's Services, as step 4 does, and remove its director from the</span>
+<span class="tok-com"># cluster - sudo thelb admin remove, with the name sudo thelb status directors</span>
+<span class="tok-com"># shows - so that the node gets traffic again.</span></code></pre></div><p class="example-file"><a href="examples/thelb-node.sh" download>thelb-node.sh</a></p></div>
+<h3 id="3a-under-systemd">3a. Under systemd<a class="anchor" href="#3a-under-systemd" aria-label="Link to this section">#</a></h3>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>Files</th><th>Runs</th></tr></thead><tbody><tr><td><code>cp1</code></td><td>as <code>lb1</code> in setup 1: the secret files, the kubeconfig, the unit</td><td><code>thelb director</code></td></tr><tr><td>the kubectl machine</td><td>as in setup 1, and <code>thelb-node.sh</code></td><td><code>kubectl</code></td></tr><tr><td>the other nodes</td><td>nothing</td><td>-</td></tr></tbody></table></div>
+<p><strong>Step 1 - on <code>cp1</code>:</strong> print the identity, the kubeconfig script and the node's script:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s &gt; thelb-k8s.yaml
+<span class="tok-cmd">sudo</span> thelb generate k8s kubeconfig &gt; thelb-kubeconfig.sh
+<span class="tok-cmd">sudo</span> thelb generate k8s node cp1 &gt; thelb-node.sh</code></pre></div>
+<p><strong>Step 2 - on the kubectl machine:</strong> apply the identity, build the kubeconfig, prepare the node. Copy <code>thelb.kubeconfig</code> to <code>cp1</code>.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-k8s.yaml
+<span class="tok-cmd">sh</span> thelb-kubeconfig.sh &gt; thelb.kubeconfig
+<span class="tok-cmd">sh</span> thelb-node.sh</code></pre></div>
+<p><strong>Step 3 - on <code>cp1</code>:</strong> setup 1, steps 3 to 6: the kubeconfig, the unit, a pool, the Service's port in the node's firewall if it has one, and a Service.</p>
+<h3 id="3b-as-a-daemonset">3b. As a DaemonSet<a class="anchor" href="#3b-as-a-daemonset" aria-label="Link to this section">#</a></h3>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>What</th><th>Runs</th></tr></thead><tbody><tr><td><code>cp1</code></td><td>the label <code>dmarts.app/thelb-director</code>; nothing on its disk</td><td>the director's pod, on the node's network</td></tr><tr><td>the cluster</td><td>the namespace <code>thelb</code>: the identity, the Secret <code>thelb-secrets</code> with the two secret files, the DaemonSet <code>thelb-director</code></td><td>-</td></tr><tr><td>the kubectl machine</td><td><code>director.secret</code>, <code>backend.secret</code>, <code>thelb-director.yaml</code>, <code>thelb-node.sh</code>, <code>web-service.yaml</code></td><td><code>kubectl</code></td></tr></tbody></table></div>
+<p><strong>Step 1 - the secret files.</strong> A pod cannot write them, so make them first, readable by you only, and keep them: a director or backend outside the cluster needs them too.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">umask</span> 077
+<span class="tok-cmd">sudo</span> thelb generate secret &gt; director.secret
+<span class="tok-cmd">sudo</span> thelb generate secret &gt; backend.secret</code></pre></div>
+<p><strong>Step 2 - print the DaemonSet, with <code>--bootstrap</code>, and the node's script:</strong></p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s director <span class="tok-flag">--vip</span> 10.0.0.10 <span class="tok-flag">--port</span> 7443 <span class="tok-flag">--bootstrap</span> <span class="tok-flag">--bootstrap-wait</span> 31s \
   <span class="tok-flag">--secret-file</span> /etc/thelb/director.secret <span class="tok-flag">--backend-secret-file</span> /etc/thelb/backend.secret \
   <span class="tok-flag">--kubeconfig</span> in-cluster <span class="tok-flag">--metrics</span> 127.0.0.1:9180 &gt; thelb-director.yaml
-<span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-director.yaml</code></pre></div>
-<div class="example"><p class="example-caption">The manifests of step 1, and the DaemonSet. <code>generate</code> checks the flags the way the director would.</p><div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-com"># theLB 0.1.0, as `thelb generate k8s` printed it: the directors' identity and</span>
+<span class="tok-cmd">sudo</span> thelb generate k8s node cp1 &gt; thelb-node.sh</code></pre></div>
+<div class="example"><p class="example-caption">The identity of step 1, and the DaemonSet. <code>generate</code> checks the flags the way the director would.</p><div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-com"># theLB 0.1.0, as `thelb generate k8s` printed it: the directors' identity and</span>
 <span class="tok-com"># permissions in the cluster. Apply it: kubectl apply -f &lt;this file&gt;</span>
 <span class="tok-key">apiVersion</span>: v1
 <span class="tok-key">kind</span>: Namespace
@@ -219,8 +359,8 @@
     kubernetes.io/service-account.name: thelb-director
 <span class="tok-key">type</span>: kubernetes.io/service-account-token
 ---
-<span class="tok-com"># The directors, on the nodes labelled for them:</span>
-<span class="tok-com">#   kubectl label node &lt;node&gt; dmarts.app/thelb-director=true</span>
+<span class="tok-com"># The directors, on the nodes labelled for them. thelb generate k8s node &lt;node&gt;</span>
+<span class="tok-com"># prints the script that makes a node one: its label, and the rest.</span>
 <span class="tok-com"># Its secret files come from the Secret thelb-secrets - the cluster's two</span>
 <span class="tok-com"># secret files, copied from a director:</span>
 <span class="tok-com">#   kubectl -n thelb create secret generic thelb-secrets \</span>
@@ -268,6 +408,9 @@
             - <span class="tok-str">"10.0.0.10"</span>
             - <span class="tok-str">"--port"</span>
             - <span class="tok-str">"7443"</span>
+            - <span class="tok-str">"--bootstrap"</span>
+            - <span class="tok-str">"--bootstrap-wait"</span>
+            - <span class="tok-str">"31s"</span>
             - <span class="tok-str">"--secret-file"</span>
             - <span class="tok-str">"/etc/thelb/director.secret"</span>
             - <span class="tok-str">"--backend-secret-file"</span>
@@ -325,50 +468,48 @@
 <span class="tok-key">          hostPath</span>:
 <span class="tok-key">            path</span>: /run/thelb
 <span class="tok-key">            type</span>: DirectoryOrCreate</code></pre></div><p class="example-file"><a href="examples/thelb-director.yaml" download>thelb-director.yaml</a></p></div>
+<p><strong>Step 3 - on the kubectl machine:</strong> apply the manifests, make the Secret, prepare the node - its label starts the pod:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-director.yaml
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb create secret generic thelb-secrets \
+  <span class="tok-flag">--from-file</span>=director.secret=./director.secret \
+  <span class="tok-flag">--from-file</span>=backend.secret=./backend.secret
+<span class="tok-cmd">sh</span> thelb-node.sh
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb rollout status daemonset thelb-director</code></pre></div>
+<p>The pod looks for the cluster for 31 seconds, creates it, and turns ready.</p>
+<p><strong>Step 4 - a pool</strong>, from the kubectl machine, through the pod - the image has <code>thelb</code>. (Or <code>sudo thelb</code> on the node itself, if theLB is installed there: the pod shares the node's <code>/run/thelb</code>.)</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb exec daemonset/thelb-director -- thelb admin pool add k8s <span class="tok-flag">--vip</span> 10.0.0.50/24 <span class="tok-flag">--vippool-count</span> 10 <span class="tok-flag">--default</span>
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb exec daemonset/thelb-director -- thelb status</code></pre></div>
+<p><strong>Step 5 - a Service:</strong> setup 1, step 5, and <code>curl http://10.0.0.50/</code> from a client.</p>
 <p>What the pod needs, and why:</p>
-<ul><li><strong><code>hostNetwork</code></strong>: the VIPs, IPVS and the control port are the node's.</li><li><strong><code>privileged</code></strong>: theLB writes kernel settings in <code>/proc/sys/net</code>, which is read-only in a container otherwise.</li><li><strong>The secret files, each mounted as itself</strong> (<code>subPath</code>): theLB reads a secret file only if it is a regular file, and a Secret's files are symbolic links otherwise.</li><li><strong>The node's <code>/etc/machine-id</code></strong>: it is part of the <a href="approval.html">node fingerprint</a>, so a restarted pod rejoins without approval.</li><li><strong>The node's <code>/run/thelb</code></strong>: <code>sudo thelb status</code> works on the node, as on any director.</li><li><strong>A readiness probe</strong> on <code>/readyz</code>, served with <code>--metrics</code>: a pod is ready once it votes and has caught up with the leader. A rolling update then replaces the next director only after that.</li><li><strong><code>--kubeconfig in-cluster</code></strong>: the pod uses its own ServiceAccount; no kubeconfig file.</li></ul>
-<p>The new director waits for approval. On a director:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb status pending
-<span class="tok-cmd">sudo</span> thelb admin approve cp1</code></pre></div>
-<div class="callout callout-warning"><p class="callout-title">Bootstrapping from a pod</p><p>The DaemonSet above has no <code>--bootstrap</code>: here, <code>lb1</code> creates the cluster. If your pods must bootstrap, add <code>--bootstrap --bootstrap-wait 31s</code>. Kubernetes restarts a crashed pod after 10 seconds - sooner than the other of two directors stands alone - so the pod must look for the cluster longer before it creates one. <code>generate</code> refuses <code>--bootstrap</code> without it.</p></div>
-<h3 id="3-a-pool">3. A pool<a class="anchor" href="#3-a-pool" aria-label="Link to this section">#</a></h3>
-<p>On any director:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb admin pool add k8s <span class="tok-flag">--vip</span> 10.0.0.50/24 <span class="tok-flag">--vippool-count</span> 10 <span class="tok-flag">--default</span></code></pre></div>
-<p>A Service takes its VIP from the default pool, unless it names another.</p>
-<h3 id="4-a-service">4. A Service<a class="anchor" href="#4-a-service" aria-label="Link to this section">#</a></h3>
-<p>Print a Service of theLB's class, and add your Deployment's pods to it:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s service web &gt; web-service.yaml
-<span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> web-service.yaml</code></pre></div>
-<div class="example"><p class="example-caption"><code>thelb generate k8s service web</code>: port 80, the pods labelled <code>app: web</code>.</p><div class="codeblock lang-yaml"><div class="codebar"><span class="codelabel">YAML</span></div><pre><code><span class="tok-com"># theLB 0.1.0, as `thelb generate k8s service` printed it: a Service of theLB's</span>
-<span class="tok-com"># class. Apply it: kubectl apply -f &lt;this file&gt;</span>
-<span class="tok-key">apiVersion</span>: v1
-<span class="tok-key">kind</span>: Service
-<span class="tok-key">metadata</span>:
-<span class="tok-key">  name</span>: web
-<span class="tok-key">  namespace</span>: default
-<span class="tok-key">  annotations</span>:
-    <span class="tok-com"># With directors on nodes of the cluster, and Cilium: Cilium leaves this</span>
-    <span class="tok-com"># Service to the directors there. Harmless anywhere else.</span>
-    service.cilium.io/node-selector: <span class="tok-str">"!dmarts.app/thelb-director"</span>
-    <span class="tok-com"># dmarts.app/thelb-pool: &lt;pool&gt;   a pool other than the default</span>
-    <span class="tok-com"># dmarts.app/thelb-ip: &lt;address&gt;   a particular address of the pool</span>
-    <span class="tok-com"># dmarts.app/thelb-shared-vip: &lt;key&gt;   one VIP for the Services that give the same key, their ports apart</span>
-<span class="tok-key">spec</span>:
-<span class="tok-key">  type</span>: LoadBalancer
-<span class="tok-key">  loadBalancerClass</span>: dmarts.app/thelb
-  <span class="tok-com"># Local: only the nodes with a ready pod of the Service get its traffic,</span>
-  <span class="tok-com"># weighted by their pods, and the pods see each client's own address.</span>
-<span class="tok-key">  externalTrafficPolicy</span>: Local
-<span class="tok-key">  selector</span>:
-<span class="tok-key">    app</span>: <span class="tok-str">"web"</span>
-<span class="tok-key">  ports</span>:
-<span class="tok-key">    - name</span>: tcp-80
-<span class="tok-key">      protocol</span>: TCP
-<span class="tok-key">      port</span>: 80
-<span class="tok-key">      targetPort</span>: 80</code></pre></div><p class="example-file"><a href="examples/web-service.yaml" download>web-service.yaml</a></p></div>
-<p><code>generate k8s service</code> takes:</p>
+<ul><li><strong><code>hostNetwork</code></strong>: the VIPs, IPVS and the control port are the node's.</li><li><strong><code>privileged</code></strong>: theLB writes kernel settings in <code>/proc/sys/net</code>, which is read-only in a container otherwise.</li><li><strong>The secret files, each mounted as itself</strong> (<code>subPath</code>): theLB reads a secret file only if it is a regular file, and a Secret's files are symbolic links otherwise.</li><li><strong>The node's <code>/etc/machine-id</code></strong>: it is part of the <a href="approval.html">node fingerprint</a>, so a restarted pod rejoins without approval.</li><li><strong>The node's <code>/run/thelb</code></strong>: <code>sudo thelb status</code> works on the node, as on any director.</li><li><strong>A readiness probe</strong> on <code>/readyz</code>, served with <code>--metrics</code>: a pod is ready once it votes and has caught up with the leader. A rolling update then replaces the next director only after that.</li><li><strong><code>--kubeconfig in-cluster</code></strong>: the pod uses its own ServiceAccount; no kubeconfig file.</li><li><strong><code>--bootstrap-wait 31s</code></strong>: Kubernetes restarts a crashed pod after 10 seconds - sooner than the other of two directors stands alone - so a pod that may create the cluster looks for it longer first. <code>generate</code> refuses <code>--bootstrap</code> without it.</li></ul>
+<p>With one director, a rolling update of the DaemonSet stops it: the VIPs are gone until the new pod is ready.</p>
+<h2 id="4-several-directors-on-nodes">4. Several directors on nodes<a class="anchor" href="#4-several-directors-on-nodes" aria-label="Link to this section">#</a></h2>
+<p>The directors run on <code>cp1</code>, <code>cp2</code> and <code>cp3</code>. <strong>As a DaemonSet</strong>, follow setup 3b, but bring the first director up alone - the steps below. <strong>Under systemd</strong>, follow setup 2 on the nodes, with <code>thelb generate k8s node</code> and its script for each node before its director starts.</p>
+<div class="tablewrap"><table><thead><tr><th>Where</th><th>What</th><th>Runs</th></tr></thead><tbody><tr><td><code>cp1</code>, <code>cp2</code>, <code>cp3</code></td><td>the label; nothing on their disks</td><td>a director's pod each</td></tr><tr><td>the cluster</td><td>as in setup 3b</td><td>-</td></tr><tr><td>the kubectl machine</td><td>as in setup 3b, with a node script for each node</td><td><code>kubectl</code></td></tr></tbody></table></div>
+<p><strong>Step 1 - setup 3b, steps 1 and 2</strong>, with a script for each node:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s node cp1 &gt; thelb-node-cp1.sh
+<span class="tok-cmd">sudo</span> thelb generate k8s node cp2 &gt; thelb-node-cp2.sh
+<span class="tok-cmd">sudo</span> thelb generate k8s node cp3 &gt; thelb-node-cp3.sh</code></pre></div>
+<p><strong>Step 2 - on the kubectl machine: the first director alone.</strong> It creates the cluster:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> apply <span class="tok-flag">-f</span> thelb-director.yaml
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb create secret generic thelb-secrets \
+  <span class="tok-flag">--from-file</span>=director.secret=./director.secret \
+  <span class="tok-flag">--from-file</span>=backend.secret=./backend.secret
+<span class="tok-cmd">sh</span> thelb-node-cp1.sh
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb rollout status daemonset thelb-director</code></pre></div>
+<p><strong>Step 3 - the others.</strong> Their pods find the cluster, and wait for approval. Approve them through <code>cp1</code>'s pod:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sh</span> thelb-node-cp2.sh
+<span class="tok-cmd">sh</span> thelb-node-cp3.sh
+<span class="tok-cmd">pod</span>=$(kubectl <span class="tok-flag">-n</span> thelb get pods <span class="tok-flag">-l</span> app.kubernetes.io/name=thelb-director <span class="tok-flag">--field-selector</span> spec.nodeName=cp1 <span class="tok-flag">-o</span> name)
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb exec <span class="tok-str">"$pod"</span> -- thelb status pending
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb exec <span class="tok-str">"$pod"</span> -- thelb admin approve cp2 cp3
+<span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> thelb rollout status daemonset thelb-director</code></pre></div>
+<p><strong>Step 4 - a pool and a Service:</strong> setup 3b, steps 4 and 5. If the nodes run a firewall, open it as in setup 2, step 3: the directors talk to each other on the control port, and sync connections by multicast.</p>
+<div class="callout callout-warning"><p class="callout-title">Why the first director comes up alone</p><p>Pods with <code>--bootstrap</code> that start at the same moment can each create a cluster: in 0.1, theLB does not yet merge two clusters that share a secret. After <strong>every</strong> director has stopped at once - the whole cluster down - check that each pod shows the same cluster ID (<code>thelb status cluster</code>). Delete a pod that shows another: it starts again, and joins the cluster that holds the control VIP.</p></div>
+<h2 id="services">Services<a class="anchor" href="#services" aria-label="Link to this section">#</a></h2>
+<p><code>thelb generate k8s service</code> takes:</p>
 <div class="tablewrap"><table><thead><tr><th>Flag</th><th>What it sets</th></tr></thead><tbody><tr><td><code>--namespace &lt;ns&gt;</code></td><td>the Service's namespace (default <code>default</code>)</td></tr><tr><td><code>--port &lt;port&gt;[/tcp|udp|sctp][:&lt;pods' port&gt;]</code></td><td>a port, more than once for more; <code>80:8080</code> sends port 80 to the pods' 8080 (default <code>80</code>)</td></tr><tr><td><code>--selector &lt;key=value&gt;</code></td><td>the pods it sends to (default <code>app=&lt;name&gt;</code>)</td></tr><tr><td><code>--policy Local|Cluster</code></td><td>its <code>externalTrafficPolicy</code> (default <code>Local</code>)</td></tr><tr><td><code>--pool &lt;pool&gt;</code></td><td>the annotation <code>dmarts.app/thelb-pool</code></td></tr><tr><td><code>--ip &lt;address&gt;</code></td><td>the annotation <code>dmarts.app/thelb-ip</code></td></tr><tr><td><code>--shared-vip &lt;key&gt;</code></td><td>the annotation <code>dmarts.app/thelb-shared-vip</code></td></tr></tbody></table></div>
-<p>Then:</p>
+<p>A Service takes its VIP from the default pool, unless it names another. Then:</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> get service web           <span class="tok-com"># EXTERNAL-IP: 10.0.0.50</span>
 <span class="tok-cmd">sudo</span> thelb status vips            <span class="tok-com"># on a director: the VIP, held by the leader</span>
 <span class="tok-cmd">curl</span> http://10.0.0.50/            <span class="tok-com"># from a client</span></code></pre></div>
@@ -418,22 +559,18 @@ $ sudo thelb status backends
 <div class="tablewrap"><table><thead><tr><th>Annotation</th><th>What it does</th></tr></thead><tbody><tr><td><code>dmarts.app/thelb-pool: &lt;pool&gt;</code></td><td>takes the VIP from that pool, not the default. A dual-stack Service names one pool for each family, separated by commas.</td></tr><tr><td><code>dmarts.app/thelb-ip: &lt;address&gt;</code></td><td>asks for that address of the pool. One for each family, separated by commas.</td></tr><tr><td><code>dmarts.app/thelb-shared-vip: &lt;key&gt;</code></td><td>Services with the same key share one VIP, as long as their ports are different.</td></tr><tr><td><code>service.cilium.io/node-selector: "!dmarts.app/thelb-director"</code></td><td>with Cilium and directors on nodes: Cilium leaves the Service to those nodes.</td></tr></tbody></table></div>
 <p>A dual-stack Service (<code>spec.ipFamilies</code>) gets one VIP for each family, from that family's pool.</p>
 <h2 id="changing-the-director-nodes">Changing the director nodes<a class="anchor" href="#changing-the-director-nodes" aria-label="Link to this section">#</a></h2>
-<p><strong>Cilium reads a node's labels only when a Service changes.</strong> After you label a new director node - or take the label off one - touch every theLB Service, so that Cilium on that node takes the change:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> get services <span class="tok-flag">-A</span> <span class="tok-flag">-o</span> jsonpath=<span class="tok-str">'{range .items[?(@.spec.loadBalancerClass=="dmarts.app/thelb")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}'</span> |
+<p><strong>To make a node a director's node</strong>, run its script - <code>thelb generate k8s node &lt;node&gt;</code> - then approve its director. The script touches theLB's Services after the label, because <strong>Cilium reads a node's labels only when a Service changes</strong>; approve the director after it, so that it never leads while Cilium still takes its packets.</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sudo</span> thelb generate k8s node worker2 &gt; thelb-node-worker2.sh
+<span class="tok-cmd">sh</span> thelb-node-worker2.sh
+<span class="tok-cmd">sudo</span> thelb admin approve worker2          <span class="tok-com"># on a director</span></code></pre></div>
+<p><strong>To give it back:</strong> take off the label - the DaemonSet stops its director - and, on a worker, the taint; touch the Services; and remove the director from the cluster, so that the node gets traffic again:</p>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> label node worker2 dmarts.app/thelb-director-
+<span class="tok-cmd">kubectl</span> taint node worker2 dmarts.app/thelb-director-
+<span class="tok-cmd">kubectl</span> get services <span class="tok-flag">-A</span> <span class="tok-flag">-o</span> jsonpath=<span class="tok-str">'{range .items[?(@.spec.loadBalancerClass=="dmarts.app/thelb")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}'</span> |
   while read <span class="tok-flag">-r</span> ns name; do
     kubectl <span class="tok-flag">-n</span> <span class="tok-str">"$ns"</span> annotate service <span class="tok-str">"$name"</span> <span class="tok-flag">--overwrite</span> dmarts.app/thelb-touched=<span class="tok-str">"$(date +%s)"</span>
-  done</code></pre></div>
-<p>Do it <strong>before</strong> you approve the new director, so that it never leads while Cilium still takes its packets.</p>
-<p>To make a worker a director node: drain it, taint it, label it, touch the Services, approve the director:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> drain worker2 <span class="tok-flag">--ignore-daemonsets</span> <span class="tok-flag">--delete-emptydir-data</span>
-<span class="tok-cmd">kubectl</span> taint node worker2 dmarts.app/thelb-director=true:NoSchedule
-<span class="tok-cmd">kubectl</span> uncordon worker2
-<span class="tok-cmd">kubectl</span> label node worker2 dmarts.app/thelb-director=true
-<span class="tok-com"># touch the Services, as above</span>
-<span class="tok-cmd">sudo</span> thelb admin approve worker2</code></pre></div>
-<p>To give it back: take off the label (the DaemonSet stops its director) and the taint, then touch the Services:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> label node worker2 dmarts.app/thelb-director-
-<span class="tok-cmd">kubectl</span> taint node worker2 dmarts.app/thelb-director-</code></pre></div>
+  done
+<span class="tok-cmd">sudo</span> thelb admin remove worker2           <span class="tok-com"># on a director</span></code></pre></div>
 <h2 id="with-kube-proxy">With kube-proxy<a class="anchor" href="#with-kube-proxy" aria-label="Link to this section">#</a></h2>
 <p>kube-proxy has no way to skip a Service on some nodes only. So:</p>
 <p><strong>In IPVS mode</strong>, kube-proxy puts every load-balancer IP on an interface of every node. Set <code>strictARP</code>, so that the nodes do not answer ARP for the VIPs:</p>
@@ -441,7 +578,7 @@ $ sudo thelb status backends
   | sed <span class="tok-flag">-e</span> <span class="tok-str">'s/strictARP: false/strictARP: true/'</span> \
   | kubectl apply <span class="tok-flag">-f</span> -
 <span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> kube-system rollout restart daemonset kube-proxy</code></pre></div>
-<p><strong>A director on a node</strong> needs kube-proxy kept off that node, and the node rebooted to clear the rules kube-proxy left. <code>kubeadm upgrade</code> rewrites kube-proxy's DaemonSet: patch it again after an upgrade.</p>
+<p><strong>A director on a node</strong> needs kube-proxy kept off that node, and the node rebooted to clear the rules kube-proxy left. The node's script does the first - this patch - and says when to reboot. <code>kubeadm upgrade</code> rewrites kube-proxy's DaemonSet: patch it again after an upgrade.</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">kubectl</span> <span class="tok-flag">-n</span> kube-system patch daemonset kube-proxy <span class="tok-flag">--type</span>=strategic <span class="tok-flag">-p</span> \
   <span class="tok-str">'{"spec":{"template":{"spec":{"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"dmarts.app/thelb-director","operator":"DoesNotExist"}]}]}}}}}}}'</span></code></pre></div>
 <p>Pods on a node without kube-proxy reach no Service at all - one more reason to keep these nodes for theLB. That includes the API server's own Service, which a director in a pod finds with <code>--kubeconfig in-cluster</code>: give the DaemonSet's container the API server's real address instead, which its certificate names:</p>
@@ -452,13 +589,13 @@ $ sudo thelb status backends
 <span class="tok-key">              value</span>: <span class="tok-str">"6443"</span></code></pre></div>
 <p>Or run the directors on these nodes under systemd, with a kubeconfig.</p>
 <h2 id="when-something-is-wrong">When something is wrong<a class="anchor" href="#when-something-is-wrong" aria-label="Link to this section">#</a></h2>
-<ul><li><strong>The director does not start.</strong> It says why: the API server does not answer, it runs a Kubernetes release older than 1.35, the credential lacks a permission (each one is named - apply step 1 again), or its node is not labelled.</li><li><strong>A Service has no <code>EXTERNAL-IP</code>.</strong> <code>kubectl describe service &lt;name&gt;</code> shows theLB's events: <code>AllocationFailed</code> says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.</li><li><strong>A warning <code>NoDirectorExclusion</code>.</strong> Directors run on labelled nodes, and the Service lacks the Cilium annotation.</li><li><strong>Nodes get no traffic.</strong> <code>sudo thelb status backends</code> shows each node's check and weight. With <code>Local</code>, a node without a ready pod has weight 0 - by design.</li><li><strong>A client's connection to the VIP hangs, and <code>thelb status backends</code> counts 0 packets.</strong> A firewall on the leader drops the Service's port before IPVS sees it. Allow it to the VIP, on every director: <code>sudo ufw allow proto tcp from any to 10.0.0.50 port 80</code>.</li><li><strong><code>thelb status</code></strong> shows, in the cluster table, how the director's watch of Kubernetes goes: the number of theLB Services, or what is wrong.</li></ul>
+<ul><li><strong>The director does not start.</strong> It says why: the API server does not answer, it runs a Kubernetes release older than 1.35, the credential lacks a permission (each one is named - apply <code>thelb generate k8s</code> again), or its node is not labelled (run the node's script).</li><li><strong>A Service has no <code>EXTERNAL-IP</code>.</strong> <code>kubectl describe service &lt;name&gt;</code> shows theLB's events: <code>AllocationFailed</code> says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.</li><li><strong>A warning <code>NoDirectorExclusion</code>.</strong> Directors run on labelled nodes, and the Service lacks the Cilium annotation.</li><li><strong>Nodes get no traffic.</strong> <code>sudo thelb status backends</code> shows each node's check and weight. With <code>Local</code>, a node without a ready pod has weight 0 - by design.</li><li><strong>A client's connection to the VIP hangs, and <code>thelb status backends</code> counts 0 packets.</strong> A firewall on the leader drops the Service's port before IPVS sees it. Allow it to the VIP, on every director: <code>sudo ufw allow proto tcp from any to 10.0.0.50 port 80</code>.</li><li><strong><code>thelb status</code></strong> shows, in the cluster table, how the director's watch of Kubernetes goes: the number of theLB Services, or what is wrong.</li></ul>
 <p>The design behind all this - the choices and their reasons - is in <a href="https://github.com/dmartsapp/thelb/blob/main/docs/design.md#kubernetes">docs/design.md</a>.</p>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="systemd.html"><span>Previous</span>Running under systemd</a><a class="next" href="monitoring.html"><span>Next</span>Status, logs and metrics</a></nav>
 <footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/kubernetes.md">Edit this page on GitHub</a><span>theLB v0.1.0 &middot; MIT License</span></footer>
 </main>
-<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#how-it-works">How it works</a></li><li class="toc2"><a href="#where-the-directors-run">Where the directors run</a></li><li class="toc2"><a href="#step-by-step">Step by step</a></li><li class="toc3"><a href="#1-the-directors-identity">1. The directors' identity</a></li><li class="toc3"><a href="#2a-directors-outside-the-cluster">2a. Directors outside the cluster</a></li><li class="toc3"><a href="#2b-directors-on-nodes-as-a-daemonset">2b. Directors on nodes, as a DaemonSet</a></li><li class="toc3"><a href="#3-a-pool">3. A pool</a></li><li class="toc3"><a href="#4-a-service">4. A Service</a></li><li class="toc2"><a href="#which-nodes-get-traffic">Which nodes get traffic</a></li><li class="toc2"><a href="#annotations">Annotations</a></li><li class="toc2"><a href="#changing-the-director-nodes">Changing the director nodes</a></li><li class="toc2"><a href="#with-kube-proxy">With kube-proxy</a></li><li class="toc2"><a href="#when-something-is-wrong">When something is wrong</a></li></ul></aside>
+<aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#how-it-works">How it works</a></li><li class="toc2"><a href="#what-runs-where">What runs where</a></li><li class="toc2"><a href="#choose-a-setup">Choose a setup</a></li><li class="toc2"><a href="#1-one-director-outside-the-cluster">1. One director outside the cluster</a></li><li class="toc2"><a href="#2-several-directors-outside-the-cluster">2. Several directors outside the cluster</a></li><li class="toc2"><a href="#3-one-director-on-a-node">3. One director on a node</a></li><li class="toc3"><a href="#3a-under-systemd">3a. Under systemd</a></li><li class="toc3"><a href="#3b-as-a-daemonset">3b. As a DaemonSet</a></li><li class="toc2"><a href="#4-several-directors-on-nodes">4. Several directors on nodes</a></li><li class="toc2"><a href="#services">Services</a></li><li class="toc2"><a href="#which-nodes-get-traffic">Which nodes get traffic</a></li><li class="toc2"><a href="#annotations">Annotations</a></li><li class="toc2"><a href="#changing-the-director-nodes">Changing the director nodes</a></li><li class="toc2"><a href="#with-kube-proxy">With kube-proxy</a></li><li class="toc2"><a href="#when-something-is-wrong">When something is wrong</a></li></ul></aside>
 </div>
 <script src="assets/site.js" defer></script>
 </body>

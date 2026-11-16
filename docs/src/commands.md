@@ -9,7 +9,7 @@ nav: Commands
 
 ## Overview
 
-Every command except `--help` and `--version` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly. `thelb <command> --help` shows a command's flags.
+Every command except `--help` and `--version` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly. `thelb <command> --help` shows a command's flags, and `thelb generate k8s --help` the Kubernetes forms.
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
@@ -26,7 +26,7 @@ thelb generate commands
 thelb generate systemd director|backend <the flags it runs with>
 thelb generate sysctl director|backend
 thelb generate modules director|backend
-thelb generate k8s [director <the flags it runs with> | kubeconfig | service <name> [flags]]
+thelb generate k8s [kubeconfig | director <the flags it runs with> | node <name> | service <name> [flags]]
 thelb admin approve <name> ... | --match '<regex>' [--yes]
 thelb admin refuse <name>
 thelb admin remove <name>
@@ -58,7 +58,7 @@ Runs a director. See [Directors and failover](directors.md).
 | `--metrics` | serve [Prometheus metrics](monitoring.md#metrics) on this address and port; not `0.0.0.0` or `::` |
 | `--debug` | log each new connection while leading - see [`--debug`](monitoring.md#each-connection-with-debug) |
 | `--kubeconfig` | serve [Kubernetes](kubernetes.md) Services of class `dmarts.app/thelb`, with this credential: a kubeconfig file (an absolute path), or `in-cluster` for a pod's ServiceAccount |
-| `--bootstrap-wait` | with `--bootstrap`: how long to look for the cluster before creating one (default `5s`; `5s` to `10m`). A director in a pod uses `31s` or more - see [Kubernetes](kubernetes.md#2b-directors-on-nodes-as-a-daemonset) |
+| `--bootstrap-wait` | with `--bootstrap`: how long to look for the cluster before creating one (default `5s`; `5s` to `10m`). A director in a pod uses `31s` or more - see [Kubernetes](kubernetes.md#3b-as-a-daemonset) |
 
 ## `thelb backend`
 
@@ -109,10 +109,11 @@ Prints something for you to keep or install. It never changes the machine.
 | `generate systemd director\|backend <flags>` | a systemd unit - [Running under systemd](systemd.md) |
 | `generate sysctl director\|backend` | the kernel settings theLB sets, for `/etc/sysctl.d` |
 | `generate modules director\|backend` | the kernel modules theLB uses, for `/etc/modules-load.d` |
-| `generate k8s` | the directors' identity and permissions in a Kubernetes cluster - [Kubernetes](kubernetes.md#1-the-directors-identity) |
-| `generate k8s director <flags>` | the same, and a DaemonSet that runs directors with those flags on the nodes labelled for them - [Kubernetes](kubernetes.md#2b-directors-on-nodes-as-a-daemonset) |
-| `generate k8s kubeconfig` | a script that builds the kubeconfig of directors outside the cluster - [Kubernetes](kubernetes.md#2a-directors-outside-the-cluster) |
-| `generate k8s service <name> [flags]` | a Service of theLB's class - [Kubernetes](kubernetes.md#4-a-service) |
+| `generate k8s` | the directors' identity and permissions in a Kubernetes cluster - [Kubernetes](kubernetes.md#1-one-director-outside-the-cluster) |
+| `generate k8s kubeconfig` | a script that builds the kubeconfig of directors outside the cluster - [Kubernetes](kubernetes.md#1-one-director-outside-the-cluster) |
+| `generate k8s director <flags>` | the same identity, and a DaemonSet that runs directors with those flags on the nodes labelled for them - [Kubernetes](kubernetes.md#3b-as-a-daemonset) |
+| `generate k8s node <name>` | a script that makes a node a director's node: kept for theLB, its label, kube-proxy off it, Cilium told - [Kubernetes](kubernetes.md#3-one-director-on-a-node). The nodes that only receive traffic need nothing |
+| `generate k8s service <name> [flags]` | a Service of theLB's class - [Kubernetes](kubernetes.md#services) |
 
 ## `thelb admin`
 
