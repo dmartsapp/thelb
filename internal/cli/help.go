@@ -36,6 +36,7 @@ var subcommandHelps = map[string]string{
   thelb generate k8s node <name>
   thelb generate k8s service <name> [--namespace <ns>] [--port <port> ...] [--selector <key=value>]
                      [--policy Local|Cluster] [--pool <pool>] [--ip <address>] [--shared-vip <key>]
+  ... [--from-kubeconfig <file> [--from-context <name>] [--yes]]   on any of them
 
 Prints what theLB needs in a Kubernetes cluster, and writes nothing - to disk or
 to the cluster: apply it with kubectl, or run it. A director serves the
@@ -87,6 +88,29 @@ director is prepared, with node.
                the annotation that keeps Cilium off directors' nodes:
                thelb generate k8s service web > web-service.yaml
                kubectl apply -f web-service.yaml
+
+Reading the cluster, to fit what it prints to it - any form:
+  --from-kubeconfig <file>   read the cluster with this kubeconfig - yours, an
+                             administrator's. generate first says which context,
+                             API server and user, and what it reads, and asks; it
+                             only reads. Without it, generate reads nothing, and
+                             its scripts find out what they need when they run
+  --from-context <name>      the kubeconfig's context (default: its current one)
+  --yes                      read it without asking - for scripts
+What each form takes from the cluster:
+  (alone)      its version, which must be 1.35 or later
+  kubeconfig   the kubeconfig itself, not a script: the Secret thelb-director-token's
+               token and CA - checked: a director reaches the API server with them,
+               and has every permission it needs
+  director     with kube-proxy, the API server's address for the pods, which reach
+               no Service; and which nodes it runs directors on
+  node         just the steps the node needs: a control-plane node or a worker,
+               with Cilium, with kube-proxy
+  service      the selector and ports of the Deployment or StatefulSet of its name -
+               unless --selector and --port say them; a warning when no pod matches;
+               a refusal when a Service of that name has another load balancer class
+A user who signs in with a plugin (exec) - as on most clouds - cannot be read:
+leave out --from-kubeconfig, and run the scripts where kubectl works.
 
 Flags of service:
   --namespace <ns>         its namespace (default default)

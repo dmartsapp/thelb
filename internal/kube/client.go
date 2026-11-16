@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // MinMinor is the oldest Kubernetes theLB serves: 1.35.
@@ -127,13 +128,24 @@ func apiError(code int, b []byte) error {
 		if st.Code == 0 {
 			st.Code = code
 		}
-		return &APIError{Code: st.Code, Reason: st.Reason, Message: st.Message}
+		return &APIError{Code: st.Code, Reason: printable(st.Reason), Message: printable(st.Message)}
 	}
 	msg := strings.TrimSpace(string(b))
 	if len(msg) > 200 {
 		msg = msg[:200]
 	}
-	return &APIError{Code: code, Message: msg}
+	return &APIError{Code: code, Message: printable(msg)}
+}
+
+// printable is what the API server says, fit for a log line or a terminal:
+// each control character - a newline, a terminal's escape - a "?".
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 // do makes a request and decodes its answer into out, unless out is nil.
@@ -217,6 +229,11 @@ func (c *Client) Allowed(ctx context.Context, a Access) (bool, error) {
 		return false, err
 	}
 	return out.Status.Allowed, nil
+}
+
+// Get reads the object at path - with query, if any - into out.
+func (c *Client) Get(ctx context.Context, path string, query url.Values, out any) error {
+	return c.do(ctx, http.MethodGet, path, query, nil, out, "")
 }
 
 // Node is the Node named.

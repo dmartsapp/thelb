@@ -78,9 +78,20 @@ func image() string {
 // generateK8s prints the manifests the directors need; with director and the
 // flags it runs with, the DaemonSet too, that runs directors on the nodes
 // labelled for them.
-func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
+func generateK8s(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	from, args, err := takeFromFlags(args)
+	if err != nil {
+		return err
+	}
 	head := fmt.Sprintf("# theLB %s, as `thelb generate k8s` printed it: the directors' identity and\n# permissions in the cluster. Apply it: kubectl apply -f <this file>\n", version.Version)
 	if len(args) == 0 {
+		if from.kubeconfig != "" {
+			v, err := from.open(ctx, "thelb generate k8s", []string{"the API server's version"}, stderr)
+			if err != nil {
+				return err
+			}
+			head += v.fitted()
+		}
 		_, _ = fmt.Fprint(stdout, head+k8sIdentity)
 		return nil
 	}
@@ -89,12 +100,20 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 		if len(args) > 1 {
 			return usagef("thelb generate k8s kubeconfig: unexpected %q", args[1])
 		}
+		if from.kubeconfig != "" {
+			v, err := from.open(ctx, "thelb generate k8s kubeconfig", []string{"the API server's version",
+				"the Secret thelb/thelb-director-token - its token and CA go into the kubeconfig", "what that token may do, as a director would ask"}, stderr)
+			if err != nil {
+				return err
+			}
+			return kubeconfigFromCluster(ctx, v, version.Version, stdout, stderr)
+		}
 		_, _ = fmt.Fprintf(stdout, kubeconfigScript, version.Version)
 		return nil
 	case "service":
-		return generateK8sService(args[1:], stdout)
+		return generateK8sService(ctx, args[1:], stdout, stderr, from)
 	case "node":
-		return generateK8sNode(args[1:], stdout)
+		return generateK8sNode(ctx, args[1:], stdout, stderr, from)
 	case "director":
 	default:
 		return usagef("thelb generate k8s [kubeconfig | director <the flags it runs with> | node <name> | service <name> [flags]]")
@@ -121,6 +140,17 @@ func generateK8s(ctx context.Context, args []string, stdout io.Writer) error {
 		return usagef("thelb %s: the two secret files are two keys of one Secret, named after the files: give them different names", cmd)
 	case cfg.Bootstrap && cfg.BootstrapWait < 31*time.Second:
 		return usagef("thelb %s: a crashed pod is restarted after 10 seconds, sooner than the other of two directors stands alone: with --bootstrap, give --bootstrap-wait 31s (the control VIP's lease plus 25 seconds) or more", cmd)
+	}
+	env := ""
+	if from.kubeconfig != "" {
+		v, err := from.open(ctx, "thelb "+cmd, []string{"the API server's version", "the nodes labelled dmarts.app/thelb-director", "whether kube-proxy runs"}, stderr)
+		if err != nil {
+			return err
+		}
+		if env, err = directorFromCluster(ctx, v, stderr); err != nil {
+			return err
+		}
+		head += v.fitted()
 	}
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
 	var argLines strings.Builder
@@ -175,7 +205,7 @@ spec:
         - name: director
           image: %s
           args:
-%s          securityContext:
+%s%s          securityContext:
             # theLB writes /proc/sys/net, which a container runtime mounts
             # read-only otherwise, and may load the kernel's modules.
             privileged: true
@@ -224,7 +254,7 @@ spec:
           hostPath:
             path: /run/thelb
             type: DirectoryOrCreate
-`, filepath.Base(cfg.SecretFile), filepath.Base(cfg.BackendSecretFile), image(), argLines.String(), q(host), port,
+`, filepath.Base(cfg.SecretFile), filepath.Base(cfg.BackendSecretFile), image(), argLines.String(), env, q(host), port,
 		q(cfg.SecretFile), q(filepath.Base(cfg.SecretFile)), q(cfg.BackendSecretFile), q(filepath.Base(cfg.BackendSecretFile)))
 	_, _ = fmt.Fprint(stdout, head+k8sIdentity+ds)
 	return nil

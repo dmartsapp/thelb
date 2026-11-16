@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,9 +67,31 @@ type portFlags []string
 func (p *portFlags) String() string     { return strings.Join(*p, ",") }
 func (p *portFlags) Set(v string) error { *p = append(*p, v); return nil }
 
+// label is one label of a selector.
+type label struct{ key, val string }
+
+// labelsString is a selector as people write it: app=web, tier=front.
+func labelsString(ls []label) string {
+	var out []string
+	for _, l := range ls {
+		out = append(out, l.key+"="+l.val)
+	}
+	return strings.Join(out, ", ")
+}
+
+// labelsSelector is a selector as the API takes it: app=web,tier=front.
+func labelsSelector(ls []label) string { return strings.ReplaceAll(labelsString(ls), ", ", ",") }
+
+// svcPort is one port of a Service: its protocol, its number, the pods'.
+type svcPort struct {
+	proto      string
+	port, pods int
+}
+
 // generateK8sService prints a Service of theLB's class, for the user to apply:
 // its name, namespace, ports, the pods it selects, and theLB's annotations.
-func generateK8sService(args []string, stdout io.Writer) error {
+// With from, it fits them to the cluster first.
+func generateK8sService(ctx context.Context, args []string, stdout, stderr io.Writer, from fromCluster) error {
 	const cmd = "thelb generate k8s service"
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return usagef("%s <name> [--namespace <ns>] [--port <port>[/tcp|udp|sctp][:<pods' port>] ...] [--selector <key=value>] [--pool <pool>] [--ip <address>] [--shared-vip <key>] [--policy Local|Cluster]", cmd)
@@ -101,12 +124,15 @@ func generateK8sService(args []string, stdout io.Writer) error {
 	case *share != "" && !k8sNamespaceRE.MatchString(*share):
 		return usagef("%s: --shared-vip is lowercase letters, digits and hyphens: %q", cmd, *share)
 	}
-	if *selector == "" {
+	haveSelector := *selector != ""
+	if !haveSelector {
 		*selector = "app=" + name
 	}
 	if !k8sLabelRE.MatchString(*selector) {
 		return usagef("%s: --selector is one label, key=value: %q", cmd, *selector)
 	}
+	key, val, _ := strings.Cut(*selector, "=")
+	sel := []label{{key, val}}
 	if *ip != "" {
 		a, err := netip.ParseAddr(*ip)
 		if err != nil {
@@ -114,14 +140,11 @@ func generateK8sService(args []string, stdout io.Writer) error {
 		}
 		*ip = a.Unmap().String()
 	}
-	if len(ports) == 0 {
+	havePorts := len(ports) > 0
+	if !havePorts {
 		ports = portFlags{"80"}
 	}
-	type port struct {
-		proto      string
-		port, pods int
-	}
-	var ps []port
+	var ps []svcPort
 	seen := map[string]bool{}
 	for _, p := range ports {
 		m := k8sPortRE.FindStringSubmatch(p)
@@ -145,13 +168,37 @@ func generateK8sService(args []string, stdout io.Writer) error {
 			return usagef("%s: --port %s twice", cmd, k)
 		}
 		seen[k] = true
-		ps = append(ps, port{proto: proto, port: n, pods: pods})
+		ps = append(ps, svcPort{proto: proto, port: n, pods: pods})
+	}
+	var v *clusterView
+	var fit serviceFit
+	if from.kubeconfig != "" {
+		var err error
+		reads := []string{"the API server's version", "the namespace " + *ns, "a Deployment or StatefulSet " + name + " there, for its selector and ports", "the pods the selector picks", "a Service " + name + " there"}
+		if v, err = from.open(ctx, cmd+" "+name, reads, stderr); err != nil {
+			return err
+		}
+		if fit, err = serviceFromCluster(ctx, v, name, *ns, haveSelector, havePorts, sel, stderr); err != nil {
+			return err
+		}
+		if len(fit.selector) > 0 {
+			sel = fit.selector
+		}
+		if len(fit.ports) > 0 {
+			ps = fit.ports
+		}
 	}
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("# theLB %s, as `thelb generate k8s service` printed it: a Service of theLB's", version.Version)
 	w("# class. Apply it: kubectl apply -f <this file>")
+	if v != nil {
+		b.WriteString(v.fitted())
+		if fit.from != "" {
+			w("# The pods it selects, and their ports, are those of %s.", fit.from)
+		}
+	}
 	w("apiVersion: v1")
 	w("kind: Service")
 	w("metadata:")
@@ -184,9 +231,10 @@ func generateK8sService(args []string, stdout io.Writer) error {
 		w("  # node - which sees a node's address, not the client's.")
 	}
 	w("  externalTrafficPolicy: %s", *policy)
-	key, val, _ := strings.Cut(*selector, "=")
 	w("  selector:")
-	w("    %s: %s", key, q(val))
+	for _, l := range sel {
+		w("    %s: %s", l.key, q(l.val))
+	}
 	w("  ports:")
 	for _, p := range ps {
 		w("    - name: %s-%d", p.proto, p.port)

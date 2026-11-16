@@ -57,6 +57,38 @@ On a director's node, pods cannot reach theLB's Services by their cluster IP eit
 A director that finds its own address on a node of the cluster refuses to start unless the node has the label `dmarts.app/thelb-director`.
 :::
 
+## Let generate read your cluster
+
+Without more, `thelb generate k8s` reads nothing: it prints files that fit any cluster, and its scripts find out what they need - with `kubectl` - when they run. Give it your kubeconfig, and it fits what it prints to your cluster instead:
+
+```bash
+sudo thelb generate k8s kubeconfig --from-kubeconfig ~/.kube/config > thelb.kubeconfig
+```
+
+It first says what it would read, with what, and asks:
+
+```text
+thelb generate k8s kubeconfig reads the Kubernetes cluster, to fit what it prints to it - read-only, with this:
+  kubeconfig   /home/me/.kube/config
+  context      kubernetes-admin@kubernetes
+  API server   https://10.0.0.21:6443
+  user         kubernetes-admin
+  it reads     the API server's version; the Secret thelb/thelb-director-token - its token and CA go into the kubeconfig; what that token may do, as a director would ask
+Read the cluster? [y/N]
+```
+
+It only reads - it never changes the cluster - and reads nothing before your `y`. `--from-context <name>` picks another context of the kubeconfig; `--yes` answers for you, in a script. Without a terminal and without `--yes`, it reads nothing.
+
+| Form | What it takes from the cluster |
+|---|---|
+| `generate k8s` | its version: 1.35 or later |
+| `generate k8s kubeconfig` | the kubeconfig itself, not a script - and checked: a director reaches the API server with it, and has every permission it needs |
+| `generate k8s director` | with kube-proxy, the API server's address for the pods (see [With kube-proxy](#with-kube-proxy)); which nodes it runs directors on |
+| `generate k8s node <node>` | just the steps the node needs: a control-plane node or a worker, with Cilium, with kube-proxy |
+| `generate k8s service <name>` | the selector and ports of the Deployment or StatefulSet of that name, unless `--selector` and `--port` say them; a warning when no pod matches; a refusal when a Service of that name has another load-balancer class, which Kubernetes does not let change |
+
+What the cluster says is checked before it goes into a file or a script - a version, a token, a label - so a broken API server cannot add a line to them. A kubeconfig user that signs in with a plugin (`exec`), as on most managed clusters, cannot be read: leave out `--from-kubeconfig`, and run the scripts where `kubectl` works. The steps below use the scripts; each `generate k8s` command in them takes `--from-kubeconfig` too.
+
 The examples use the control VIP `10.0.0.10:7443`, the network `10.0.0.0/24`, a pool from `10.0.0.50`, the machines `lb1` to `lb3`, the control-plane nodes `cp1` to `cp3`, and a Service `web` on port 80. Every file below is what `thelb generate k8s` prints - copy it, or download it.
 
 ## 1. One director outside the cluster
@@ -363,6 +395,14 @@ Never a node that is not `Ready`, a director's node, or a node labelled `node.ku
 kubectl label node worker1 node.kubernetes.io/exclude-from-external-load-balancers=true
 ```
 
+**kubeadm puts that label on control-plane nodes.** If pods run on a control-plane node - its taint taken off - they get no traffic from outside until the label is off too:
+
+```bash
+kubectl label node cp1 node.kubernetes.io/exclude-from-external-load-balancers-
+```
+
+When a node left out runs ready pods of a `Local` Service, the leader says so - in its log, and as a `NodesExcluded` warning on the Service, which `kubectl describe service` shows - with the node, its pods, why, and what to do.
+
 With `Local`, draining a node is enough: once it has no ready pod, its health port says `503`, and it gets no new connections. The leader logs each node that starts or stops serving:
 
 :::screen k8s-log
@@ -379,6 +419,12 @@ The Service gets its VIP; n2 loses its pod - its health port says 503 - and gets
 | `service.cilium.io/node-selector: "!dmarts.app/thelb-director"` | with Cilium and directors on nodes: Cilium leaves the Service to those nodes. |
 
 A dual-stack Service (`spec.ipFamilies`) gets one VIP for each family, from that family's pool.
+
+## A Service keeps its VIP
+
+A Service keeps its VIP for as long as it is theLB's. Its status keeps naming it even while no director runs - as with any load balancer that is down - so that DNS records and clients do not lose it. When the Service stops being theLB's (its type changed, say), the leader takes the VIP back and clears its status. A deleted Service gives its VIP back.
+
+The status is also the cluster's memory. theLB keeps its allocations in the directors' memory, so after **every** director has stopped, the new cluster knows none: each Service then takes again the address its status names - once its pool is back, and if nothing else answers for the address - and a new Service passes over the addresses other Services' statuses name. Create the pools again first, with your [saved commands](services.md#keeping-them-thelb-generate-commands).
 
 ## Changing the director nodes
 
@@ -440,6 +486,7 @@ Or run the directors on these nodes under systemd, with a kubeconfig.
 - **A Service has no `EXTERNAL-IP`.** `kubectl describe service <name>` shows theLB's events: `AllocationFailed` says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.
 - **A warning `NoDirectorExclusion`.** Directors run on labelled nodes, and the Service lacks the Cilium annotation.
 - **Nodes get no traffic.** `sudo thelb status backends` shows each node's check and weight. With `Local`, a node without a ready pod has weight 0 - by design.
+- **A node with pods is not in `thelb status backends` at all.** theLB leaves it out - `kubectl describe service <name>` shows a `NodesExcluded` warning that says why. Most often, kubeadm's label on a control-plane node: see [Which nodes get traffic](#which-nodes-get-traffic).
 - **A client's connection to the VIP hangs, and `thelb status backends` counts 0 packets.** A firewall on the leader drops the Service's port before IPVS sees it. Allow it to the VIP, on every director: `sudo ufw allow proto tcp from any to 10.0.0.50 port 80`.
 - **`thelb status`** shows, in the cluster table, how the director's watch of Kubernetes goes: the number of theLB Services, or what is wrong.
 

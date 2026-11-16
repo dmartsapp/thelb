@@ -17,16 +17,19 @@ import (
 
 // The names theLB reads in a cluster.
 const (
-	kubeClass         = "dmarts.app/thelb"
-	labelDirector     = "dmarts.app/thelb-director"
-	labelExclude      = "node.kubernetes.io/exclude-from-external-load-balancers"
-	annotationPool    = "dmarts.app/thelb-pool"
-	annotationIP      = "dmarts.app/thelb-ip"
-	annotationShare   = "dmarts.app/thelb-shared-vip"
-	annotationCilium  = "service.cilium.io/node-selector"
-	ingressModeVIP    = "VIP"
-	kubeReconcileEach = 10 * time.Second
+	kubeClass        = "dmarts.app/thelb"
+	labelDirector    = "dmarts.app/thelb-director"
+	labelExclude     = "node.kubernetes.io/exclude-from-external-load-balancers"
+	annotationPool   = "dmarts.app/thelb-pool"
+	annotationIP     = "dmarts.app/thelb-ip"
+	annotationShare  = "dmarts.app/thelb-shared-vip"
+	annotationCilium = "service.cilium.io/node-selector"
+	ingressModeVIP   = "VIP"
 )
+
+// kubeReconcileEach is how often the leader goes over every Service, beside
+// each change it hears of - unless Deps.KubeEvery says otherwise.
+const kubeReconcileEach = 10 * time.Second
 
 // kubeAccess is every permission a director serving Kubernetes needs - and
 // no more: it reads, and writes a Service's status, never a Service.
@@ -37,6 +40,10 @@ var kubeAccess = []kube.Access{
 	{Resource: "nodes", Verb: "get"}, {Resource: "nodes", Verb: "list"}, {Resource: "nodes", Verb: "watch"},
 	{Group: "events.k8s.io", Resource: "events", Verb: "create"}, {Group: "events.k8s.io", Resource: "events", Verb: "patch"},
 }
+
+// KubeAccess is every permission a director serving Kubernetes needs: for
+// thelb generate k8s kubeconfig to check a token against.
+func KubeAccess() []kube.Access { return slices.Clone(kubeAccess) }
 
 // kubeView is what a director serving Kubernetes knows of the cluster: every
 // director watches it, so a new leader knows it already; only the leader
@@ -203,7 +210,11 @@ func (s *session) readKubeState() kubeState {
 // director leads.
 func (s *session) kubeController(ctx context.Context) {
 	k := s.n.kube
-	said := map[string]string{} // by Service: the last event or warning, so each is said once
+	said := map[string]string{} // by Service and reason: the last event or warning, so each is said once
+	every := kubeReconcileEach
+	if s.n.d.KubeEvery > 0 {
+		every = s.n.d.KubeEvery
+	}
 	for {
 		changed := k.changed(ctx)
 		fsmChanged := s.fsm.Changed()
@@ -213,7 +224,7 @@ func (s *session) kubeController(ctx context.Context) {
 			return
 		case <-changed:
 		case <-fsmChanged:
-		case <-time.After(kubeReconcileEach):
+		case <-time.After(every):
 		}
 	}
 }
@@ -232,6 +243,15 @@ func (s *session) kubeReconcile(ctx context.Context, said map[string]string) {
 		}
 	}
 	ks := s.readKubeState()
+	nodes, slices := k.nodes.Items(), k.slices.Items()
+	directorAddrs := map[netip.Addr]bool{}
+	s.fsm.Read(func(st *cluster.State) {
+		for _, n := range st.Nodes {
+			if a, err := netip.ParseAddr(n.Address); err == nil && n.Role == "director" {
+				directorAddrs[a.Unmap()] = true
+			}
+		}
+	})
 	for _, key := range sortedNames(services) {
 		svc := services[key]
 		if !eligible(svc) {
@@ -254,7 +274,15 @@ func (s *session) kubeReconcile(ctx context.Context, said map[string]string) {
 				vips = append(vips, x.VIP)
 			}
 			s.log.OK("Kubernetes Service given its VIPs", "service", key, "vips", strings.Join(vips, ","))
+			delete(said, key+" AllocationFailed")
 			s.kubeSay(ctx, said, svc, false, "IPAllocated", "Allocate", "theLB gave it "+strings.Join(vips, ", "))
+		}
+		if k.nodes.Synced() && k.slices.Synced() {
+			if note := kubeExcludedPods(svc, nodes, slices, directorAddrs); note != "" {
+				s.kubeSay(ctx, said, svc, true, "NodesExcluded", "Check", note)
+			} else {
+				delete(said, key+" NodesExcluded") // said again if it happens again
+			}
 		}
 		if directorNodes && !strings.Contains(svc.Meta.Annotations[annotationCilium], labelDirector) {
 			s.kubeSay(ctx, said, svc, true, "NoDirectorExclusion", "Check",
@@ -275,7 +303,11 @@ func (s *session) kubeReconcile(ctx context.Context, said map[string]string) {
 			continue
 		}
 		s.log.OK("Kubernetes Service gone: its VIPs taken back", "service", key)
-		delete(said, key)
+		for k := range said {
+			if strings.HasPrefix(k, key+" ") {
+				delete(said, k)
+			}
+		}
 		if svc != nil && svc.Meta.UID == a.UID && ingressIs(svc, a) {
 			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			if err := k.c.SetIngress(cctx, svc.Meta.Namespace, svc.Meta.Name, nil); err != nil && !kube.IsNotFound(err) {
@@ -321,14 +353,14 @@ func sameAlloc(a, b cluster.KubeService) bool {
 	return a.Key == b.Key && a.UID == b.UID && a.Share == b.Share && slices.Equal(a.VIPs, b.VIPs)
 }
 
-// kubeSay logs a Service's news and writes it as an event - each only once,
-// until it changes.
+// kubeSay logs a Service's news and writes it as an event - each reason only
+// once, until its note changes.
 func (s *session) kubeSay(ctx context.Context, said map[string]string, svc *kube.Service, warning bool, reason, action, note string) {
-	key := svc.Meta.Key()
-	if said[key] == reason+" "+note {
+	key := svc.Meta.Key() + " " + reason
+	if said[key] == note {
 		return
 	}
-	said[key] = reason + " " + note
+	said[key] = note
 	if warning {
 		s.log.Warn("Kubernetes Service: "+note, "service", key, "reason", reason)
 	}
@@ -450,6 +482,15 @@ func (s *session) kubeVIP(svc *kube.Service, ks kubeState, pool cluster.Pool, as
 			}
 		}
 	}
+	// The address its status names, which theLB wrote: the cluster's memory of
+	// it after every director stopped - the allocations were in theirs only.
+	if !had && !ask.IsValid() {
+		for _, a := range statusVIPs(svc) {
+			if familyOf(a) == fam && pool.Contains(a) && ks.owner(a.String(), key) == "" && s.probe(a) == "" {
+				return a, ""
+			}
+		}
+	}
 	if ask.IsValid() {
 		if owner := ks.owner(ask.String(), key); owner != "" {
 			return netip.Addr{}, fmt.Sprintf("%s %s is %s's", annotationIP, ask, owner)
@@ -459,18 +500,42 @@ func (s *session) kubeVIP(svc *kube.Service, ks kubeState, pool cluster.Pool, as
 		}
 		return ask, ""
 	}
+	// The lowest free address - first passing over those other Services'
+	// statuses name, which they take back once the controller reaches them.
+	claimed := map[netip.Addr]bool{}
+	for k, o := range s.n.kube.services.Items() {
+		if k != key && eligible(o) {
+			for _, a := range statusVIPs(o) {
+				claimed[a] = true
+			}
+		}
+	}
 	first, _ := netip.ParseAddr(pool.First)
-	for i, a := 0, first; i < pool.Count; i, a = i+1, a.Next() {
-		if ks.owner(a.String(), key) != "" {
-			continue
+	for _, skipClaimed := range []bool{true, false} {
+		for i, a := 0, first; i < pool.Count; i, a = i+1, a.Next() {
+			if ks.owner(a.String(), key) != "" || (skipClaimed && claimed[a]) {
+				continue
+			}
+			if who := s.probe(a); who != "" {
+				s.log.Warn("a pool's address is in use on the network: skipped", "pool", pool.Name, "vip", a, "by", who)
+				continue
+			}
+			return a, ""
 		}
-		if who := s.probe(a); who != "" {
-			s.log.Warn("a pool's address is in use on the network: skipped", "pool", pool.Name, "vip", a, "by", who)
-			continue
-		}
-		return a, ""
 	}
 	return netip.Addr{}, fmt.Sprintf("the pool %s has no free address", pool.Name)
+}
+
+// statusVIPs are the addresses a Service's status names that theLB wrote -
+// with ipMode VIP.
+func statusVIPs(svc *kube.Service) []netip.Addr {
+	var out []netip.Addr
+	for _, in := range svc.Status.LoadBalancer.Ingress {
+		if a, err := netip.ParseAddr(in.IP); err == nil && in.IPMode == ingressModeVIP {
+			out = append(out, a.Unmap())
+		}
+	}
+	return out
 }
 
 // portClash is why the Service cannot share vip: a port another Service on it
@@ -521,34 +586,74 @@ type kubeTarget struct {
 func kubeTargets(nodes map[string]*kube.Node, directorAddrs map[netip.Addr]bool) []kubeTarget {
 	var out []kubeTarget
 	for _, name := range sortedNames(nodes) {
-		kn := nodes[name]
-		if !kn.Ready() {
-			continue
-		}
-		if _, ok := kn.Meta.Labels[labelExclude]; ok {
-			continue
-		}
-		if _, ok := kn.Meta.Labels[labelDirector]; ok {
-			continue
-		}
-		t := kubeTarget{name: name}
-		director := false
-		for _, typ := range []string{"InternalIP", "ExternalIP"} {
-			for _, a := range kn.Status.Addresses {
-				ip, err := netip.ParseAddr(a.Address)
-				if a.Type != typ || err != nil {
-					continue
-				}
-				ip = ip.Unmap()
-				director = director || directorAddrs[ip]
-				t.addrs = append(t.addrs, ip)
-			}
-		}
-		if !director && len(t.addrs) > 0 {
-			out = append(out, t)
+		if addrs, why := nodeExclusion(nodes[name], directorAddrs); why == "" {
+			out = append(out, kubeTarget{name: name, addrs: addrs})
 		}
 	}
 	return out
+}
+
+// nodeExclusion is a node's addresses, InternalIP first, and why theLB sends
+// it no Service's traffic - "" when it does.
+func nodeExclusion(kn *kube.Node, directorAddrs map[netip.Addr]bool) ([]netip.Addr, string) {
+	name := kn.Meta.Name
+	if !kn.Ready() {
+		return nil, name + " is not Ready"
+	}
+	if _, ok := kn.Meta.Labels[labelExclude]; ok {
+		return nil, fmt.Sprintf("%s has the label %s, which kubeadm puts on control-plane nodes; to send it traffic: kubectl label node %s %s-", name, labelExclude, name, labelExclude)
+	}
+	if _, ok := kn.Meta.Labels[labelDirector]; ok {
+		return nil, fmt.Sprintf("%s is a director's node, labelled %s: taint it, so that no pods run there", name, labelDirector)
+	}
+	var addrs []netip.Addr
+	for _, typ := range []string{"InternalIP", "ExternalIP"} {
+		for _, a := range kn.Status.Addresses {
+			ip, err := netip.ParseAddr(a.Address)
+			if a.Type != typ || err != nil {
+				continue
+			}
+			ip = ip.Unmap()
+			if directorAddrs[ip] {
+				return nil, fmt.Sprintf("a director of this cluster runs on %s, at %s: remove it from the cluster (thelb admin remove), or label the node %s and taint it", name, ip, labelDirector)
+			}
+			addrs = append(addrs, ip)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, name + " has no InternalIP or ExternalIP address"
+	}
+	return addrs, ""
+}
+
+// kubeExcludedPods says which nodes run ready pods of a Service with policy
+// Local - pods that get no traffic from outside, because theLB leaves their
+// node out - and why each is left out; "" when none does. Nodes that are not
+// Ready are left out of it: their pods stop being ready soon.
+func kubeExcludedPods(svc *kube.Service, nodes map[string]*kube.Node, slices map[string]*kube.EndpointSlice, directorAddrs map[netip.Addr]bool) string {
+	if svc.Spec.ExternalTrafficPolicy != "Local" {
+		return "" // with Cluster, the other nodes pass traffic to them
+	}
+	pods := map[string]int{}
+	for _, fam := range families(svc) {
+		for node, n := range localEndpoints(slices, svc, fam) {
+			pods[node] += n
+		}
+	}
+	var says []string
+	for _, name := range sortedNames(pods) {
+		kn := nodes[name]
+		if kn == nil || pods[name] == 0 || !kn.Ready() {
+			continue
+		}
+		if _, why := nodeExclusion(kn, directorAddrs); why != "" {
+			says = append(says, fmt.Sprintf("%d on %s - %s", pods[name], name, why))
+		}
+	}
+	if len(says) == 0 {
+		return ""
+	}
+	return "ready pods of this Service on nodes theLB sends no traffic to, so they get none from outside: " + strings.Join(says, "; ")
 }
 
 // localEndpoints counts each node's ready endpoints of a Service, in one

@@ -38,6 +38,19 @@ type Config struct {
 	TokenFile  string           // a file holding one, read for each request - a pod's rotates
 	Namespace  string           // the context's, or the pod's
 	Source     string           // where it came from, for messages
+	Context    string           // the kubeconfig's context it is, or ""
+	User       string           // the kubeconfig's user it signs in as, or ""
+}
+
+// AuthError is a kubeconfig user that signs in a way theLB does not: an exec
+// plugin, an auth provider, a username and password.
+type AuthError struct {
+	User   string
+	Method string
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("the user %q authenticates with %s, which theLB does not do: give it a ServiceAccount token - thelb generate k8s prints one", e.User, e.Method)
 }
 
 // Load reads a kubeconfig file, or - for InCluster - the pod's ServiceAccount.
@@ -45,11 +58,17 @@ func Load(path string) (*Config, error) {
 	if path == InCluster {
 		return inCluster()
 	}
+	return LoadContext(path, "")
+}
+
+// LoadContext reads a kubeconfig file's context: the one named, or - for "" -
+// its current context.
+func LoadContext(path, context string) (*Config, error) {
 	b, err := readFile(path)
 	if err != nil {
 		return nil, err
 	}
-	c, err := parseKubeconfig(b, filepath.Dir(path))
+	c, err := parseKubeconfig(b, filepath.Dir(path), context)
 	if err != nil {
 		return nil, fmt.Errorf("the kubeconfig %s: %w", path, err)
 	}
@@ -82,9 +101,9 @@ func inCluster() (*Config, error) {
 	return &Config{Server: u, RootCAs: pool, TokenFile: tokenFile, Namespace: strings.TrimSpace(string(ns)), Source: "the pod's ServiceAccount"}, nil
 }
 
-// parseKubeconfig reads a kubeconfig's current context: its cluster and user.
-// Files it names are relative to dir.
-func parseKubeconfig(b []byte, dir string) (*Config, error) {
+// parseKubeconfig reads a kubeconfig's context - the one named, or its current
+// context: its cluster and user. Files it names are relative to dir.
+func parseKubeconfig(b []byte, dir, context string) (*Config, error) {
 	doc, err := decodeYAML(b)
 	if err != nil {
 		return nil, err
@@ -93,9 +112,11 @@ func parseKubeconfig(b []byte, dir string) (*Config, error) {
 	if !ok {
 		return nil, errors.New("not a kubeconfig: no mapping at its top")
 	}
-	current := str(root["current-context"])
+	current := context
 	if current == "" {
-		return nil, errors.New("no current-context")
+		if current = str(root["current-context"]); current == "" {
+			return nil, errors.New("no current-context")
+		}
 	}
 	ctx := named(root["contexts"], current, "context")
 	if ctx == nil {
@@ -106,7 +127,7 @@ func parseKubeconfig(b []byte, dir string) (*Config, error) {
 	if cl == nil {
 		return nil, fmt.Errorf("the context %q names the cluster %q, which it does not have", current, clusterName)
 	}
-	c := &Config{Namespace: str(ctx["namespace"])}
+	c := &Config{Namespace: str(ctx["namespace"]), Context: current, User: userName}
 	server := str(cl["server"])
 	u, err := url.Parse(server)
 	if err != nil || u.Host == "" {
@@ -143,7 +164,7 @@ func parseKubeconfig(b []byte, dir string) (*Config, error) {
 	}
 	for _, unsupported := range []string{"exec", "auth-provider", "username", "password"} {
 		if us[unsupported] != nil {
-			return nil, fmt.Errorf("the user %q authenticates with %s, which theLB does not do: give it a ServiceAccount token - thelb generate k8s prints one", userName, unsupported)
+			return nil, &AuthError{User: userName, Method: unsupported}
 		}
 	}
 	c.Token = str(us["token"])

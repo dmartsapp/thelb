@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/ipvs"
@@ -210,6 +211,7 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 			{"addresses": []string{"10.1.0.5"}, "conditions": map[string]bool{"ready": true}, "nodeName": "n1"},
 			{"addresses": []string{"10.1.0.6"}, "nodeName": "n1"},
 			{"addresses": []string{"10.1.0.7"}, "conditions": map[string]bool{"ready": false}, "nodeName": "n2"},
+			{"addresses": []string{"10.1.0.8"}, "conditions": map[string]bool{"ready": true}, "nodeName": "n3"},
 		},
 	})
 
@@ -236,6 +238,12 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 	eventually(t, "the event", func() bool {
 		return f.saw("IPAllocated theLB gave it 10.0.0.50", func(f *fakeKube) []string { return f.events })
 	})
+	eventually(t, "a warning: n3's pod gets no traffic, and why", func() bool {
+		return f.saw("NodesExcluded ready pods of this Service on nodes theLB sends no traffic to, so they get none from outside: 1 on n3 - n3 has the label node.kubernetes.io/exclude-from-external-load-balancers, which kubeadm puts on control-plane nodes; to send it traffic: kubectl label node n3 node.kubernetes.io/exclude-from-external-load-balancers-", func(f *fakeKube) []string { return f.events })
+	})
+	if !strings.Contains(w.logs.String(), "WARN Kubernetes Service: ready pods of this Service on nodes theLB sends no traffic to") {
+		t.Errorf("the warning is not in the log:\n%s", w.logs)
+	}
 	eventually(t, "n1 serving with its two ready pods, n2 not", func() bool {
 		return plane.dest("10.0.0.50", 80, "127.0.0.1") == 2 && plane.dest("10.0.0.50", 80, "10.255.255.1") == 0
 	})
@@ -259,6 +267,18 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("services: %+v", st.Services)
+	}
+	time.Sleep(time.Second) // five more reconciles: each warning said once, not again and again
+	f.mu.Lock()
+	n := 0
+	for _, e := range f.events {
+		if strings.HasPrefix(e, "NodesExcluded ") {
+			n++
+		}
+	}
+	f.mu.Unlock()
+	if n != 1 {
+		t.Errorf("NodesExcluded said %d times", n)
 	}
 	var vipRow bool
 	for _, v := range st.VIPs {
@@ -308,5 +328,36 @@ func TestADirectorWithoutThePermissionsSaysWhich(t *testing.T) {
 	w.errc <- err
 	if err == nil || !strings.Contains(err.Error(), "lacks permissions theLB needs: patch services/status, watch nodes") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// After every director stopped, the new cluster knows no allocation: a Service
+// takes back the VIP its status names, and a new one does not take it first.
+func TestAServiceKeepsItsVIPAfterEveryDirectorStopped(t *testing.T) {
+	f := newFakeKube(t)
+	f.set("/api/v1/nodes", kubeNode("n1", "127.0.0.1", true, nil))
+	web := webService(30100, nil)
+	web["status"] = map[string]any{"loadBalancer": map[string]any{"ingress": []map[string]string{{"ip": "10.0.0.50", "ipMode": "VIP"}}}}
+	other := webService(30101, nil)
+	other["metadata"] = map[string]any{"name": "api", "namespace": "default", "uid": "u-api"} // sorts first: reached first
+	f.set("/api/v1/services", web, other)
+	f.set("/apis/discovery.k8s.io/v1/endpointslices")
+
+	w := single(t)
+	w.plane = &recPlane{}
+	w.cfg.Kubeconfig = "the test's"
+	w.kube = f.client()
+	w.start(t)
+	eventually(t, "it leads", func() bool { return strings.Contains(w.logs.String(), "OK control VIP taken") })
+	resp, err := localsock.Call(w.run, localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "pool.add", Pool: "k8s", VIP: "10.0.0.50/24", Count: 4, Default: true}})
+	if err != nil || resp.Error != "" {
+		t.Fatalf("pool: %v %s", err, resp.Error)
+	}
+	eventually(t, "web keeps 10.0.0.50, the lowest; api passes over it to 10.0.0.51", func() bool {
+		return f.saw(`/api/v1/namespaces/default/services/api/status {"status":{"loadBalancer":{"ingress":[{"ip":"10.0.0.51","ipMode":"VIP"}]}}}`, func(f *fakeKube) []string { return f.patches }) &&
+			strings.Contains(w.logs.String(), "OK Kubernetes Service given its VIPs service=default/web vips=10.0.0.50")
+	})
+	if f.saw("services/web/status", func(f *fakeKube) []string { return f.patches }) {
+		t.Error("web's status written again, though it names its VIP already")
 	}
 }

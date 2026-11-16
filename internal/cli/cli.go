@@ -128,7 +128,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "doctor":
 		return doctorCmd(rest, stdout)
 	case "generate":
-		return generateCmd(ctx, rest, stdout)
+		return generateCmd(ctx, rest, stdout, stderr)
 	case "offer":
 		return offerCmd(rest, stdout)
 	default: // admin
@@ -612,7 +612,7 @@ func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 }
 
-func generateCmd(ctx context.Context, args []string, stdout io.Writer) error {
+func generateCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return usagef("thelb generate: say what to generate: secret, commands, systemd, sysctl, modules or k8s")
 	}
@@ -642,7 +642,7 @@ func generateCmd(ctx context.Context, args []string, stdout io.Writer) error {
 	case "sysctl", "modules":
 		return generateBoot(args[0], args[1:], stdout)
 	case "k8s":
-		return generateK8s(ctx, args[1:], stdout)
+		return generateK8s(ctx, args[1:], stdout, stderr)
 	default:
 		return usagef("thelb generate: %q is not something theLB generates", args[0])
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,14 +136,14 @@ func TestKubeconfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tok"), []byte("filetoken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    token: abc")), dir)
+	c, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    token: abc")), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Server.String() != srv.URL || c.Token != "abc" || c.RootCAs == nil {
 		t.Fatalf("%+v", c)
 	}
-	c, err = parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    tokenFile: tok")), dir)
+	c, err = parseKubeconfig([]byte(kubeconfig(srv.URL, ca, "    tokenFile: tok")), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,17 +159,17 @@ func TestKubeconfig(t *testing.T) {
 		"    client-key-data: QQ==":        "without",
 		"    {}":                           "",
 	} {
-		_, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, user)), dir)
+		_, err := parseKubeconfig([]byte(kubeconfig(srv.URL, ca, user)), dir, "")
 		if err == nil || !strings.Contains(err.Error(), says) {
 			t.Errorf("%q: %v, want an error saying %q", user, err, says)
 		}
 	}
 	insecure := strings.Replace(kubeconfig(srv.URL, ca, "    token: a"), "    server:", "    insecure-skip-tls-verify: true\n    server:", 1)
-	if _, err := parseKubeconfig([]byte(insecure), dir); err == nil || !strings.Contains(err.Error(), "insecure") {
+	if _, err := parseKubeconfig([]byte(insecure), dir, ""); err == nil || !strings.Contains(err.Error(), "insecure") {
 		t.Errorf("insecure-skip-tls-verify: %v", err)
 	}
 	plain := kubeconfig(strings.Replace(srv.URL, "https", "http", 1), ca, "    token: a")
-	if _, err := parseKubeconfig([]byte(plain), dir); err == nil {
+	if _, err := parseKubeconfig([]byte(plain), dir, ""); err == nil {
 		t.Error("an http server: accepted")
 	}
 }
@@ -419,11 +420,39 @@ contexts:
       user: thelb-director
 current-context: thelb
 `, srv.URL, base64.StdEncoding.EncodeToString(testCA(t, srv)))
-	c, err := parseKubeconfig([]byte(in), t.TempDir())
+	c, err := parseKubeconfig([]byte(in), t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Token != "eyJhbGciOi.payload.sig" || c.Server.String() != srv.URL {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestLoadContextNamesWhichContext(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	ca := testCA(t, srv)
+	two := kubeconfig(srv.URL, ca, "    token: abc") + `- name: other
+  user:
+    exec:
+      command: some-plugin
+`
+	two = strings.Replace(two, "contexts:\n", "contexts:\n- name: plugged\n  context:\n    cluster: c\n    user: other\n", 1)
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(two), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadContext(path, "")
+	if err != nil || c.Context != "x" || c.User != "u" || c.Token != "abc" {
+		t.Fatalf("the current context: %+v %v", c, err)
+	}
+	_, err = LoadContext(path, "plugged")
+	var ae *AuthError
+	if !errors.As(err, &ae) || ae.User != "other" || ae.Method != "exec" {
+		t.Errorf("an exec user: %v", err)
+	}
+	if _, err := LoadContext(path, "nope"); err == nil || !strings.Contains(err.Error(), `no context named "nope"`) {
+		t.Errorf("a context it lacks: %v", err)
 	}
 }

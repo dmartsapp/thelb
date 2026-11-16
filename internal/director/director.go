@@ -118,6 +118,9 @@ type Deps struct {
 	// Kube is the client for the Kubernetes API, from Config.Kubeconfig; nil:
 	// kube.Load and kube.New.
 	Kube func(path string) (*kube.Client, error)
+	// KubeEvery is how often the leader goes over every Kubernetes Service,
+	// beside each change it hears of; 0: every 10 seconds.
+	KubeEvery time.Duration
 }
 
 // Timing. Variables, so that tests can shorten them.

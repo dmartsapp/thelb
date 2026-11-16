@@ -234,6 +234,7 @@ func (w *world) deps() Deps {
 		},
 		Preflight: w.preflight(),
 		Kube:      func(string) (*kube.Client, error) { return w.kube, nil },
+		KubeEvery: 200 * time.Millisecond,
 	}
 }
 
