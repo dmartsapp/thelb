@@ -74,6 +74,20 @@ Look at the leader's log for `backend not serving`. Its `reason=` says which con
 | `the director's check fails` | the directors cannot reach the application: check that it listens on all addresses, and that the firewall lets the directors in |
 | `it is stopping` | the backend is shutting down |
 
+### Clients get answers, but theLB counts nothing
+
+`thelb status backends` counts no packets, though clients reach the service - or it counted a few at first, then stopped. The clients' packets no longer come to the leader: something sends them straight to a backend. Look at a client's ARP table (`arp -an`, or `ip neigh`):
+
+```text
+? (10.0.0.11) at 3a:78:95:bc:89:82 on en0     <- a director
+? (10.0.0.21) at 3a:78:95:bc:89:82 on en0     <- a backend
+? (10.0.0.50) at 3a:78:95:bc:89:82 on en0     <- the VIP
+```
+
+**Many machines behind one MAC address** - often one with the second hex digit 2, 6, A or E - is a bridge that translates MAC addresses: a Wi-Fi extender or wireless bridge that the directors' and backends' machines - or their hypervisor - are plugged into. It learns which address lives behind which machine from what they send. A backend's reply comes from the VIP's address, so the bridge moves the VIP to that backend, and sends it the clients' next packets directly. A capture on the leader (`sudo tcpdump -ni eth0 host 10.0.0.50`) shows nothing while a client connects.
+
+Direct routing cannot work through such a bridge. Connect the machines by cable, or set the bridge to a mode that keeps MAC addresses (WDS, 4-address, access point). Clients on the same side of the bridge as the backends are not affected. Afterwards, the client's ARP table shows each machine's own MAC address, and the VIP at the leader's.
+
 ### A tunnelled service does not answer
 
 - Check that the backend has the `ipip` module (`sudo modprobe ipip`) and that IP protocol 4 from the directors is allowed.

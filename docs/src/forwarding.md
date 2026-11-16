@@ -34,6 +34,7 @@ In the lab: a tunnelled service, served by `b4` behind a router, and by `b1`.
 
 - **The `ipip` module**, and IP protocol 4 let through from the directors.
 - **Replies sent from the VIP's address.** The backend sends replies through its own router, with the VIP as the source address. A router or firewall that drops packets from "foreign" source addresses will drop them, and the service will not work. This is often called *source address validation*, *uRPF*, or a cloud's *source/destination check*. Allow the VIPs as source addresses on the backends' networks.
+- **No bridge that translates MAC addresses** between the clients and the backends. A Wi-Fi extender or wireless bridge in "client bridge" mode answers for every machine behind it with its own MAC address, and keeps a table of which address lives behind which machine - learnt from what they send. A backend's reply comes from the VIP's address, so the bridge decides the VIP lives on that backend, and sends the next packets straight to it, past the director. Clients still get answers, but theLB no longer sees them: no balancing, no failover. See [Clients get answers, but theLB counts nothing](troubleshooting.md#clients-get-answers-but-thelb-counts-nothing).
 
 On the backend, theLB:
 
