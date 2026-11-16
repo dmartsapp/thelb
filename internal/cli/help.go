@@ -165,6 +165,10 @@ work.
   thelb generate sysctl director|backend
   thelb generate modules director|backend
   thelb generate k8s [director <the flags it runs with>]
+  thelb generate k8s kubeconfig
+  thelb generate k8s service <name> [--namespace <ns>] [--port <port>[/tcp|udp|sctp][:<pods' port>]]...
+                     [--selector <key=value>] [--policy Local|Cluster] [--pool <pool>] [--ip <address>]
+                     [--shared-vip <key>]
 
 Prints a file's content, and writes nothing.
 
@@ -188,8 +192,11 @@ Prints a file's content, and writes nothing.
               runs directors on the nodes labelled dmarts.app/thelb-director:
               thelb generate k8s director --vip 10.0.0.10 --port 7443 ... \
                 --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml
-
-k8s comes later.
+              with kubeconfig, a script to run where kubectl works: it prints the
+              kubeconfig of directors outside the cluster, with the token of
+              theLB's ServiceAccount; with service, a Service of theLB's class
+              (default: port 80, the pods labelled app=<name>, policy Local):
+              thelb generate k8s service web > web-service.yaml
 `,
 	"admin": `Usage:
   thelb admin approve <name> ...
