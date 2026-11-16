@@ -533,7 +533,7 @@ def example_html(name, caption):
 def read_version():
     """The newest release the changelog names - "## v0.1.0 - ..." - so the pages show
     the release they describe, not the development build's 0.1.0-dev."""
-    m = re.search(r"^## v(\d+\.\d+\.\d+)\b", (ROOT / "CHANGELOG.md").read_text(), re.M)
+    m = re.search(r"^## v(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.]*)?) ", (ROOT / "CHANGELOG.md").read_text(), re.M)
     return m.group(1) if m else "dev"
 
 

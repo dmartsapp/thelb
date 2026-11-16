@@ -13,7 +13,7 @@ nav: Releasing
 |---|---|
 | A push to `main` or any branch | **nothing** - documentation and code go to `main` as they are written |
 | A pull request | nothing |
-| A tag `vX.Y.Z` | the **Release** workflow, and **Notify Slack** |
+| A tag `vX.Y.Z`, or a pre-release `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N` | the **Release** workflow, and **Notify Slack** |
 
 So a documentation change is just a commit to `main`: the site updates within a minute or two, and no workflow runs - see [This documentation](tech-docs.md).
 
@@ -44,6 +44,8 @@ So a documentation change is just a commit to `main`: the site updates within a 
 
 The tag must be on its `release/vX.Y` branch: the workflow checks, and stops if it is not.
 
+**A pre-release** - `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N` - is cut the same way, on the same `release/vX.Y` branch, with a changelog section `## vX.Y.Z-alpha.N - <date>`. Its GitHub release is marked a pre-release, which GitHub's "latest" skips, and its image is tagged with its own version only - never `X.Y` or `latest`.
+
 ## The Release workflow
 
 `.github/workflows/release.yaml` has four jobs:
@@ -52,7 +54,7 @@ The tag must be on its `release/vX.Y` branch: the workflow checks, and stops if 
 |---|---|
 | **check** | the tag is on its release branch; `make check` (with fixed versions of golangci-lint and govulncheck); the scripts' tests; `docs/build.py --check` |
 | **build** (amd64, arm, arm64) | builds the binary with `make dist-one`; attests its build provenance; writes its `.sha256`; writes its SBOMs (CycloneDX 1.6 and SPDX 2.3) and attests both |
-| **image** | copies the three binaries the build jobs attested into a container image for each platform (`linux/amd64`, `linux/arm/v7`, `linux/arm64`), on `distroless/static`, and pushes it to `ghcr.io/dmartsapp/thelb` as `X.Y.Z`, `X.Y` and `latest`, with BuildKit's SBOM and provenance and a signed attestation |
+| **image** | copies the three binaries the build jobs attested into a container image for each platform (`linux/amd64`, `linux/arm/v7`, `linux/arm64`), on `distroless/static`, and pushes it to `ghcr.io/dmartsapp/thelb` as `X.Y.Z`, `X.Y` and `latest` - a pre-release as its own version only - with BuildKit's SBOM and provenance and a signed attestation |
 | **publish** | collects every file, writes `SHA256SUMS`, and creates the GitHub release with the changelog's section as its notes - after the image, so a release never names an image that is not there |
 
 Every third-party action is pinned to a full commit hash. Jobs get only the permissions they need: the build jobs may sign attestations, the image job may push to the repository's packages, and only the publish job may write the release.

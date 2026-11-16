@@ -40,7 +40,7 @@ The kernel's connection-sync messages are not authenticated. A machine on the di
 
 ## Download a release
 
-Each [release](https://github.com/dmartsapp/thelb/releases/latest) has one binary for each processor:
+Each [release](https://github.com/dmartsapp/thelb/releases) has one binary for each processor:
 
 | File | For |
 |---|---|

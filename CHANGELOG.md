@@ -2,7 +2,9 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
-## v0.1.0 - unreleased
+## v0.1.0-alpha.1 - 2026-11-16
+
+**An alpha**: the first release, to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.
 
 The first code: a director on its own node; directors forming a cluster with Raft - joining, approval, the leader holding the control VIP, failover; and backends, pools, services and IPVS direct routing, with health checks from both sides.
 

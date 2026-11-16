@@ -11,7 +11,7 @@ nav: Overview
 <div class="hero-actions">
   <a class="btn primary" href="quickstart.html">Quick start</a>
   <a class="btn" href="install.html">Install theLB</a>
-  <a class="btn" href="https://github.com/dmartsapp/thelb/releases/latest">Download the latest release</a>
+  <a class="btn" href="https://github.com/dmartsapp/thelb/releases">Download a release</a>
 </div>
 :::
 

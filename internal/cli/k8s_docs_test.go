@@ -32,7 +32,7 @@ func TestTheDocsShowWhatGenerateK8sPrints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^## v(\d+\.\d+\.\d+)\b`).FindSubmatch(changelog)
+	m := regexp.MustCompile(`(?m)^## v(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.]*)?) `).FindSubmatch(changelog)
 	if m == nil {
 		t.Fatal("CHANGELOG.md names no release")
 	}
