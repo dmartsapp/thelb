@@ -5,8 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/dmartsapp/thelb/internal/cluster"
-	"github.com/dmartsapp/thelb/internal/hostnet"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -17,9 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/dmartsapp/thelb/internal/api"
 	"github.com/dmartsapp/thelb/internal/backend"
+	"github.com/dmartsapp/thelb/internal/cluster"
 	"github.com/dmartsapp/thelb/internal/director"
+	"github.com/dmartsapp/thelb/internal/hostnet"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/secret"
@@ -96,6 +99,12 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"admin", "assign", "nginx"},
 		{"admin", "assign", "nginx", "web-1:tcp/80", "--weight", "web-1"},
 		{"admin", "unassign", "nginx"},
+		{"admin", "frob"},
+		{"generate", "systemd", "router"},
+		{"generate", "sysctl"},
+		{"status", "--watch=sometimes"},
+		{"director", "-vip", "10.0.0.10"},
+		{"-version"},
 	} {
 		code, _, errOut := as(t, 0, args...)
 		if code != 2 {
@@ -608,68 +617,124 @@ func TestSystemdPathQuotesOnlyWhatReadWritePathsReads(t *testing.T) {
 	}
 }
 
-// TestTheHelpIsATree: thelb --help lists every command; a command's page
-// lists its subcommands, each with a page; each page names every option its
-// command reads - so that the help and the code do not drift apart.
+// TestTheHelpIsATree: every command has a page - thelb <words> --help, for
+// anyone - that begins with what it does and fits a terminal; thelb --help
+// lists every command in its group; a command that only groups others shows
+// its page alone; a mistake points at the page of what was typed. The flags
+// on each page are those the parser reads: cobra makes both from one
+// definition.
 func TestTheHelpIsATree(t *testing.T) {
-	for _, cmd := range commands() {
-		if !strings.Contains(helpText, "\n  "+cmd+" ") {
-			t.Errorf("thelb --help lacks %s", cmd)
+	root := (&app{ctx: context.Background(), stdout: io.Discard, stderr: io.Discard}).root()
+	_, top, _ := as(t, 1000, "--help")
+	for _, g := range []string{"Run a node:", "See and check:", "Change the cluster:", "Print files:", "Other commands:"} {
+		if !strings.Contains(top, "\n"+g+"\n") {
+			t.Errorf("thelb --help lacks the group %q:\n%s", g, top)
 		}
 	}
-	for page, h := range helpPages {
-		if !strings.HasPrefix(h, "Usage: thelb "+page) {
-			t.Errorf("the page %q does not begin with its usage: %.60q", page, h)
+	pages := 0
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c.Hidden || c.Name() == "completion" || c.Name() == "help" {
+			return // cobra's own, and what this build does not have yet
 		}
-		if !strings.HasSuffix(h, "\n") || strings.Contains(h, "\t") {
-			t.Errorf("the page %q: tabs, or no final newline", page)
+		words := strings.Fields(c.CommandPath())[1:]
+		if c.Short == "" || c.Long == "" {
+			t.Errorf("%q has no Short or no Long", c.CommandPath())
 		}
-		for _, line := range strings.Split(h, "\n") {
-			if len([]rune(line)) > 100 {
-				t.Errorf("the page %q has a line of %d characters: %q", page, len([]rune(line)), line)
+		code, out, errOut := as(t, 1000, append(slices.Clone(words), "--help")...)
+		if code != 0 || !strings.Contains(out, "\nUsage:\n  "+c.CommandPath()) {
+			t.Errorf("%v --help: exit %d, %q %q", words, code, out, errOut)
+		}
+		if _, viaHelp, _ := as(t, 1000, append([]string{"help"}, words...)...); viaHelp != out {
+			t.Errorf("thelb help %v is not thelb %v --help", words, words)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if len([]rune(line)) > 100 || strings.Contains(line, "\t") {
+				t.Errorf("the page of %v has a tab, or a line of %d characters: %q", words, len([]rune(line)), line)
 			}
+		}
+		if c.Parent() == root && !strings.Contains(top, "\n  "+c.Name()+" ") {
+			t.Errorf("thelb --help lacks %s", c.Name())
+		}
+		if c.Annotations[annGroup] != "" {
+			if code, bare, _ := as(t, 1000, words...); code != 0 || bare != out {
+				t.Errorf("%v alone: exit %d, %.60q", words, code, bare)
+			}
+		}
+		pages++
+		for _, s := range c.Commands() {
+			walk(s)
 		}
 	}
-	for group := range helpGroups {
-		for _, line := range strings.Split(strings.SplitN(helpPages[group], "Subcommands:\n", 2)[1], "\n") {
-			if !strings.HasPrefix(line, "  ") {
-				break
-			}
-			if sub := group + " " + strings.Fields(line)[0]; helpPages[sub] == "" {
-				t.Errorf("%s is listed, and has no page", sub)
-			}
-		}
+	for _, c := range root.Commands() {
+		walk(c)
 	}
-	for page, flags := range map[string][]string{
-		"director":             {"--vip", "--port", "--secret-file", "--backend-secret-file", "--bootstrap", "--bootstrap-wait", "--cluster", "--name", "--interface", "--metrics", "--kubeconfig", "--debug"},
-		"backend":              {"--join", "--secret-file", "--offer", "--name", "--interface", "--metrics"},
-		"status":               {"--json", "--watch", "--role"},
-		"doctor":               {"--role", "--vip", "--port", "--json"},
-		"admin approve":        {"--match", "--yes"},
-		"admin pool add":       {"--vip", "--vippool-count", "--interface", "--default"},
-		"admin service add":    {"--proto", "--port", "--pool", "--vip", "--scheduler", "--method"},
-		"admin assign":         {"--weight"},
-		"admin secret":         {"--role"},
-		"generate k8s":         {"--from-kubeconfig", "--from-context", "--yes"},
-		"generate k8s service": {"--namespace", "--port", "--selector", "--policy", "--pool", "--ip", "--shared-vip"},
-	} {
-		for _, f := range flags {
-			if !strings.Contains(helpPages[page], f+" ") && !strings.Contains(helpPages[page], f+"\n") {
-				t.Errorf("the page %q lacks %s", page, f)
-			}
-		}
-	}
-	// Bare, a command that needs a subcommand shows its page - for anyone.
-	for _, args := range [][]string{{"admin"}, {"admin", "pool"}, {"offer"}, {"generate"}} {
-		if code, out, _ := as(t, 1000, args...); code != 0 || out != helpPages[strings.Join(args, " ")] {
-			t.Errorf("%v: exit %d, %.40q", args, code, out)
-		}
+	if pages < 30 {
+		t.Errorf("%d pages", pages)
 	}
 	// A mistake points at the page of what was typed.
 	if code, _, errOut := as(t, 0, "admin", "pool", "add", "main", "--vip", "nonsense", "--vippool-count", "3"); code != 2 || !strings.Contains(errOut, "Run 'thelb admin pool add --help' for usage.") {
 		t.Errorf("exit %d, %q", code, errOut)
 	}
+	if code, _, errOut := as(t, 0, "admin", "pol"); code != 2 || !strings.Contains(errOut, `"pol" is not a subcommand of thelb admin - did you mean pool?`) {
+		t.Errorf("admin pol: exit %d, %q", code, errOut)
+	}
 	if code, _, _ := as(t, 1000, "help", "nonsense"); code != 2 {
 		t.Errorf("help nonsense: exit %d", code)
 	}
+}
+
+// TestFlagGroups: the flags each command needs, and those that go together,
+// are checked before it runs - after the check for root.
+func TestFlagGroups(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		says string
+	}{
+		{[]string{"director", "--vip", "10.0.0.10"}, `required flag(s) "port", "secret-file", "backend-secret-file" not set`},
+		{[]string{"backend", "--join", "10.0.0.10:7443"}, `required flag(s) "secret-file" not set`},
+		{[]string{"admin", "secret", "show"}, `required flag(s) "role" not set`},
+		{[]string{"admin", "approve", "--match", "web-.*", "web-1"}, "names or --match, not both"},
+		{[]string{"admin", "approve", "--yes", "web-1"}, "--yes goes with --match"},
+		{[]string{"generate", "k8s", "node", "n1", "--from-context", "x"}, "--from-context names a context of --from-kubeconfig"},
+		{[]string{"generate", "k8s", "service", "web", "--yes"}, "--yes says to read the cluster without asking"},
+	} {
+		code, _, errOut := as(t, 0, c.args...)
+		if code != 2 || !strings.Contains(errOut, c.says) {
+			t.Errorf("%v: exit %d, %q - want %q", c.args, code, errOut, c.says)
+		}
+	}
+	// Flags may come after the arguments, as anywhere in the help.
+	code, out, errOut := as(t, 0, "generate", "k8s", "service", "web", "--namespace", "shop", "--port", "80:8080")
+	if code != 0 || !strings.Contains(out, "namespace: shop") || !strings.Contains(out, "targetPort: 8080") {
+		t.Errorf("flags after the name: exit %d, %q", code, errOut)
+	}
+}
+
+// TestGeneratedUnitsKeepTheFlags: what generate systemd puts on ExecStart= is
+// the flags given - each once, in the order the help shows them.
+func TestGeneratedUnitsKeepTheFlags(t *testing.T) {
+	saved := executable
+	executable = func() (string, error) { return "/usr/local/bin/thelb", nil }
+	t.Cleanup(func() { executable = saved })
+	code, out, errOut := as(t, 0, "generate", "systemd", "director", "--port=7443", "--vip", "10.0.0.10", "--secret-file", "/etc/thelb/d",
+		"--backend-secret-file", "/etc/thelb/b", "--bootstrap", "--debug")
+	if code != 0 || !strings.Contains(out, "ExecStart=/usr/local/bin/thelb director --vip 10.0.0.10 --port 7443 --secret-file /etc/thelb/d --backend-secret-file /etc/thelb/b --bootstrap --debug\n") {
+		t.Errorf("exit %d %s:\n%s", code, errOut, out)
+	}
+	code, out, errOut = as(t, 0, "generate", "systemd", "backend", "--join", "10.0.0.10:7443", "--secret-file", "/etc/thelb/b", "--offer", "web=tcp/80,check=http:/", "--offer", "udp/53")
+	if code != 0 || !strings.Contains(out, "ExecStart=/usr/local/bin/thelb backend --join 10.0.0.10:7443 --secret-file /etc/thelb/b --offer web=tcp/80,check=http:/ --offer udp/53\n") {
+		t.Errorf("exit %d %s:\n%s", code, errOut, out)
+	}
+}
+
+// directorConfig reads thelb director's flags, as the director does.
+func directorConfig(ctx context.Context, _ string, args []string) (director.Config, error) {
+	var f directorFlags
+	c := &cobra.Command{Use: "director"}
+	f.add(c)
+	if err := c.ParseFlags(args); err != nil {
+		return director.Config{}, err
+	}
+	return f.config(ctx, false)
 }

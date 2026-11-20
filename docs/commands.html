@@ -33,10 +33,15 @@
 <h1>Commands</h1>
 <p class="lead">Every theLB command and flag on one page.</p>
 <h2 id="overview">Overview<a class="anchor" href="#overview" aria-label="Link to this section">#</a></h2>
-<p>Every command except <code>--help</code> and <code>--version</code> runs only as root. The exit status is <code>0</code> when it worked, <code>1</code> when it failed, and <code>2</code> when the command was used wrongly. <code>thelb --help</code> lists the commands; <code>thelb &lt;command&gt; --help</code> lists a command's subcommands, or its options; <code>thelb &lt;command&gt; &lt;subcommand&gt; --help</code> shows one subcommand's usage, options and examples - <code>thelb admin service add --help</code>, <code>thelb generate k8s service --help</code>. <code>thelb help &lt;command&gt; [&lt;subcommand&gt;]</code> shows the same. A command that needs a subcommand - <code>thelb admin</code>, <code>thelb generate</code>, <code>thelb offer</code> - shows its page when given none. Arguments with control characters are refused before any command reads them (<a href="security.html#what-thelb-checks">What theLB checks</a>).</p>
+<p>A command line is <code>thelb [global flags] &lt;command&gt; [&lt;subcommand&gt; ...] [flags] [arguments]</code>, as in most tools. Flags go before or after the arguments - <code>thelb admin pool add main --vip 10.10.1.20/24 --vippool-count 10</code> and <code>thelb admin pool add --vip 10.10.1.20/24 --vippool-count 10 main</code> are the same - and take a value as <code>--port 7443</code> or <code>--port=7443</code>. Long flags have two dashes.</p>
+<p>Every command except <code>--help</code>, <code>--version</code> and <code>completion</code> runs only as root. The exit status is <code>0</code> when it worked, <code>1</code> when it failed, and <code>2</code> when the command was used wrongly: a command, flag or argument theLB does not take, or a required flag missing. A command that groups others - <code>thelb admin</code>, <code>thelb generate</code>, <code>thelb offer</code>, <code>thelb admin pool</code> - shows its page when given none. Arguments with control characters are refused before any command reads them (<a href="security.html#what-thelb-checks">What theLB checks</a>).</p>
+<p><strong>The help.</strong> <code>thelb --help</code> lists the commands, in groups; <code>thelb &lt;command&gt; --help</code> shows a command: what it does, its usage, examples, subcommands and flags - the flags in sections where there are many. <code>thelb help &lt;command&gt; [&lt;subcommand&gt;]</code> shows the same. Each page lists, under <strong>Global flags</strong>, the flags every command takes, and under <strong>Flags of thelb generate k8s</strong> those every form of <code>generate k8s</code> takes.</p>
+<p><strong>Global flags</strong>, on every command:</p>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>-h</code>, <code>--help</code></td><td>show the command's help</td></tr><tr><td><code>--debug</code></td><td>say more: a director logs each connection it forwards while leading (<a href="monitoring.html#each-connection-with-debug"><code>--debug</code></a>); <code>status</code>, <code>doctor</code>, <code>admin</code>, <code>offer</code> and <code>generate commands</code> say on standard error what they ask the theLB running on this machine, and how long it took to answer. A backend has nothing more to say yet</td></tr></tbody></table></div>
+<p><strong>Shell completion.</strong> <code>thelb completion bash|zsh|fish|powershell</code> prints the completion script of a shell - commands, subcommands, flags and their values. For bash: <code>thelb completion bash | sudo tee /etc/bash_completion.d/thelb</code>; <code>thelb completion bash --help</code> says more.</p>
 <div class="codeblock lang-text"><div class="codebar"><span class="codelabel">Output</span></div><pre><code>thelb director --vip &lt;address|name&gt; --port &lt;port&gt; --secret-file &lt;file&gt; --backend-secret-file &lt;file&gt;
                [--bootstrap [--bootstrap-wait &lt;duration&gt;]] [--cluster &lt;name&gt;] [--name &lt;name&gt;] [--interface &lt;name&gt;]
-               [--metrics &lt;address:port&gt;] <span class="tok-mod">[--debug]</span> [--kubeconfig &lt;file&gt;|in-cluster]
+               [--metrics &lt;address:port&gt;] [--kubeconfig &lt;file&gt;|in-cluster]
 thelb backend  --join &lt;address|name&gt;:&lt;port&gt; --secret-file &lt;file&gt; [--offer [&lt;name&gt;=]&lt;proto&gt;/&lt;port&gt;[,<span class="tok-key">check</span>=tcp|none|http:&lt;path&gt;] ...]
                [--name &lt;name&gt;] [--interface &lt;name&gt;] [--metrics &lt;address:port&gt;]
 thelb offer add &lt;name&gt; &lt;proto&gt;/&lt;port&gt;[,<span class="tok-key">check</span>=tcp|none|http:&lt;path&gt;]      (on a backend)
@@ -61,10 +66,14 @@ thelb admin assign &lt;service&gt; &lt;node&gt;:&lt;offer&gt; ... [--weight &lt;
 thelb admin unassign &lt;service&gt; &lt;node&gt;
 thelb admin lease &lt;seconds&gt;
 thelb admin secret show --role director|backend
-thelb --version</code></pre></div>
+thelb completion bash|zsh|fish|powershell
+thelb help [&lt;command&gt; ...]
+thelb --version
+
+Global flags, on every command: <span class="tok-mod">[--debug]</span> [-h|--help]</code></pre></div>
 <h2 id="thelb-director"><code>thelb director</code><a class="anchor" href="#thelb-director" aria-label="Link to this section">#</a></h2>
 <p>Runs a director. See <a href="directors.html">Directors and failover</a>.</p>
-<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--vip</code></td><td>the control VIP: an unused address in the directors' network, or a name that resolves to one</td></tr><tr><td><code>--port</code></td><td>the control port, TCP</td></tr><tr><td><code>--secret-file</code>, <code>--backend-secret-file</code></td><td>the two secret files - absolute paths, two different files</td></tr><tr><td><code>--bootstrap</code></td><td>create the cluster if none is found after 5 seconds (and any missing secret file)</td></tr><tr><td><code>--cluster</code></td><td>the cluster's name, when this director creates it; <code>thelb</code> by default</td></tr><tr><td><code>--name</code></td><td>this node's name; the hostname by default</td></tr><tr><td><code>--interface</code></td><td>the control VIP's interface, when it is not the one in its network</td></tr><tr><td><code>--metrics</code></td><td>serve <a href="monitoring.html#metrics">Prometheus metrics</a> on this address and port; not <code>0.0.0.0</code> or <code>::</code></td></tr><tr><td><code>--debug</code></td><td>log each new connection while leading - see <a href="monitoring.html#each-connection-with-debug"><code>--debug</code></a></td></tr><tr><td><code>--kubeconfig</code></td><td>serve <a href="kubernetes.html">Kubernetes</a> Services of class <code>dmarts.app/thelb</code>, with this credential: a kubeconfig file (an absolute path), or <code>in-cluster</code> for a pod's ServiceAccount</td></tr><tr><td><code>--bootstrap-wait</code></td><td>with <code>--bootstrap</code>: how long to look for the cluster before creating one (default <code>5s</code>; <code>5s</code> to <code>10m</code>). A director in a pod uses <code>31s</code> or more - see <a href="kubernetes.html#3b-as-a-daemonset">Kubernetes</a></td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--vip</code></td><td>the control VIP: an unused address in the directors' network, or a name that resolves to one</td></tr><tr><td><code>--port</code></td><td>the control port, TCP</td></tr><tr><td><code>--secret-file</code>, <code>--backend-secret-file</code></td><td>the two secret files - absolute paths, two different files</td></tr><tr><td><code>--bootstrap</code></td><td>create the cluster if none is found after 5 seconds (and any missing secret file)</td></tr><tr><td><code>--cluster</code></td><td>the cluster's name, when this director creates it; <code>thelb</code> by default</td></tr><tr><td><code>--name</code></td><td>this node's name; the hostname by default</td></tr><tr><td><code>--interface</code></td><td>the control VIP's interface, when it is not the one in its network</td></tr><tr><td><code>--metrics</code></td><td>serve <a href="monitoring.html#metrics">Prometheus metrics</a> on this address and port; not <code>0.0.0.0</code> or <code>::</code></td></tr><tr><td><code>--kubeconfig</code></td><td>serve <a href="kubernetes.html">Kubernetes</a> Services of class <code>dmarts.app/thelb</code>, with this credential: a kubeconfig file (an absolute path), or <code>in-cluster</code> for a pod's ServiceAccount</td></tr><tr><td><code>--bootstrap-wait</code></td><td>with <code>--bootstrap</code>: how long to look for the cluster before creating one (default <code>5s</code>; <code>5s</code> to <code>10m</code>). A director in a pod uses <code>31s</code> or more - see <a href="kubernetes.html#3b-as-a-daemonset">Kubernetes</a></td></tr></tbody></table></div>
 <h2 id="thelb-backend"><code>thelb backend</code><a class="anchor" href="#thelb-backend" aria-label="Link to this section">#</a></h2>
 <p>Runs a backend. See <a href="backends.html">Backends and offers</a>.</p>
 <div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--join</code></td><td>the control VIP and port, <code>address:port</code></td></tr><tr><td><code>--secret-file</code></td><td>the backend secret file</td></tr><tr><td><code>--offer</code></td><td>an application to offer, <code>[name=]proto/port[,check=...]</code>; repeat for more</td></tr><tr><td><code>--name</code>, <code>--interface</code>, <code>--metrics</code></td><td>as for a director</td></tr></tbody></table></div>
@@ -78,32 +87,48 @@ thelb --version</code></pre></div>
 <div class="tablewrap"><table><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--role</code></td><td>check for this role only; by default, the roles running here, or both</td></tr><tr><td><code>--vip</code>, <code>--port</code></td><td>the control VIP and port, where no director runs yet - for the plan and the firewall commands</td></tr><tr><td><code>--json</code></td><td>JSON instead of a table</td></tr></tbody></table></div>
 <h2 id="thelb-generate"><code>thelb generate</code><a class="anchor" href="#thelb-generate" aria-label="Link to this section">#</a></h2>
 <p>Prints something for you to keep or install. It never changes the machine.</p>
-<div class="tablewrap"><table><thead><tr><th>Command</th><th>Prints</th></tr></thead><tbody><tr><td><code>generate secret</code></td><td>a new secret, for a secret file</td></tr><tr><td><code>generate commands</code></td><td>the <code>thelb admin</code> commands that create the cluster's pools, services and assignments again - <a href="services.html#keeping-them-thelb-generate-commands">Keeping them</a></td></tr><tr><td><code>generate systemd director|backend &lt;flags&gt;</code></td><td>a systemd unit - <a href="systemd.html">Running under systemd</a></td></tr><tr><td><code>generate sysctl director|backend</code></td><td>the kernel settings theLB sets, for <code>/etc/sysctl.d</code></td></tr><tr><td><code>generate modules director|backend</code></td><td>the kernel modules theLB uses, for <code>/etc/modules-load.d</code></td></tr><tr><td><code>generate k8s</code></td><td>the directors' identity and permissions in a Kubernetes cluster - <a href="kubernetes.html#1-one-director-outside-the-cluster">Kubernetes</a></td></tr><tr><td><code>generate k8s kubeconfig</code></td><td>a script that builds the kubeconfig of directors outside the cluster - <a href="kubernetes.html#1-one-director-outside-the-cluster">Kubernetes</a></td></tr><tr><td><code>generate k8s director &lt;flags&gt;</code></td><td>the same identity, and a DaemonSet that runs directors with those flags on the nodes labelled for them - <a href="kubernetes.html#3b-as-a-daemonset">Kubernetes</a></td></tr><tr><td><code>generate k8s node &lt;name&gt;</code></td><td>a script that makes a node a director's node: kept for theLB, its label, kube-proxy off it, Cilium told - <a href="kubernetes.html#3-one-director-on-a-node">Kubernetes</a>. The nodes that only receive traffic need nothing</td></tr><tr><td><code>generate k8s service &lt;name&gt; [flags]</code></td><td>a Service of theLB's class - <a href="kubernetes.html#services">Kubernetes</a></td></tr></tbody></table></div>
+<div class="tablewrap"><table><thead><tr><th>Command</th><th>Prints</th></tr></thead><tbody><tr><td><code>generate secret</code></td><td>a new secret, for a secret file</td></tr><tr><td><code>generate commands</code></td><td>the <code>thelb admin</code> commands that create the cluster's pools, services and assignments again - <a href="services.html#keeping-them-thelb-generate-commands">Keeping them</a></td></tr><tr><td><code>generate systemd director|backend &lt;flags&gt;</code></td><td>a systemd unit that runs the role with those flags - the role's own, checked as it checks them; on <code>ExecStart=</code> in the order the help lists them - <a href="systemd.html">Running under systemd</a></td></tr><tr><td><code>generate sysctl director|backend</code></td><td>the kernel settings theLB sets, for <code>/etc/sysctl.d</code></td></tr><tr><td><code>generate modules director|backend</code></td><td>the kernel modules theLB uses, for <code>/etc/modules-load.d</code></td></tr><tr><td><code>generate k8s</code></td><td>the directors' identity and permissions in a Kubernetes cluster - <a href="kubernetes.html#1-one-director-outside-the-cluster">Kubernetes</a></td></tr><tr><td><code>generate k8s kubeconfig</code></td><td>a script that builds the kubeconfig of directors outside the cluster - <a href="kubernetes.html#1-one-director-outside-the-cluster">Kubernetes</a></td></tr><tr><td><code>generate k8s director &lt;flags&gt;</code></td><td>the same identity, and a DaemonSet that runs directors with those flags on the nodes labelled for them - <a href="kubernetes.html#3b-as-a-daemonset">Kubernetes</a></td></tr><tr><td><code>generate k8s node &lt;name&gt;</code></td><td>a script that makes a node a director's node: kept for theLB, its label, kube-proxy off it, Cilium told - <a href="kubernetes.html#3-one-director-on-a-node">Kubernetes</a>. The nodes that only receive traffic need nothing</td></tr><tr><td><code>generate k8s service &lt;name&gt; [flags]</code></td><td>a Service of theLB's class - <a href="kubernetes.html#services">Kubernetes</a></td></tr></tbody></table></div>
 <h2 id="thelb-admin"><code>thelb admin</code><a class="anchor" href="#thelb-admin" aria-label="Link to this section">#</a></h2>
 <p>Changes the cluster. Runs on a director; on a director that is not the leader, the change goes to the leader, recorded under that director's name.</p>
 <div class="tablewrap"><table><thead><tr><th>Command</th><th>Does</th></tr></thead><tbody><tr><td><code>approve &lt;name&gt; ...</code> / <code>--match '&lt;regex&gt;' [--yes]</code></td><td>approve waiting nodes - <a href="approval.html">Secrets and approval</a></td></tr><tr><td><code>refuse &lt;name&gt;</code></td><td>refuse a waiting node; it stops</td></tr><tr><td><code>remove &lt;name&gt;</code></td><td>remove a member; its certificate is revoked</td></tr><tr><td><code>pool add</code> / <code>pool remove</code></td><td><a href="services.html#pools">pools</a></td></tr><tr><td><code>service add</code> / <code>service remove</code></td><td><a href="services.html#services">services</a></td></tr><tr><td><code>assign</code> / <code>unassign</code></td><td><a href="services.html#assignments">assignments</a>; an offer is <code>node:name</code> or <code>node:proto/port</code></td></tr><tr><td><code>lease &lt;seconds&gt;</code></td><td>the VIP lease, 3 to 3600 seconds - <a href="directors.html#the-leader-and-the-vip-lease">The leader and the VIP lease</a></td></tr><tr><td><code>secret show --role director|backend</code></td><td>print a secret, to repair a node's file</td></tr></tbody></table></div>
 <h2 id="thelb-help"><code>thelb --help</code><a class="anchor" href="#thelb-help" aria-label="Link to this section">#</a></h2>
-<figure class="screen"><img src="assets/screens/help.svg" width="676" height="466" alt="The built-in help." loading="lazy"><figcaption>The built-in help.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --help
-Usage: thelb &lt;command&gt; [&lt;subcommand&gt;] [options]
-
+<figure class="screen"><img src="assets/screens/help.svg" width="700" height="754" alt="The built-in help." loading="lazy"><figcaption>The built-in help.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ thelb --help
 theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
 
-Commands:
+Directors balance a VIP's connections over backends with the kernel's IPVS -
+direct routing or IP-in-IP - and agree on who holds which VIP with Raft.
+Backends offer their applications; directors assign them to services.
+
+Usage:
+  thelb &lt;command&gt; [flags]
+
+Run a node:
   director    Run this node as a director
   backend     Run this node as a backend
+
+See and check:
   status      Show the cluster, as this node sees it
   doctor      Check this node for theLB, and say what to fix
-  offer       Offer an application to the cluster, or withdraw it (on a backend)
-  generate    Print a file theLB needs - it writes nothing
+
+Change the cluster:
   admin       Change the cluster (on a director)
+  offer       Offer an application to the cluster, or withdraw it (on a backend)
+
+Print files:
+  generate    Print a file theLB needs - it writes nothing
+
+Other commands:
+  completion  Print the completion script of a shell: bash, zsh, fish or powershell
   help        Show the help of a command
 
-Options:
-  -h, --help       Show this help
-  -v, --version    Show the version, the commit, Go and the platform
+Flags:
+  -v, --version   Show the version, the commit, Go and the platform
+  -h, --help      Show the help
+      --debug     Say more: a director logs each connection it forwards,
+                  and the commands that ask the theLB running here say
+                  what they ask, on standard error
 
 Run 'thelb &lt;command&gt; --help' for more about a command.
-Every command but help and --version runs as root.
 
 Documentation: https://dmartsapp.github.io/thelb/</code></pre></details></figure>
 </article>

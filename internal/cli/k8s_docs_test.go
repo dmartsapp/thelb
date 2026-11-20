@@ -144,17 +144,19 @@ func TestHelpOfGenerateK8s(t *testing.T) {
 		{[]string{"generate", "--help"}, "generate"},
 	} {
 		code, out, _ := as(t, 1000, c.args...)
-		if code != 0 || out != helpPages[c.page] {
+		if code != 0 || !strings.Contains(out, "\nUsage:\n  thelb "+c.page) {
 			t.Errorf("%v: exit %d, not the %s page:\n%s", c.args, code, c.page, out)
 		}
 	}
-	// Every form is listed, and each has its page.
-	for _, form := range []string{"kubeconfig", "director", "node <name>", "service <name>"} {
-		if !strings.Contains(helpPages["generate k8s"], "  "+form) {
-			t.Errorf("the k8s page lacks the form %q", form)
+	// Every form is listed; every form takes generate k8s's own flags.
+	_, page, _ := as(t, 1000, "generate", "k8s", "--help")
+	for _, form := range []string{"kubeconfig", "director", "node", "service"} {
+		if !strings.Contains(page, "\n  "+form+" ") {
+			t.Errorf("the k8s page lacks the form %q:\n%s", form, page)
 		}
-		if helpPages["generate k8s "+strings.Fields(form)[0]] == "" {
-			t.Errorf("the form %q has no page", form)
+		_, sub, _ := as(t, 1000, "generate", "k8s", form, "--help")
+		if !strings.Contains(sub, "Flags of thelb generate k8s:") || !strings.Contains(sub, "--from-kubeconfig path") {
+			t.Errorf("the page of %s lacks generate k8s's flags:\n%s", form, sub)
 		}
 	}
 }

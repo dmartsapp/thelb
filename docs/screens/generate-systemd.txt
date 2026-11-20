@@ -12,7 +12,7 @@ Wants=network-online.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret --bootstrap
 Restart=always
 # Longer than the other of two directors takes to stand alone after a crash -
 # the control VIP's lease (6 s unless set) and about 15 s more: back sooner,

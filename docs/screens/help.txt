@@ -1,24 +1,40 @@
 d1
 $ thelb --help
-Usage: thelb <command> [<subcommand>] [options]
-
 theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
 
-Commands:
+Directors balance a VIP's connections over backends with the kernel's IPVS -
+direct routing or IP-in-IP - and agree on who holds which VIP with Raft.
+Backends offer their applications; directors assign them to services.
+
+Usage:
+  thelb <command> [flags]
+
+Run a node:
   director    Run this node as a director
   backend     Run this node as a backend
+
+See and check:
   status      Show the cluster, as this node sees it
   doctor      Check this node for theLB, and say what to fix
-  offer       Offer an application to the cluster, or withdraw it (on a backend)
-  generate    Print a file theLB needs - it writes nothing
+
+Change the cluster:
   admin       Change the cluster (on a director)
+  offer       Offer an application to the cluster, or withdraw it (on a backend)
+
+Print files:
+  generate    Print a file theLB needs - it writes nothing
+
+Other commands:
+  completion  Print the completion script of a shell: bash, zsh, fish or powershell
   help        Show the help of a command
 
-Options:
-  -h, --help       Show this help
-  -v, --version    Show the version, the commit, Go and the platform
+Flags:
+  -v, --version   Show the version, the commit, Go and the platform
+  -h, --help      Show the help
+      --debug     Say more: a director logs each connection it forwards,
+                  and the commands that ask the theLB running here say
+                  what they ask, on standard error
 
 Run 'thelb <command> --help' for more about a command.
-Every command but help and --version runs as root.
 
 Documentation: https://dmartsapp.github.io/thelb/

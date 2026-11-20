@@ -29,50 +29,6 @@ type fromCluster struct {
 	yes        bool   // read without asking
 }
 
-// takeFromFlags takes generate k8s's own flags out of args - --from-kubeconfig,
-// --from-context and --yes - and leaves the form's.
-func takeFromFlags(args []string) (fromCluster, []string, error) {
-	var f fromCluster
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if !strings.HasPrefix(a, "-") {
-			rest = append(rest, a)
-			continue
-		}
-		switch name {
-		case "from-kubeconfig", "from-context":
-			if !hasVal {
-				if i+1 >= len(args) {
-					return f, nil, usagef("thelb generate k8s: --%s needs a value", name)
-				}
-				i++
-				val = args[i]
-			}
-			if name == "from-kubeconfig" {
-				f.kubeconfig = val
-			} else {
-				f.context = val
-			}
-		case "yes":
-			if hasVal {
-				return f, nil, usagef("thelb generate k8s: --yes takes no value")
-			}
-			f.yes = true
-		default:
-			rest = append(rest, a)
-		}
-	}
-	switch {
-	case f.kubeconfig == "" && f.context != "":
-		return f, nil, usagef("thelb generate k8s: --from-context names a context of --from-kubeconfig: give that too")
-	case f.kubeconfig == "" && f.yes:
-		return f, nil, usagef("thelb generate k8s: --yes says to read the cluster without asking: give --from-kubeconfig too")
-	}
-	return f, rest, nil
-}
-
 // What the cluster says goes into files people apply and scripts they run, so
 // it is checked first: a broken or hostile API server must not be able to add
 // a line to them. Text only shown is cleaned of control characters.

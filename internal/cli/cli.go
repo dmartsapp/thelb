@@ -1,42 +1,52 @@
-// Package cli is theLB's command line: six commands, `--version`, and the help.
-// Every command runs only as root (effective user ID 0); the help and
-// `--version` run for anyone. Exit statuses: 0 done, 1 failed, 2 used wrongly.
+// Package cli is theLB's command line, built with cobra in the usual layout:
+//
+//	thelb [global flags] <command> [<subcommand> ...] [flags] [arguments]
+//
+// The commands are in groups - run a node, see and check, change the cluster,
+// print files - and each has its subcommands and flags. Flags go where they
+// apply: --debug on every command (global); generate k8s's --from-kubeconfig,
+// --from-context and --yes on every form of it; the rest on their command.
+// thelb --help lists the commands, thelb <command> --help shows one, and the
+// help is made from the same definitions the parser reads, so the two cannot
+// drift apart.
+//
+// Every command runs only as root (effective user ID 0); the help, --version
+// and completion run for anyone. Exit statuses: 0 done, 1 failed, 2 used
+// wrongly - a flag, an argument or a command theLB does not take.
+//
+// Where things are:
+//
+//	cli.go       Main, the root command, the groups, errors and exit statuses
+//	layout.go    how the help looks: its template, flag sections, docs links
+//	run.go       thelb director and thelb backend: their flags, checked into a
+//	             director.Config or backend.Config - shared with generate
+//	status.go    thelb status and thelb doctor
+//	admin.go     thelb admin ...: changes, asked of the director on this node
+//	offer.go     thelb offer ...: asked of the backend on this node
+//	generate.go  thelb generate secret|commands|systemd|sysctl|modules
+//	k8s*.go      thelb generate k8s ...
 package cli
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/dmartsapp/thelb/internal/api"
+	"github.com/spf13/cobra"
+
 	"github.com/dmartsapp/thelb/internal/backend"
-	"github.com/dmartsapp/thelb/internal/check"
-	"github.com/dmartsapp/thelb/internal/cluster"
-	"github.com/dmartsapp/thelb/internal/ctlnet"
 	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/fingerprint"
 	"github.com/dmartsapp/thelb/internal/hostnet"
-	"github.com/dmartsapp/thelb/internal/kube"
-	"github.com/dmartsapp/thelb/internal/localsock"
-	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/preflight"
 	"github.com/dmartsapp/thelb/internal/safe"
-	"github.com/dmartsapp/thelb/internal/secret"
-	"github.com/dmartsapp/thelb/internal/status"
 	"github.com/dmartsapp/thelb/internal/version"
 )
 
@@ -64,6 +74,9 @@ var (
 	}
 )
 
+// oneDashRE is a long flag given one dash: -vip, -version=x.
+var oneDashRE = regexp.MustCompile(`^-([A-Za-z][A-Za-z0-9]*-?[A-Za-z0-9-]+(?:=.*)?)$`)
+
 // usageError is a mistake in how theLB was called: exit status 2.
 type usageError struct{ msg string }
 
@@ -71,874 +84,237 @@ func (e usageError) Error() string { return e.msg }
 
 func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(format, a...)} }
 
+// notRoot is a command run by a user other than root: exit status 1, as
+// before any flag is checked.
+type notRoot struct{ cmd string }
+
+func (e notRoot) Error() string {
+	return e.cmd + " runs only as root (effective user ID 0); the help, --version and completion run for anyone"
+}
+
 // notYet is a command this build does not have.
 func notYet(what string) error {
 	return fmt.Errorf("%s is not in this build of theLB yet", what)
 }
 
+// app is one run of the command line: what every command writes to, and the
+// global flags.
+type app struct {
+	ctx            context.Context
+	stdout, stderr io.Writer
+	debug          bool // --debug
+	// ran is whether a command's own action started: an error before it is in
+	// how theLB was called - an unknown command, flag or argument (exit 2).
+	ran bool
+}
+
+// act is a command's action: it marks the run as started, so its errors are
+// failures (exit 1) unless they are usage errors.
+func (a *app) act(fn func(c *cobra.Command, args []string) error) func(*cobra.Command, []string) error {
+	return func(c *cobra.Command, args []string) error {
+		a.ran = true
+		return fn(c, args)
+	}
+}
+
+// debugf writes a --debug line about what a command does, to standard error.
+func (a *app) debugf(format string, v ...any) {
+	if a.debug {
+		_, _ = fmt.Fprintf(a.stderr, "debug: "+format+"\n", v...)
+	}
+}
+
 // Main runs the command line and returns the exit status.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	err := run(ctx, args, stdout, stderr)
+	// Every argument is checked before any command reads it: none takes a
+	// control character, and each may reach a unit, a script or a log line.
+	for i, arg := range args {
+		if err := safe.Arg(arg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "thelb: argument %d %s: theLB takes none like it\nRun 'thelb --help' for usage.\n", i+1, safe.Text(err.Error()))
+			return 2
+		}
+	}
+	// A long flag with one dash - which Go's flag package took, and so theLB
+	// did before cobra - would read as short flags run together.
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if m := oneDashRE.FindStringSubmatch(arg); m != nil {
+			_, _ = fmt.Fprintf(stderr, "thelb: %s: a long flag takes two dashes - --%s\nRun 'thelb --help' for usage.\n", safe.Text(arg), safe.Text(m[1]))
+			return 2
+		}
+	}
+	a := &app{ctx: ctx, stdout: stdout, stderr: stderr}
+	root := a.root()
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	cmd, err := root.ExecuteC()
 	if err == nil {
 		return 0
 	}
-	_, _ = fmt.Fprintln(stderr, "thelb: "+safe.Text(err.Error()))
-	var u usageError
-	if errors.As(err, &u) {
-		if _, n := helpFor(args); n > 0 && !strings.HasPrefix(args[0], "-") && args[0] != "help" {
-			_, _ = fmt.Fprintf(stderr, "Run 'thelb %s --help' for usage.\n", strings.Join(args[:n], " "))
-		} else {
-			_, _ = fmt.Fprintln(stderr, "Run 'thelb --help' for usage.")
+	if cmd == nil {
+		cmd = root
+	}
+	// One line per line of the error - cobra's suggestions take several - each
+	// shown without control characters, and named for its command once.
+	lines := strings.Split(strings.TrimRight(err.Error(), "\n"), "\n")
+	for i, l := range lines {
+		l = safe.Text(strings.ReplaceAll(l, "\t", "  "))
+		if i == 0 && !strings.HasPrefix(l, "thelb ") && !strings.HasPrefix(l, "thelb:") {
+			l = cmd.CommandPath() + ": " + l
 		}
+		_, _ = fmt.Fprintln(stderr, l)
+	}
+	var u usageError
+	var nr notRoot
+	switch {
+	case errors.As(err, &nr):
+		return 1
+	case errors.As(err, &u) || !a.ran:
+		_, _ = fmt.Fprintf(stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())
 		return 2
 	}
 	return 1
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		_, _ = fmt.Fprint(stdout, helpText)
-		return nil
-	}
-	// Every argument is checked before any command reads it: none takes a
-	// control character, and each may reach a unit, a script or a log line.
-	for i, a := range args {
-		if err := safe.Arg(a); err != nil {
-			return usagef("argument %d %v: theLB takes none like it", i+1, err)
-		}
-	}
-	switch args[0] {
-	case "-h", "-help", "--help", "help":
-		if len(args) > 1 {
-			return commandHelp(args[1:], stdout)
-		}
-		_, _ = fmt.Fprint(stdout, helpText)
-		return nil
-	case "-v", "-version", "--version":
-		_, _ = fmt.Fprintln(stdout, version.String())
-		return nil
-	}
-	cmd, rest := args[0], args[1:]
-	if _, ok := helpPages[cmd]; !ok {
-		return usagef("%q is not a theLB command", cmd)
-	}
-	for _, a := range rest {
-		if a == "-h" || a == "-help" || a == "--help" {
-			return commandHelp(args, stdout)
-		}
-	}
-	// A command that needs a subcommand, given none, shows its page.
-	if h, n := helpFor(args); n == len(args) && helpGroups[strings.Join(args, " ")] {
-		_, _ = fmt.Fprint(stdout, h)
-		return nil
-	}
-	if geteuid() != 0 {
-		return fmt.Errorf("thelb %s runs only as root (effective user ID 0); the help and --version run for anyone", cmd)
-	}
-	switch cmd {
-	case "director":
-		return runDirectorCmd(ctx, rest, stderr)
-	case "backend":
-		return runBackendCmd(ctx, rest, stderr)
-	case "status":
-		return statusCmd(ctx, rest, stdout)
-	case "doctor":
-		return doctorCmd(rest, stdout)
-	case "generate":
-		return generateCmd(ctx, rest, stdout, stderr)
-	case "offer":
-		return offerCmd(rest, stdout)
-	default: // admin
-		return adminCmd(rest, stdout)
-	}
-}
+// The groups of commands, as thelb --help lists them.
+const (
+	groupRun    = "run"
+	groupLook   = "look"
+	groupChange = "change"
+	groupFiles  = "files"
+	groupOther  = "other"
+)
 
-// commandHelp prints the page of the command words: the deepest subcommand
-// named that has a page of its own, or the command's.
-func commandHelp(words []string, stdout io.Writer) error {
-	h, n := helpFor(words)
-	switch {
-	case n > 0:
-		_, _ = fmt.Fprint(stdout, h)
-	case len(words) == 0 || strings.HasPrefix(words[0], "-"):
-		_, _ = fmt.Fprint(stdout, helpText)
-	default:
-		return usagef("%q is not a theLB command", words[0])
-	}
-	return nil
-}
+// root is the command line: the root command, every command under it, and
+// the global flags.
+func (a *app) root() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "thelb",
+		Short: "theLB - The Load Balancer: L4 load balancing for Linux, in one binary",
+		Long: `theLB - The Load Balancer: L4 load balancing for Linux, in one binary.
 
-// newFlags is a flag set that reports mistakes as usage errors, not by printing.
-func newFlags(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	return fs
-}
-
-func parse(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		return usagef("thelb %s: %v", fs.Name(), err)
-	}
-	return nil
-}
-
-var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-func runDirectorCmd(ctx context.Context, args []string, stderr io.Writer) error {
-	cfg, err := directorConfig(ctx, "director", args)
-	if err != nil {
-		return err
-	}
-	if goos != "linux" {
-		return errors.New("thelb director runs only on Linux")
-	}
-	out := logOutput
-	if out == nil {
-		out = stderr
-	}
-	log := logx.New(out, "thelb")
-	log.SetDebug(cfg.Debug)
-	return runDirector(ctx, cfg, director.Deps{
-		RunDir: roleDir("director"),
-		Log:    log,
-		Now:    now,
-		Host:   hostInputs,
-		Network: func(local hostnet.Address) (director.Network, error) {
-			n, err := ctlnet.New(cfg.ControlVIP, cfg.ControlPort, local, log.Module("network"))
-			if err != nil {
-				return nil, err
+Directors balance a VIP's connections over backends with the kernel's IPVS -
+direct routing or IP-in-IP - and agree on who holds which VIP with Raft.
+Backends offer their applications; directors assign them to services.`,
+		Version:       version.String(),
+		SilenceErrors: true, // Main prints them, with the exit status they get
+		SilenceUsage:  true, // and points at the help, rather than printing it all
+		Annotations:   map[string]string{annDocs: docsURL},
+		// Every command runs as root; the help, --version and completion run
+		// for anyone, and so does a command that only groups others.
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
+			if anyone(c) {
+				return nil
 			}
-			return n, nil
+			if geteuid() != 0 {
+				return notRoot{c.CommandPath()}
+			}
+			return nil
 		},
-		Dataplane:   func() (director.Dataplane, error) { return dataplane(log.Module("dataplane")) },
-		Preflight:   func() (preflight.Result, error) { return preflightDirector(cfg.ControlVIP) },
-		ProbeWindow: cfg.BootstrapWait,
-	})
+	}
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usagef("%v", err) })
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.PersistentFlags().BoolP("help", "h", false, "Show the help")
+	root.Flags().BoolP("version", "v", false, "Show the version, the commit, Go and the platform")
+	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "Say more: a director logs each connection it forwards, and the commands that ask the theLB running here say what they ask, on standard error")
+	root.AddGroup(
+		&cobra.Group{ID: groupRun, Title: "Run a node:"},
+		&cobra.Group{ID: groupLook, Title: "See and check:"},
+		&cobra.Group{ID: groupChange, Title: "Change the cluster:"},
+		&cobra.Group{ID: groupFiles, Title: "Print files:"},
+		&cobra.Group{ID: groupOther, Title: "Other commands:"},
+	)
+	addTo(root, groupRun, a.directorCmd(), a.backendCmd())
+	addTo(root, groupLook, a.statusCmd(), a.doctorCmd())
+	addTo(root, groupChange, a.adminCmd(), a.offerCmd())
+	addTo(root, groupFiles, a.generateCmd())
+	root.SetHelpCommand(a.helpCmd(root))
+	root.SetHelpCommandGroupID(groupOther)
+	root.SetCompletionCommandGroupID(groupOther)
+	root.InitDefaultCompletionCmd()
+	for _, c := range root.Commands() {
+		if c.Name() == "completion" {
+			c.Short = "Print the completion script of a shell: bash, zsh, fish or powershell"
+		}
+	}
+	layout(root)
+	return root
 }
 
-// directorConfig reads `thelb director`'s flags - for the director, and for
-// `generate`, which checks them the same way. cmd names the command in errors.
-func directorConfig(ctx context.Context, cmd string, args []string) (director.Config, error) {
-	usagef := func(format string, a ...any) error {
-		return usageError{"thelb " + cmd + ": " + strings.TrimPrefix(fmt.Sprintf(format, a...), "thelb director: ")}
-	}
-	fs := newFlags(cmd)
-	vip := fs.String("vip", "", "")
-	port := fs.Int("port", 0, "")
-	secretFile := fs.String("secret-file", "", "")
-	backendSecretFile := fs.String("backend-secret-file", "", "")
-	bootstrap := fs.Bool("bootstrap", false, "")
-	cluster := fs.String("cluster", "thelb", "")
-	name := fs.String("name", "", "")
-	iface := fs.String("interface", "", "")
-	metricsAt := fs.String("metrics", "", "")
-	debug := fs.Bool("debug", false, "")
-	kubeconfig := fs.String("kubeconfig", "", "")
-	bootstrapWait := fs.Duration("bootstrap-wait", 0, "")
-	var cfg director.Config
-	if err := parse(fs, args); err != nil {
-		return cfg, err
-	}
-	if fs.NArg() > 0 {
-		return cfg, usagef("thelb director: unexpected %q", fs.Arg(0))
-	}
-
-	if *iface != "" && !safe.IfName(*iface) {
-		return cfg, usagef("thelb director: --interface %q is not an interface's name", *iface)
-	}
-	switch {
-	case *vip == "":
-		return cfg, usagef("thelb director: --vip, the control VIP, is required")
-	case strings.Contains(*vip, "/"):
-		return cfg, usagef("thelb director: --vip is the control VIP's address or name, without a prefix: %q", *vip)
-	}
-	addr, vipName, err := vipAddr(ctx, "--vip", *vip, *iface, false)
-	if err != nil {
-		var u usageError
-		if errors.As(err, &u) {
-			return cfg, usagef("thelb director: %v", err)
-		}
-		return cfg, fmt.Errorf("thelb %s: %w", cmd, err)
-	}
-	cfg.ControlVIP, cfg.ControlVIPName = addr, vipName
-	if *port < 1 || *port > 65535 {
-		return cfg, usagef("thelb director: --port, the control port, must be 1 to 65535")
-	}
-	cfg.ControlPort = uint16(*port)
-	for _, f := range []struct{ flag, path string }{{"--secret-file", *secretFile}, {"--backend-secret-file", *backendSecretFile}} {
-		if f.path == "" {
-			return cfg, usagef("thelb director: %s is required", f.flag)
-		}
-		if !filepath.IsAbs(f.path) {
-			return cfg, usagef("thelb director: %s must be an absolute path: %q", f.flag, f.path)
-		}
-	}
-	if filepath.Clean(*secretFile) == filepath.Clean(*backendSecretFile) {
-		return cfg, usagef("thelb director: the directors' and the backends' secrets need two files")
-	}
-	cfg.SecretFile, cfg.BackendSecretFile = filepath.Clean(*secretFile), filepath.Clean(*backendSecretFile)
-	if !nameRE.MatchString(*cluster) {
-		return cfg, usagef("thelb director: --cluster %q: a cluster's name is lowercase letters, digits and hyphens, up to 63", *cluster)
-	}
-	cfg.Cluster = *cluster
-	cfg.Name = *name
-	if cfg.Name == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return cfg, fmt.Errorf("thelb %s: this node's hostname: %w; name it with --name", cmd, err)
-		}
-		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
-	}
-	if !nameRE.MatchString(cfg.Name) {
-		return cfg, usagef("thelb director: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
-	}
-	cfg.Bootstrap = *bootstrap
-	cfg.Interface = *iface
-	cfg.Debug = *debug
-	if *metricsAt != "" {
-		if ap, err := netip.ParseAddrPort(*metricsAt); err != nil || ap.Addr().IsUnspecified() {
-			return cfg, usagef("thelb director: --metrics is an address and port to serve metrics on, as 127.0.0.1:9732 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)
-		}
-		cfg.Metrics = *metricsAt
-	}
-	switch k := *kubeconfig; {
-	case k == "" || k == kube.InCluster:
-	case !filepath.IsAbs(k):
-		return cfg, usagef("thelb director: --kubeconfig is an absolute path, or %s for a pod's ServiceAccount: %q", kube.InCluster, k)
-	default:
-		*kubeconfig = filepath.Clean(k)
-	}
-	cfg.Kubeconfig = *kubeconfig
-	if *bootstrapWait != 0 {
-		if !*bootstrap {
-			return cfg, usagef("thelb director: --bootstrap-wait is how long a director with --bootstrap looks for the cluster before creating one: give --bootstrap too")
-		}
-		if *bootstrapWait < 5*time.Second || *bootstrapWait > 10*time.Minute {
-			return cfg, usagef("thelb director: --bootstrap-wait is 5s to 10m, not %s", *bootstrapWait)
-		}
-		cfg.BootstrapWait = *bootstrapWait
-	}
-	return cfg, nil
-}
-
-// roleDir is where a role's socket is: one director and one backend may run on
-// one node, each once.
-func roleDir(role string) string { return filepath.Join(runDir, role) }
-
-// callDirector asks the director running on this node.
-func callDirector(req localsock.Request) (localsock.Response, error) {
-	resp, err := localsock.Call(roleDir("director"), req)
-	if errors.Is(err, localsock.ErrNotRunning) {
-		if _, berr := localsock.Call(roleDir("backend"), localsock.Request{Op: localsock.OpStatus}); berr == nil {
-			return resp, errors.New("this node runs a backend, not a director: thelb admin runs on a director")
-		}
-		return resp, errors.New("no director runs on this node")
-	}
-	return resp, err
-}
-
-// callStatus asks for the status: of the role named, or of the director if one
-// runs here, of the backend otherwise.
-func callStatus(role string, brief bool) (localsock.Response, error) {
-	req := localsock.Request{Op: localsock.OpStatus, Brief: brief}
-	if role != "" {
-		return localsock.Call(roleDir(role), req)
-	}
-	resp, err := localsock.Call(roleDir("director"), req)
-	if errors.Is(err, localsock.ErrNotRunning) {
-		return localsock.Call(roleDir("backend"), req)
-	}
-	return resp, err
-}
-
-var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$`)
-
-// vipAddr is a --vip or --join host: an address as it is, or a name, resolved
-// now - at start - to the one address it has in a network of this node.
-func vipAddr(ctx context.Context, flag, host, iface string, routed bool) (netip.Addr, string, error) {
-	if a, err := netip.ParseAddr(host); err == nil {
-		return a.Unmap(), "", nil
-	}
-	if !hostRE.MatchString(host) {
-		return netip.Addr{}, "", usagef("%s %q is neither an address nor a name", flag, host)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	addrs, err := lookup(ctx, "ip", host)
-	if err != nil {
-		return netip.Addr{}, "", fmt.Errorf("%s %s: the name does not resolve: %w", flag, host, err)
-	}
-	var in []netip.Addr
-	for _, a := range addrs {
-		a = a.Unmap()
-		if _, err := localFor(a, iface); err == nil && !slices.Contains(in, a) {
-			in = append(in, a)
-		}
-	}
-	if len(in) == 0 && routed && len(addrs) == 1 {
-		return addrs[0].Unmap(), host, nil // behind a router: a backend of tunnelled services
-	}
-	switch len(in) {
-	case 1:
-		return in[0], host, nil
-	case 0:
-		return netip.Addr{}, "", fmt.Errorf("%s %s resolves to %v, and none of them is in a network of this node", flag, host, addrs)
-	default:
-		return netip.Addr{}, "", fmt.Errorf("%s %s resolves to more than one address in this node's networks, %v: name one address", flag, host, in)
+// addTo adds commands to parent, in one group of its help.
+func addTo(parent *cobra.Command, group string, cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		c.GroupID = group
+		parent.AddCommand(c)
 	}
 }
 
-// offerFlags collects --offer, which may be given more than once.
-type offerFlags []string
-
-func (o *offerFlags) String() string     { return strings.Join(*o, " ") }
-func (o *offerFlags) Set(v string) error { *o = append(*o, v); return nil }
-
-// parseOffer reads an offer: [name=]tcp/8080[,check=http:/healthz]. Without a
-// name, it is named for its protocol and port: tcp-8080.
-func parseOffer(spec string) (cluster.Offer, error) {
-	main, opts, _ := strings.Cut(spec, ",")
-	name := ""
-	if n, rest, named := strings.Cut(main, "="); named {
-		name, main = n, rest
-		if !cluster.OfferNameOK(name) {
-			return cluster.Offer{}, fmt.Errorf("an offer's name is letters, digits, dots, hyphens and underscores, up to 63, beginning and ending with a letter or a digit, not %q", name)
-		}
-	}
-	proto, portText, ok := strings.Cut(main, "/")
-	port, err := strconv.Atoi(portText)
-	if !ok || err != nil || port < 1 || port > 65535 || (proto != "tcp" && proto != "udp" && proto != "sctp") {
-		return cluster.Offer{}, fmt.Errorf("an offer is [<name>=]<tcp|udp|sctp>/<port>[,check=tcp|none|http:<path>], not %q", spec)
-	}
-	chk := ""
-	if opts != "" {
-		v, ok := strings.CutPrefix(opts, "check=")
-		if !ok {
-			return cluster.Offer{}, fmt.Errorf("an offer's option is check=..., not %q", opts)
-		}
-		chk = v
-	}
-	if chk, err = check.Parse(chk, proto); err != nil {
-		return cluster.Offer{}, fmt.Errorf("--offer %s: %w", spec, err)
-	}
-	if name == "" {
-		name = cluster.DefaultOfferName(proto, port)
-	}
-	return cluster.Offer{Name: name, Proto: proto, Port: port, Check: chk}, nil
-}
-
-// offerCmd is `thelb offer`, on a backend: an application offered to the
-// cluster, or withdrawn.
-func offerCmd(args []string, stdout io.Writer) error {
-	usage := "thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>] | thelb offer remove <name>"
-	if len(args) == 0 {
-		return usagef("%s", usage)
-	}
-	var req api.Offer
-	switch args[0] {
-	case "add":
-		if len(args) != 3 {
-			return usagef("%s", usage)
-		}
-		if main, _, _ := strings.Cut(args[2], ","); strings.Contains(main, "=") {
-			return usagef("thelb offer add: the name comes first, then the offer: thelb offer add <name> <proto>/<port>")
-		}
-		o, err := parseOffer(args[1] + "=" + args[2])
-		if err != nil {
-			return usagef("thelb offer add: %v", err)
-		}
-		req = api.Offer{Op: "add", Offer: o}
-	case "remove":
-		if len(args) != 2 {
-			return usagef("%s", usage)
-		}
-		if !cluster.OfferNameOK(args[1]) {
-			return usagef("thelb offer remove: %q is not an offer's name", args[1])
-		}
-		req = api.Offer{Op: "remove", Offer: cluster.Offer{Name: args[1]}}
-	default:
-		return usagef("%s", usage)
-	}
-	resp, err := localsock.Call(roleDir("backend"), localsock.Request{Op: localsock.OpOffer, Offer: &req})
-	if errors.Is(err, localsock.ErrNotRunning) {
-		return errors.New("no backend runs on this node: thelb offer runs where thelb backend runs")
-	}
-	if err != nil {
-		return err
-	}
-	if r := resp.Result; r != nil && r.Message != "" {
-		_, _ = fmt.Fprintln(stdout, safe.Text(r.Message))
-	}
-	return nil
-}
-
-func runBackendCmd(ctx context.Context, args []string, stderr io.Writer) error {
-	cfg, err := backendConfig(ctx, "backend", args)
-	if err != nil {
-		return err
-	}
-	if goos != "linux" {
-		return errors.New("thelb backend runs only on Linux")
-	}
-	out := logOutput
-	if out == nil {
-		out = stderr
-	}
-	log := logx.New(out, "thelb")
-	return runBackend(ctx, cfg, backend.Deps{
-		RunDir:    roleDir("backend"),
-		Log:       log,
-		Now:       now,
-		Host:      hostInputs,
-		Kernel:    func() (backend.Kernel, error) { return backendKernel(log.Module("kernel")) },
-		Preflight: func() (preflight.Result, error) { return preflightBackend(cfg.Join.Addr()) },
-	})
-}
-
-// backendConfig reads `thelb backend`'s flags - for the backend, and for
-// `generate`, which checks them the same way. cmd names the command in errors.
-func backendConfig(ctx context.Context, cmd string, args []string) (backend.Config, error) {
-	usagef := func(format string, a ...any) error {
-		return usageError{"thelb " + cmd + ": " + strings.TrimPrefix(fmt.Sprintf(format, a...), "thelb backend: ")}
-	}
-	fs := newFlags(cmd)
-	joinTo := fs.String("join", "", "")
-	secretFile := fs.String("secret-file", "", "")
-	name := fs.String("name", "", "")
-	iface := fs.String("interface", "", "")
-	var offers offerFlags
-	fs.Var(&offers, "offer", "")
-	metricsAt := fs.String("metrics", "", "")
-	var cfg backend.Config
-	if err := parse(fs, args); err != nil {
-		return cfg, err
-	}
-	if fs.NArg() > 0 {
-		return cfg, usagef("thelb backend: unexpected %q", fs.Arg(0))
-	}
-	if *iface != "" && !safe.IfName(*iface) {
-		return cfg, usagef("thelb backend: --interface %q is not an interface's name", *iface)
-	}
-	host, portText, err := net.SplitHostPort(*joinTo)
-	port, perr := strconv.Atoi(portText)
-	if err != nil || perr != nil || port < 1 || port > 65535 {
-		return cfg, usagef("thelb backend: --join is the control VIP, by address or name, and its port, as 10.0.0.10:7443, thelb-vip:7443 or [fd00::10]:7443: %q", *joinTo)
-	}
-	addr, joinName, err := vipAddr(ctx, "--join", host, *iface, true)
-	if err != nil {
-		var u usageError
-		if errors.As(err, &u) {
-			return cfg, usagef("thelb backend: %v", err)
-		}
-		return cfg, fmt.Errorf("thelb %s: %w", cmd, err)
-	}
-	cfg.Join, cfg.JoinName = netip.AddrPortFrom(addr, uint16(port)), joinName
-	if *secretFile == "" || !filepath.IsAbs(*secretFile) {
-		return cfg, usagef("thelb backend: --secret-file, the backends' secret, is required, as an absolute path")
-	}
-	cfg.SecretFile = filepath.Clean(*secretFile)
-	seen := map[string]bool{}
-	for _, spec := range offers {
-		o, err := parseOffer(spec)
-		if err != nil {
-			return cfg, usagef("thelb backend: %v", err)
-		}
-		if seen[o.Key()] {
-			return cfg, usagef("thelb backend: %s is offered twice", o.Key())
-		}
-		if seen["name "+o.Name] {
-			return cfg, usagef("thelb backend: two offers are named %s", o.Name)
-		}
-		seen[o.Key()], seen["name "+o.Name] = true, true
-		cfg.Offers = append(cfg.Offers, o)
-	}
-	cfg.Name = *name
-	if cfg.Name == "" {
-		h, err := os.Hostname()
-		if err != nil {
-			return cfg, fmt.Errorf("thelb %s: this node's hostname: %w; name it with --name", cmd, err)
-		}
-		cfg.Name = strings.ToLower(strings.SplitN(h, ".", 2)[0])
-	}
-	if !nameRE.MatchString(cfg.Name) {
-		return cfg, usagef("thelb backend: the node's name %q: a node's name is lowercase letters, digits and hyphens, up to 63 - name it with --name", cfg.Name)
-	}
-	cfg.Interface = *iface
-	if *metricsAt != "" {
-		if ap, err := netip.ParseAddrPort(*metricsAt); err != nil || ap.Addr().IsUnspecified() {
-			return cfg, usagef("thelb backend: --metrics is an address and port to serve metrics on, as 127.0.0.1:9733 - a machine's own address, not 0.0.0.0 or ::, which would include the VIPs: %q", *metricsAt)
-		}
-		cfg.Metrics = *metricsAt
-	}
-	return cfg, nil
-}
-
-func statusCmd(ctx context.Context, args []string, stdout io.Writer) error {
-	fs := newFlags("status")
-	asJSON := fs.Bool("json", false, "")
-	watch := fs.Bool("watch", false, "")
-	role := fs.String("role", "", "")
-	if err := parse(fs, args); err != nil {
-		return err
-	}
-	if *role != "" && *role != "director" && *role != "backend" {
-		return usagef("thelb status: --role is director or backend")
-	}
-	names := fs.Args()
-	for _, t := range names {
-		if !contains(status.Names, t) {
-			return usagef("thelb status: no view or table %q: name one of %s", t, strings.Join(status.Names, ", "))
-		}
-	}
-	brief := !status.Counters(*asJSON, names...)
-	show := func() error {
-		resp, err := callStatus(*role, brief)
-		if err != nil {
-			return err
-		}
-		if resp.Status == nil {
-			return errors.New("theLB answered without a status")
-		}
-		if *asJSON {
-			v, err := resp.Status.Pick(names...)
-			if err != nil {
-				return err
-			}
-			enc := json.NewEncoder(stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(v)
-		}
-		text, err := resp.Status.Text(now(), names...)
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprint(stdout, text)
-		return nil
-	}
-	if !*watch {
-		return show()
-	}
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
-	for {
-		_, _ = fmt.Fprintf(stdout, "-- %s --\n", now().UTC().Format(time.RFC3339))
-		if err := show(); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-t.C:
-			_, _ = fmt.Fprintln(stdout)
-		}
-	}
-}
-
-func generateCmd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return usagef("thelb generate: say what to generate: secret, commands, systemd, sysctl, modules or k8s")
-	}
-	switch args[0] {
-	case "secret":
-		if len(args) > 1 {
-			return usagef("thelb generate secret: unexpected %q", args[1])
-		}
-		s, err := secret.Generate()
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(stdout, s.Encode())
-		return nil
-	case "commands":
-		if len(args) > 1 {
-			return usagef("thelb generate commands: unexpected %q", args[1])
-		}
-		resp, err := callDirector(localsock.Request{Op: localsock.OpGenerate, What: "commands"})
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprint(stdout, resp.Text)
-		return nil
-	case "systemd":
-		return generateSystemd(ctx, args[1:], stdout)
-	case "sysctl", "modules":
-		return generateBoot(args[0], args[1:], stdout)
-	case "k8s":
-		return generateK8s(ctx, args[1:], stdout, stderr)
-	default:
-		return usagef("thelb generate: %q is not something theLB generates", args[0])
-	}
-}
-
-// change asks the running director to change the cluster, and prints what it
-// did.
-func change(stdout io.Writer, c api.Change) error {
-	resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &c})
-	if err != nil {
-		return err
-	}
-	if r := resp.Result; r != nil && r.Message != "" {
-		_, _ = fmt.Fprintln(stdout, safe.Text(r.Message))
-	}
-	return nil
-}
-
-func adminCmd(args []string, stdout io.Writer) error {
-	if len(args) == 0 {
-		return usagef("thelb admin: say what to change: approve, refuse, remove, pool, service, assign, unassign, lease, secret show")
-	}
-	switch args[0] {
-	case "approve":
-		return approveCmd(args[1:], stdout)
-	case "refuse", "remove":
-		fs := newFlags("admin " + args[0])
-		if err := parse(fs, args[1:]); err != nil {
-			return err
-		}
-		if fs.NArg() != 1 {
-			return usagef("thelb admin %s: name one node", args[0])
-		}
-		resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: args[0], Names: fs.Args()}})
-		if err != nil {
-			return err
-		}
-		done := fs.Args()
-		if resp.Result != nil && len(resp.Result.Names) > 0 {
-			done = resp.Result.Names
-		}
-		_, _ = fmt.Fprintf(stdout, "%s: %s\n", map[string]string{"refuse": "refused", "remove": "removed"}[args[0]], safe.Text(strings.Join(done, ", ")))
-		return nil
-	case "pool":
-		return poolCmd(args[1:], stdout)
-	case "service":
-		return serviceCmd(args[1:], stdout)
-	case "assign":
-		fs := newFlags("admin assign")
-		weights := fs.String("weight", "", "")
-		// The service and offers come first, the flags after them, as in the help.
-		pos, flags := splitFlags(args[1:])
-		if err := parse(fs, flags); err != nil {
-			return err
-		}
-		pos = append(pos, fs.Args()...)
-		if len(pos) < 2 {
-			return usagef("thelb admin assign <service> <node>:<offer> ... [--weight node=N,...] - the offer by its name, or as <proto>/<port>")
-		}
-		w := map[string]int{}
-		if *weights != "" {
-			for _, kv := range strings.Split(*weights, ",") {
-				k, v, ok := strings.Cut(kv, "=")
-				n, err := strconv.Atoi(v)
-				if !ok || err != nil {
-					return usagef("thelb admin assign: --weight is node=N[,node=N], not %q", *weights)
-				}
-				w[k] = n
-			}
-		}
-		return change(stdout, api.Change{Op: "assign", Names: pos[:1], Offers: pos[1:], Weights: w})
-	case "unassign":
-		if len(args) != 3 {
-			return usagef("thelb admin unassign <service> <node>")
-		}
-		return change(stdout, api.Change{Op: "unassign", Names: args[1:]})
-	case "lease":
-		if len(args) != 2 {
-			return usagef("thelb admin lease <seconds>: how long the kernel keeps the control VIP after the leader's last renewal")
-		}
-		d, err := time.ParseDuration(args[1])
-		if err != nil {
-			n, aerr := strconv.Atoi(args[1])
-			if aerr != nil {
-				return usagef("thelb admin lease: %q is not a number of seconds", args[1])
-			}
-			d = time.Duration(n) * time.Second
-		}
-		if d%time.Second != 0 || d < cluster.MinLease || d > cluster.MaxLease {
-			return usagef("thelb admin lease: whole seconds, %s to %s, not %s", cluster.MinLease, cluster.MaxLease, args[1])
-		}
-		return change(stdout, api.Change{Op: "lease", Seconds: int(d / time.Second)})
-	case "secret":
-		if len(args) < 2 {
-			return usagef("thelb admin secret: show (rotate and retire come later)")
-		}
-		switch args[1] {
-		case "show":
-			fs := newFlags("admin secret show")
-			role := fs.String("role", "", "")
-			if err := parse(fs, args[2:]); err != nil {
-				return err
-			}
-			if *role != "director" && *role != "backend" {
-				return usagef("thelb admin secret show: --role director or --role backend")
-			}
-			resp, err := callDirector(localsock.Request{Op: localsock.OpSecretShow, Role: *role})
-			if err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintln(stdout, resp.Secret)
-			return nil
-		case "rotate", "retire":
-			return notYet("thelb admin secret " + args[1])
-		default:
-			return usagef("thelb admin secret: %q is not a secret command", args[1])
-		}
-	default:
-		return usagef("thelb admin: %q is not an admin command", args[0])
-	}
-}
-
-// splitFlags separates leading arguments from the flags after them.
-func splitFlags(args []string) (pos, flags []string) {
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			return args[:i], args[i:]
-		}
-	}
-	return args, nil
-}
-
-func poolCmd(args []string, stdout io.Writer) error {
-	if len(args) < 2 || (args[0] != "add" && args[0] != "remove") {
-		return usagef("thelb admin pool add <name> --vip <first address/prefix> --vippool-count <n> [--interface <name>] [--default], or pool remove <name>")
-	}
-	name := args[1]
-	if args[0] == "remove" {
-		if len(args) != 2 {
-			return usagef("thelb admin pool remove <name>")
-		}
-		return change(stdout, api.Change{Op: "pool.remove", Pool: name})
-	}
-	fs := newFlags("admin pool add")
-	vip := fs.String("vip", "", "")
-	count := fs.Int("vippool-count", 0, "")
-	iface := fs.String("interface", "", "")
-	def := fs.Bool("default", false, "")
-	if err := parse(fs, args[2:]); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return usagef("thelb admin pool add: unexpected %q", fs.Arg(0))
-	}
-	if _, err := netip.ParsePrefix(*vip); err != nil {
-		return usagef("thelb admin pool add: --vip is the pool's first address and its network's prefix, as 10.10.1.20/24: %q", *vip)
-	}
-	if *count < 1 {
-		return usagef("thelb admin pool add: --vippool-count, how many addresses, is required")
-	}
-	if *iface != "" && !safe.IfName(*iface) {
-		return usagef("thelb admin pool add: --interface %q is not an interface's name", *iface)
-	}
-	return change(stdout, api.Change{Op: "pool.add", Pool: name, VIP: *vip, Count: *count, Interface: *iface, Default: *def})
-}
-
-func serviceCmd(args []string, stdout io.Writer) error {
-	if len(args) < 2 || (args[0] != "add" && args[0] != "remove") {
-		return usagef("thelb admin service add <name> --proto tcp|udp|sctp --port <port> [--pool <name>] [--vip <address>] [--scheduler wrr], or service remove <name>")
-	}
-	name := args[1]
-	if args[0] == "remove" {
-		if len(args) != 2 {
-			return usagef("thelb admin service remove <name>")
-		}
-		return change(stdout, api.Change{Op: "service.remove", Names: []string{name}})
-	}
-	fs := newFlags("admin service add")
-	pool := fs.String("pool", "", "")
-	vip := fs.String("vip", "", "")
-	proto := fs.String("proto", "", "")
-	port := fs.Int("port", 0, "")
-	sched := fs.String("scheduler", "", "")
-	method := fs.String("method", "", "")
-	if err := parse(fs, args[2:]); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return usagef("thelb admin service add: unexpected %q", fs.Arg(0))
-	}
-	if *proto == "" || *port == 0 {
-		return usagef("thelb admin service add: --proto and --port are required")
-	}
-	return change(stdout, api.Change{Op: "service.add", Names: []string{name}, Pool: *pool, VIP: *vip, Proto: *proto, Port: *port, Scheduler: *sched, Method: *method})
-}
-
-// approveCmd approves pending nodes by name, or every one whose name matches
-// --match - shown first, and approved after a "y", or at once with --yes.
-func approveCmd(args []string, stdout io.Writer) error {
-	fs := newFlags("admin approve")
-	match := fs.String("match", "", "")
-	yes := fs.Bool("yes", false, "")
-	if err := parse(fs, args); err != nil {
-		return err
-	}
-	names := fs.Args()
-	switch {
-	case *match == "" && len(names) == 0:
-		return usagef("thelb admin approve: name the nodes to approve, or --match '<regular expression>'")
-	case *match != "" && len(names) > 0:
-		return usagef("thelb admin approve: names or --match, not both")
-	case *yes && *match == "":
-		return usagef("thelb admin approve: --yes goes with --match")
-	}
-	if *match != "" {
-		re, err := regexp.Compile(`^(?:` + *match + `)$`)
-		if err != nil {
-			return usagef("thelb admin approve: --match %q: %v", *match, err)
-		}
-		resp, err := callDirector(localsock.Request{Op: localsock.OpStatus})
-		if err != nil {
-			return err
-		}
-		var matched status.Status
-		for _, p := range resp.Status.Pending {
-			if re.MatchString(p.Pending) {
-				matched.Pending = append(matched.Pending, p)
-				names = append(names, p.Pending)
-			}
-		}
-		if len(names) == 0 {
-			return fmt.Errorf("no pending node's name matches %q: nothing approved", *match)
-		}
-		text, err := matched.Text(now(), "pending")
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprint(stdout, text)
-		if !*yes {
-			if !isTerminal() {
-				return errors.New("nothing approved: there is no terminal to confirm on - add --yes to approve these")
-			}
-			_, _ = fmt.Fprintf(stdout, "Approve %s? [y/N] ", plural(len(names), "this node", "these %d nodes"))
-			line, _ := bufio.NewReader(stdin).ReadString('\n')
-			if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
-				return errors.New("nothing approved")
-			}
-		}
-	}
-	resp, err := callDirector(localsock.Request{Op: localsock.OpChange, Change: &api.Change{Op: "approve", Names: names}})
-	if err != nil {
-		return err
-	}
-	done := slices.Clone(names)
-	if resp.Result != nil && len(resp.Result.Names) > 0 {
-		done = slices.Clone(resp.Result.Names)
-	}
-	slices.Sort(done) // by name, not by the order they asked in
-	_, _ = fmt.Fprintf(stdout, "approved: %s\n", safe.Text(strings.Join(done, ", ")))
-	return nil
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return fmt.Sprintf(many, n)
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
+// anyone is whether a command runs for any user: the help, completion -
+// cobra's own commands - and the commands that only group others.
+func anyone(c *cobra.Command) bool {
+	for p := c; p != nil; p = p.Parent() {
+		switch p.Name() {
+		case "help", "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
 			return true
 		}
 	}
-	return false
+	return c.Annotations[annGroup] != ""
+}
+
+// group is a command that only groups subcommands: alone, it shows its help;
+// with a word that is none of them, it says so - a usage error.
+func (a *app) group(c *cobra.Command, subs ...*cobra.Command) *cobra.Command {
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[annGroup] = "yes"
+	c.Args = func(c *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return nil
+		}
+		msg := fmt.Sprintf("%q is not a subcommand of %s", args[0], c.CommandPath())
+		if c.SuggestionsMinimumDistance <= 0 {
+			c.SuggestionsMinimumDistance = 2 // cobra's own, which it sets only for the root
+		}
+		if s := c.SuggestionsFor(args[0]); len(s) > 0 {
+			msg += " - did you mean " + strings.Join(s, " or ") + "?"
+		}
+		return usageError{msg}
+	}
+	c.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
+	c.AddCommand(subs...)
+	return c
+}
+
+// helpCmd is thelb help <command words>: the help of that command, as
+// --help shows it; words that are no command are a usage error.
+func (a *app) helpCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [<command> ...]",
+		Short: "Show the help of a command",
+		Long:  "Show the help of a command - the same as thelb <command> --help.",
+		ValidArgsFunction: func(c *cobra.Command, args []string, _ string) ([]cobra.Completion, cobra.ShellCompDirective) {
+			target, _, err := root.Find(args)
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			var out []cobra.Completion
+			for _, s := range target.Commands() {
+				if s.IsAvailableCommand() {
+					out = append(out, cobra.CompletionWithDesc(s.Name(), s.Short))
+				}
+			}
+			return out, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(c *cobra.Command, args []string) error {
+			target, rest, err := root.Find(args)
+			if err != nil || len(rest) > 0 || (target == root && len(args) > 0) {
+				return usagef("%q is not a theLB command", strings.Join(args, " "))
+			}
+			return target.Help()
+		},
+	}
 }

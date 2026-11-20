@@ -998,7 +998,7 @@ echo "== under systemd: the unit thelb generate systemd prints runs a director"
 install -d -m 0700 "$tmp/sd"
 ip netns exec $P-d1 "$bin" generate systemd director --vip $VIP4 --port $PORT --bootstrap --name d1 --cluster e2e \
 	--secret-file "$tmp/sd/director.secret" --backend-secret-file "$tmp/sd/backend.secret" >"$tmp/sd/unit"
-check "generate systemd director prints a unit, ExecStart= with the flags given" "grep -q \"^ExecStart=$bin director --vip $VIP4 --port $PORT --bootstrap --name d1 --cluster e2e --secret-file $tmp/sd/director.secret\" $tmp/sd/unit && grep -q '^ReadWritePaths=-$tmp/sd\$' $tmp/sd/unit"
+check "generate systemd director prints a unit, ExecStart= with the flags given - in the order the help lists them" "grep -q \"^ExecStart=$bin director --vip $VIP4 --port $PORT --secret-file $tmp/sd/director.secret --backend-secret-file $tmp/sd/backend.secret --bootstrap --cluster e2e --name d1\$\" $tmp/sd/unit && grep -q '^ReadWritePaths=-$tmp/sd\$' $tmp/sd/unit"
 # The mount point of its own /run/thelb, made here only if missing.
 made_run=""
 [ -d /run/thelb ] || { install -d -m 0700 /run/thelb && made_run=1; }

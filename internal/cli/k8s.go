@@ -1,16 +1,16 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/netip"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
+	"github.com/dmartsapp/thelb/internal/director"
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/version"
 )
@@ -75,83 +75,176 @@ func image() string {
 	return "ghcr.io/dmartsapp/thelb:" + strings.TrimPrefix(version.Version, "v")
 }
 
-// generateK8s prints the manifests the directors need; with director and the
-// flags it runs with, the DaemonSet too, that runs directors on the nodes
-// labelled for them.
-func generateK8s(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	from, args, err := takeFromFlags(args)
-	if err != nil {
-		return err
+// k8sCmd is generate k8s: alone, the directors' identity in the cluster; its
+// forms print the rest. Every form may read the cluster first, to fit what it
+// prints to it: --from-kubeconfig, --from-context and --yes are the flags of
+// generate k8s, and every form under it takes them.
+func (a *app) k8sCmd() *cobra.Command {
+	var from fromCluster
+	c := &cobra.Command{
+		Use:   "k8s [flags]",
+		Short: "The Kubernetes manifests and scripts theLB needs",
+		Long: `Print what theLB needs in a Kubernetes cluster. It writes nothing - to disk or
+to the cluster: apply it with kubectl, or run it. The nodes that run the
+Services' pods need nothing; only a node that runs a director is prepared.
+
+Alone, it prints the directors' identity: namespace, ServiceAccount, RBAC and
+token Secret. Its commands print the rest.`,
+		Example: `  thelb generate k8s > thelb-k8s.yaml && kubectl apply -f thelb-k8s.yaml
+  thelb generate k8s service web --port 80:8080 > web.yaml`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/kubernetes.html"},
+		Args:        noArgs,
 	}
-	head := fmt.Sprintf("# theLB %s, as `thelb generate k8s` printed it: the directors' identity and\n# permissions in the cluster. Apply it: kubectl apply -f <this file>\n", version.Version)
-	if len(args) == 0 {
+	pf := c.PersistentFlags()
+	pf.StringVar(&from.kubeconfig, "from-kubeconfig", "", "Read the cluster with this kubeconfig (a `path`), to fit the output to it - it asks first, and only reads")
+	pf.StringVar(&from.context, "from-context", "", "The kubeconfig's `context` (default: its current one)")
+	pf.BoolVar(&from.yes, "yes", false, "Read it without asking, for scripts")
+	// Both say how to read the cluster: without --from-kubeconfig, there is
+	// none to read. Checked before any form runs.
+	c.PersistentPreRunE = func(c *cobra.Command, args []string) error {
+		if err := c.Root().PersistentPreRunE(c, args); err != nil {
+			return err
+		}
+		switch {
+		case from.kubeconfig == "" && from.context != "":
+			return usagef("--from-context names a context of --from-kubeconfig: give that too")
+		case from.kubeconfig == "" && from.yes:
+			return usagef("--yes says to read the cluster without asking: give --from-kubeconfig too")
+		}
+		return nil
+	}
+	c.RunE = a.act(func(*cobra.Command, []string) error {
+		head := k8sHead()
 		if from.kubeconfig != "" {
-			v, err := from.open(ctx, "thelb generate k8s", []string{"the API server's version"}, stderr)
+			v, err := from.open(a.ctx, "thelb generate k8s", []string{"the API server's version"}, a.stderr)
 			if err != nil {
 				return err
 			}
 			head += v.fitted()
 		}
-		_, _ = fmt.Fprint(stdout, head+k8sIdentity)
+		_, _ = fmt.Fprint(a.stdout, head+k8sIdentity)
 		return nil
-	}
-	switch args[0] {
-	case "kubeconfig":
-		if len(args) > 1 {
-			return usagef("thelb generate k8s kubeconfig: unexpected %q", args[1])
-		}
-		if from.kubeconfig != "" {
-			v, err := from.open(ctx, "thelb generate k8s kubeconfig", []string{"the API server's version",
-				"the Secret thelb/thelb-director-token - its token and CA go into the kubeconfig", "what that token may do, as a director would ask"}, stderr)
-			if err != nil {
-				return err
+	})
+	kubeconfig := &cobra.Command{
+		Use:   "kubeconfig [--from-kubeconfig <path> [--from-context <name>] [--yes]]",
+		Short: "A script that prints the kubeconfig of directors outside the cluster",
+		Long: `Print a script that prints the kubeconfig of directors outside the cluster:
+kubectl's API server, and the token of the Secret thelb-director-token. Run it
+where kubectl reaches the cluster, once the identity is applied.
+
+With --from-kubeconfig, it prints the kubeconfig itself, and checks that the
+token has every permission a director needs.
+
+Then give the directors --kubeconfig /etc/thelb/kubeconfig.`,
+		Example: `  thelb generate k8s kubeconfig > thelb-kubeconfig.sh
+  sh thelb-kubeconfig.sh > thelb.kubeconfig
+  sudo install -D -m 600 thelb.kubeconfig /etc/thelb/kubeconfig`,
+		Args: noArgs,
+		RunE: a.act(func(*cobra.Command, []string) error {
+			if from.kubeconfig != "" {
+				v, err := from.open(a.ctx, "thelb generate k8s kubeconfig", []string{"the API server's version",
+					"the Secret thelb/thelb-director-token - its token and CA go into the kubeconfig", "what that token may do, as a director would ask"}, a.stderr)
+				if err != nil {
+					return err
+				}
+				return kubeconfigFromCluster(a.ctx, v, version.Version, a.stdout, a.stderr)
 			}
-			return kubeconfigFromCluster(ctx, v, version.Version, stdout, stderr)
-		}
-		_, _ = fmt.Fprintf(stdout, kubeconfigScript, version.Version)
-		return nil
-	case "service":
-		return generateK8sService(ctx, args[1:], stdout, stderr, from)
-	case "node":
-		return generateK8sNode(ctx, args[1:], stdout, stderr, from)
-	case "director":
-	default:
-		return usagef("thelb generate k8s [kubeconfig | director <the flags it runs with> | node <name> | service <name> [flags]]")
+			_, _ = fmt.Fprintf(a.stdout, kubeconfigScript, version.Version)
+			return nil
+		}),
 	}
-	flags := args[1:]
-	cmd := "generate k8s director"
-	cfg, err := directorConfig(ctx, cmd, flags)
-	if err != nil {
-		return err
+	node := &cobra.Command{
+		Use:   "node <name> [--from-kubeconfig <path> [--from-context <name>] [--yes]]",
+		Short: "A script that makes a node a director's node",
+		Long: `Print a script that makes a node a director's node, before a director runs
+there (in the DaemonSet, or under systemd). It taints and drains a worker (a
+control-plane node is left as it is), keeps kube-proxy off the node, labels it
+dmarts.app/thelb-director=true, and with Cilium touches theLB's Services so
+Cilium leaves them alone there. Its last lines say how to undo it.
+
+Without --from-kubeconfig, the script finds out at run time what the node
+needs; with it, it holds only those steps.`,
+		Example: "  thelb generate k8s node cp1 > thelb-node.sh && sh thelb-node.sh",
+		Args:    nArgs(1, "the node's name: node <name>"),
+		RunE: a.act(func(_ *cobra.Command, args []string) error {
+			return generateK8sNode(a.ctx, args[0], a.stdout, a.stderr, from)
+		}),
 	}
-	given := func(name string) bool {
-		return slices.ContainsFunc(flags, func(f string) bool {
-			return f == "--"+name || strings.HasPrefix(f, "--"+name+"=") || f == "-"+name || strings.HasPrefix(f, "-"+name+"=")
-		})
+	addTo(c, "", kubeconfig, a.k8sDirectorCmd(&from), node, a.k8sServiceCmd(&from))
+	return c
+}
+
+// k8sHead is the first lines of what generate k8s prints.
+func k8sHead() string {
+	return fmt.Sprintf("# theLB %s, as `thelb generate k8s` printed it: the directors' identity and\n# permissions in the cluster. Apply it: kubectl apply -f <this file>\n", version.Version)
+}
+
+// k8sDirectorCmd is generate k8s director: the identity, and a DaemonSet that
+// runs directors on the labelled nodes with the flags given - thelb
+// director's, checked as it checks them, and as a pod needs them.
+func (a *app) k8sDirectorCmd(from *fromCluster) *cobra.Command {
+	var f directorFlags
+	c := &cobra.Command{
+		Use:   "director --kubeconfig in-cluster --metrics <address:port> [flags]",
+		Short: "A DaemonSet that runs directors on labelled nodes",
+		Long: `Print the identity, and a DaemonSet that runs a director on each node labelled
+dmarts.app/thelb-director, with these flags - the flags of thelb director,
+checked as it checks them, and these too:
+
+  --kubeconfig in-cluster     The pod's own ServiceAccount
+  --metrics <address:port>    The readiness probe asks /readyz there
+  no --name                   Each director is named after its node
+  two secret files            Of different names: the two keys of the Secret
+                              thelb-secrets, made from a director's files
+  --bootstrap                 Only with --bootstrap-wait 31s or more
+
+With --from-kubeconfig, it also reads whether kube-proxy runs, and then points
+the pods at the API server's address.`,
+		Example: `  thelb generate k8s director --vip 10.0.0.10 --port 7443 \
+    --secret-file /etc/thelb/director.secret \
+    --backend-secret-file /etc/thelb/backend.secret \
+    --kubeconfig in-cluster --metrics 127.0.0.1:9180 > thelb-director.yaml`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/kubernetes.html"},
+		Args:        noArgs,
 	}
-	switch {
-	case cfg.Kubeconfig != kube.InCluster:
-		return usagef("thelb %s: a director in a pod serves Kubernetes with its pod's ServiceAccount: give --kubeconfig %s", cmd, kube.InCluster)
-	case given("name"):
-		return usagef("thelb %s: each director is named after its node: leave out --name", cmd)
-	case cfg.Metrics == "":
-		return usagef("thelb %s: give --metrics 127.0.0.1:<port>: the pod's readiness probe asks it, at /readyz", cmd)
-	case filepath.Base(cfg.SecretFile) == filepath.Base(cfg.BackendSecretFile):
-		return usagef("thelb %s: the two secret files are two keys of one Secret, named after the files: give them different names", cmd)
-	case cfg.Bootstrap && cfg.BootstrapWait < 31*time.Second:
-		return usagef("thelb %s: a crashed pod is restarted after 10 seconds, sooner than the other of two directors stands alone: with --bootstrap, give --bootstrap-wait 31s (the control VIP's lease plus 25 seconds) or more", cmd)
-	}
-	env := ""
-	if from.kubeconfig != "" {
-		v, err := from.open(ctx, "thelb "+cmd, []string{"the API server's version", "the nodes labelled dmarts.app/thelb-director", "whether kube-proxy runs"}, stderr)
+	f.add(c)
+	c.RunE = a.act(func(c *cobra.Command, _ []string) error {
+		cfg, err := f.config(a.ctx, a.debug)
 		if err != nil {
 			return err
 		}
-		if env, err = directorFromCluster(ctx, v, stderr); err != nil {
-			return err
+		switch {
+		case cfg.Kubeconfig != kube.InCluster:
+			return usagef("a director in a pod serves Kubernetes with its pod's ServiceAccount: give --kubeconfig %s", kube.InCluster)
+		case c.Flags().Changed("name"):
+			return usagef("each director is named after its node: leave out --name")
+		case cfg.Metrics == "":
+			return usagef("give --metrics 127.0.0.1:<port>: the pod's readiness probe asks it, at /readyz")
+		case filepath.Base(cfg.SecretFile) == filepath.Base(cfg.BackendSecretFile):
+			return usagef("the two secret files are two keys of one Secret, named after the files: give them different names")
+		case cfg.Bootstrap && cfg.BootstrapWait < 31*time.Second:
+			return usagef("a crashed pod is restarted after 10 seconds, sooner than the other of two directors stands alone: with --bootstrap, give --bootstrap-wait 31s (the control VIP's lease plus 25 seconds) or more")
 		}
-		head += v.fitted()
-	}
+		head, env := k8sHead(), ""
+		if from.kubeconfig != "" {
+			v, err := from.open(a.ctx, "thelb generate k8s director", []string{"the API server's version", "the nodes labelled dmarts.app/thelb-director", "whether kube-proxy runs"}, a.stderr)
+			if err != nil {
+				return err
+			}
+			if env, err = directorFromCluster(a.ctx, v, a.stderr); err != nil {
+				return err
+			}
+			head += v.fitted()
+		}
+		_, _ = fmt.Fprint(a.stdout, head+k8sIdentity+daemonSet(cfg, given(c, a.debug), env))
+		return nil
+	})
+	return c
+}
+
+// daemonSet is the DaemonSet that runs directors with cfg - given as flags -
+// and env, the environment fitted to the cluster.
+func daemonSet(cfg director.Config, flags []string, env string) string {
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) }
 	var argLines strings.Builder
 	argLines.WriteString("            - director\n")
@@ -256,6 +349,5 @@ spec:
             type: DirectoryOrCreate
 `, filepath.Base(cfg.SecretFile), filepath.Base(cfg.BackendSecretFile), image(), argLines.String(), env, q(host), port,
 		q(cfg.SecretFile), q(filepath.Base(cfg.SecretFile)), q(cfg.BackendSecretFile), q(filepath.Base(cfg.BackendSecretFile)))
-	_, _ = fmt.Fprint(stdout, head+k8sIdentity+ds)
-	return nil
+	return ds
 }

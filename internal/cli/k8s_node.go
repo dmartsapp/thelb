@@ -166,12 +166,8 @@ func unindent(s string) string {
 
 // generateK8sNode prints the script that makes a node a director's node -
 // fitted to the cluster, with from.
-func generateK8sNode(ctx context.Context, args []string, stdout, stderr io.Writer, from fromCluster) error {
+func generateK8sNode(ctx context.Context, node string, stdout, stderr io.Writer, from fromCluster) error {
 	const cmd = "thelb generate k8s node"
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return usagef("%s <the node's name>", cmd)
-	}
-	node := args[0]
 	if len(node) > 253 || !k8sNodeRE.MatchString(node) {
 		return usagef("%s: %q is not a node's name", cmd, node)
 	}

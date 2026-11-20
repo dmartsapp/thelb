@@ -10,7 +10,7 @@ nav: Install
 ## What you need
 
 - **Linux.** theLB is tested on Debian 13 (kernel 6.12) and aims to work on kernels from 5.14 (RHEL 9) on.
-- **Root** on every machine. Every command except `--help` and `--version` must run as root (`sudo`).
+- **Root** on every machine. Every command except `--help`, `--version` and `completion` must run as root (`sudo`).
 - **Kernel modules.** The kernel loads them by itself when they are installed:
   - on directors: `ip_vs` and its schedulers (`ip_vs_wrr` for the default one);
   - on backends: `dummy`, and `nf_tables` with its NAT support;

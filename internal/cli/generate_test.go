@@ -24,7 +24,7 @@ func TestGenerateSystemd(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
 	for _, want := range []string{
-		"ExecStart=/usr/local/bin/thelb director --vip 10.0.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret --name lb-1\n",
+		"ExecStart=/usr/local/bin/thelb director --vip 10.0.0.10 --port 7443 --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret --bootstrap --name lb-1\n",
 		"Type=notify\n", "WatchdogSec=30\n", "Restart=always\n", "RestartSec=30\n",
 		"CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE\n",
 		"ProtectSystem=full\n", "ReadWritePaths=-/etc/thelb\n", "ProtectHome=yes\n", "PrivateTmp=yes\n",
@@ -55,11 +55,14 @@ func TestGenerateSystemd(t *testing.T) {
 		t.Errorf("a secret file in /tmp: hidden by PrivateTmp, or no warning:\n%s", out)
 	}
 
-	if code, _, errOut := as(t, 0, "generate", "systemd", "director", "--port", "7443"); code != 2 || !strings.Contains(errOut, "thelb generate systemd director: --vip, the control VIP, is required") {
+	if code, _, errOut := as(t, 0, "generate", "systemd", "director", "--port", "7443"); code != 2 || !strings.Contains(errOut, `thelb generate systemd director: required flag(s) "vip", "secret-file", "backend-secret-file" not set`) {
 		t.Errorf("flags the director refuses: exit %d, %q", code, errOut)
 	}
-	if code, _, _ := as(t, 0, "generate", "systemd"); code != 2 {
-		t.Errorf("no role: exit %d", code)
+	if code, _, errOut := as(t, 0, "generate", "systemd", "director", "--vip", "10.0.0.10/24", "--port", "7443", "--secret-file", "/s", "--backend-secret-file", "/b"); code != 2 || !strings.Contains(errOut, "--vip is the control VIP's address or name, without a prefix") {
+		t.Errorf("a flag the director refuses: exit %d, %q", code, errOut)
+	}
+	if code, _, _ := as(t, 0, "generate", "systemd", "router"); code != 2 {
+		t.Errorf("no such role: exit %d", code)
 	}
 }
 

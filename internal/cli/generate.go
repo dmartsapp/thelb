@@ -1,68 +1,160 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/netip"
 	"path/filepath"
 	"slices"
 	"strings"
 
-	"github.com/dmartsapp/thelb/internal/doctor"
+	"github.com/spf13/cobra"
+
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/localsock"
 	"github.com/dmartsapp/thelb/internal/safe"
+	"github.com/dmartsapp/thelb/internal/secret"
 )
 
-// generateSystemd prints a systemd unit that runs a role with the flags given,
-// checked as the role checks them: theLB prints it, the user installs it.
-func generateSystemd(ctx context.Context, args []string, stdout io.Writer) error {
-	if len(args) == 0 || (args[0] != "director" && args[0] != "backend") {
-		return usagef("thelb generate systemd director|backend <the flags it runs with>: a unit that runs it so")
+// thelb generate prints files theLB needs - it writes nothing, to disk or to
+// a cluster: the user keeps or installs what it prints.
+
+func (a *app) generateCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "generate <command>",
+		Short: "Print a file theLB needs - it writes nothing",
+		Long:  "Print a file theLB needs, for you to keep or install. It writes nothing.",
 	}
-	role, flags := args[0], args[1:]
-	cmd := "generate systemd " + role
-	var paths, writable []string // files it reads; directories it may write
-	restart := "1"
-	switch role {
-	case "director":
-		cfg, err := directorConfig(ctx, cmd, flags)
+	a.group(c)
+	c.AddGroup(
+		&cobra.Group{ID: "cluster", Title: "The cluster:"},
+		&cobra.Group{ID: "boot", Title: "This node, from boot:"},
+		&cobra.Group{ID: "k8s", Title: "Kubernetes:"},
+	)
+	secretCmd := &cobra.Command{
+		Use:   "secret",
+		Short: "A new cluster secret",
+		Long: `Print a new cluster secret: for a secret file made before the first bootstrap.
+The first bootstrap makes the files it lacks, so this is optional.`,
+		Example: "  thelb generate secret > /etc/thelb/director.secret",
+		Args:    noArgs,
+		RunE: a.act(func(*cobra.Command, []string) error {
+			s, err := secret.Generate()
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintln(a.stdout, s.Encode())
+			return nil
+		}),
+	}
+	commandsCmd := &cobra.Command{
+		Use:   "commands",
+		Short: "The admin commands that create this cluster's setup again",
+		Long: `On a director: print the thelb admin commands that create the cluster's pools,
+services and assignments again, as they are now - a shell script to keep, and
+to run on a cluster created again after every director stopped. theLB never
+reads it.`,
+		Example: "  thelb generate commands > /root/thelb-restore.sh",
+		Args:    noArgs,
+		RunE: a.act(func(*cobra.Command, []string) error {
+			resp, err := a.callDirector(localsock.Request{Op: localsock.OpGenerate, What: "commands"})
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprint(a.stdout, resp.Text)
+			return nil
+		}),
+	}
+	addTo(c, "cluster", secretCmd, commandsCmd)
+	addTo(c, "boot", a.systemdCmd(), a.bootCmd("sysctl"), a.bootCmd("modules"))
+	addTo(c, "k8s", a.k8sCmd())
+	return c
+}
+
+// systemdCmd is generate systemd director|backend: a unit that runs the role
+// with the flags given - the role's own, checked as the role checks them.
+func (a *app) systemdCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "systemd <director|backend>",
+		Short: "A systemd unit for a director or a backend",
+		Long: `Print a systemd unit that runs this binary as a director or a backend, with
+the flags given - checked as the role checks them. The unit uses Type=notify,
+the watchdog and Restart=always, and bounds theLB's capabilities and what it
+may write.`,
+		Example: `  thelb generate systemd director --vip 10.0.0.10 --port 7443 \
+    --secret-file /etc/thelb/director.secret \
+    --backend-secret-file /etc/thelb/backend.secret |
+    sudo tee /etc/systemd/system/thelb-director.service
+  sudo systemctl daemon-reload && sudo systemctl enable --now thelb-director`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/systemd.html"},
+	}
+	var df directorFlags
+	dir := &cobra.Command{
+		Use:   "director [flags]",
+		Short: "A unit for a director, with the flags thelb director takes",
+		Long: `Print a systemd unit that runs this binary as a director, with these flags -
+the flags of thelb director, checked as it checks them.`,
+		Example: `  thelb generate systemd director --vip 10.0.0.10 --port 7443 \
+    --secret-file /etc/thelb/director.secret \
+    --backend-secret-file /etc/thelb/backend.secret |
+    sudo tee /etc/systemd/system/thelb-director.service`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/systemd.html"},
+		Args:        noArgs,
+	}
+	df.add(dir)
+	dir.RunE = a.act(func(c *cobra.Command, _ []string) error {
+		cfg, err := df.config(a.ctx, a.debug)
 		if err != nil {
 			return err
 		}
-		paths = []string{cfg.SecretFile, cfg.BackendSecretFile}
+		paths := []string{cfg.SecretFile, cfg.BackendSecretFile} // files it reads
 		if cfg.Kubeconfig != "" && cfg.Kubeconfig != kube.InCluster {
 			paths = append(paths, cfg.Kubeconfig)
 		}
-		if cfg.Bootstrap { // the first bootstrap writes the secret files that are missing
+		var writable []string // directories it may write
+		if cfg.Bootstrap {    // the first bootstrap writes the secret files that are missing
 			for _, p := range paths {
 				if d := filepath.Dir(p); !slices.Contains(writable, d) {
 					writable = append(writable, d)
 				}
 			}
 		}
-		restart = "30"
-	case "backend":
-		cfg, err := backendConfig(ctx, cmd, flags)
+		return a.printUnit("director", given(c, a.debug), paths, writable, "30")
+	})
+	var bf backendFlags
+	back := &cobra.Command{
+		Use:   "backend --join <address:port> --secret-file <path> [flags]",
+		Short: "A unit for a backend, with the flags thelb backend takes",
+		Long: `Print a systemd unit that runs this binary as a backend, with these flags -
+the flags of thelb backend, checked as it checks them.`,
+		Example: `  thelb generate systemd backend --join 10.0.0.10:7443 \
+    --secret-file /etc/thelb/backend.secret --offer nginx=tcp/8080 |
+    sudo tee /etc/systemd/system/thelb-backend.service`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/systemd.html"},
+		Args:        noArgs,
+	}
+	bf.add(back)
+	back.RunE = a.act(func(c *cobra.Command, _ []string) error {
+		cfg, err := bf.config(a.ctx)
 		if err != nil {
 			return err
 		}
-		paths = []string{cfg.SecretFile}
-	}
+		return a.printUnit("backend", given(c, a.debug), []string{cfg.SecretFile}, nil, "1")
+	})
+	return a.group(c, dir, back)
+}
+
+// printUnit prints the unit that runs this binary in role, with flags.
+func (a *app) printUnit(role string, flags, paths, writable []string, restart string) error {
 	bin, err := executable()
 	if err != nil {
-		return fmt.Errorf("thelb %s: where this binary is: %w", cmd, err)
+		return fmt.Errorf("where this binary is: %w", err)
 	}
 	if b, err := filepath.EvalSymlinks(bin); err == nil {
 		bin = b
 	}
 	if err := safe.Arg(bin); err != nil {
-		return fmt.Errorf("thelb %s: this binary's path %v: a unit cannot hold it - move the binary to /usr/local/bin", cmd, err)
+		return fmt.Errorf("this binary's path %v: a unit cannot hold it - move the binary to /usr/local/bin", err)
 	}
-	_, _ = fmt.Fprint(stdout, systemdUnit(role, bin, flags, paths, writable, restart))
+	_, _ = fmt.Fprint(a.stdout, systemdUnit(role, bin, flags, paths, writable, restart))
 	return nil
 }
 
@@ -201,87 +293,41 @@ var (
 	}
 )
 
-// generateBoot prints a sysctl.d or modules-load.d file for a role.
-func generateBoot(what string, args []string, stdout io.Writer) error {
-	if len(args) != 1 || (args[0] != "director" && args[0] != "backend") {
-		return usagef("thelb generate %s director|backend", what)
-	}
-	role := args[0]
-	file, lines := "/etc/sysctl.d/90-thelb-"+role+".conf", sysctls[role]
-	what2 := "the kernel parameters"
+// bootCmd is generate sysctl or generate modules: a sysctl.d or
+// modules-load.d file for a role, for what theLB sets while it runs to be set
+// from boot.
+func (a *app) bootCmd(what string) *cobra.Command {
+	short, long, example := "A sysctl.d file with the kernel parameters theLB sets",
+		`Print a sysctl.d file with the kernel parameters theLB sets while it runs, for
+them from boot. theLB itself never writes one.`,
+		"  thelb generate sysctl backend | sudo tee /etc/sysctl.d/90-thelb-backend.conf"
 	if what == "modules" {
-		file, lines, what2 = "/etc/modules-load.d/thelb-"+role+".conf", modules[role], "the kernel modules"
+		short, long, example = "A modules-load.d file with the kernel modules theLB uses",
+			`Print a modules-load.d file with the kernel modules theLB uses, for them from
+boot.`,
+			"  thelb generate modules director | sudo tee /etc/modules-load.d/thelb-director.conf"
 	}
-	_, _ = fmt.Fprintf(stdout, "# theLB %s: %s it sets, or loads, while it runs - for them from boot.\n# Install: sudo thelb generate %s %s | sudo tee %s\n%s\n", role, what2, what, role, file, strings.Join(lines, "\n"))
-	return nil
-}
-
-// doctorCmd checks this node for theLB - for the roles running here, the one
-// --role names, or both - and changes nothing. It fails (exit 1) when theLB
-// could not run, or not do part of its work.
-func doctorCmd(args []string, stdout io.Writer) error {
-	fs := newFlags("doctor")
-	role := fs.String("role", "", "")
-	port := fs.Int("port", 0, "")
-	vip := fs.String("vip", "", "")
-	asJSON := fs.Bool("json", false, "")
-	if err := parse(fs, args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return usagef("thelb doctor: unexpected %q", fs.Arg(0))
-	}
-	if *role != "" && *role != "director" && *role != "backend" {
-		return usagef("thelb doctor: --role is director or backend, not %q", *role)
-	}
-	if *port < 0 || *port > 65535 {
-		return usagef("thelb doctor: --port is the control port, 1 to 65535")
-	}
-	if _, err := netip.ParseAddr(*vip); *vip != "" && err != nil {
-		return usagef("thelb doctor: --vip is the control VIP's address, not %q", *vip)
-	}
-	facts := doctor.Facts{Running: map[string]bool{}}
-	if resp, err := localsock.Call(roleDir("director"), localsock.Request{Op: localsock.OpStatus}); err == nil && resp.Status != nil {
-		facts.Running["director"], facts.Status = true, resp.Status
-		for _, v := range resp.Status.VIPs {
-			if v.Purpose == "control" {
-				facts.Port, facts.Interface, facts.VIP = v.Port, v.Interface, v.VIP
+	return &cobra.Command{
+		Use:       what + " <director|backend>",
+		Short:     short,
+		Long:      long,
+		Example:   example,
+		ValidArgs: []string{"director", "backend"},
+		Args: func(c *cobra.Command, args []string) error {
+			if len(args) != 1 || (args[0] != "director" && args[0] != "backend") {
+				return usagef("%s takes a role: director or backend", c.CommandPath())
 			}
-		}
-	}
-	if _, err := localsock.Call(roleDir("backend"), localsock.Request{Op: localsock.OpStatus}); err == nil {
-		facts.Running["backend"] = true
-	}
-	switch {
-	case *role != "":
-		facts.Roles = []string{*role}
-	case facts.Running["director"] || facts.Running["backend"]:
-		for _, r := range []string{"director", "backend"} {
-			if facts.Running[r] {
-				facts.Roles = append(facts.Roles, r)
+			return nil
+		},
+		RunE: a.act(func(_ *cobra.Command, args []string) error {
+			role := args[0]
+			file, lines := "/etc/sysctl.d/90-thelb-"+role+".conf", sysctls[role]
+			what2 := "the kernel parameters"
+			if what == "modules" {
+				file, lines, what2 = "/etc/modules-load.d/thelb-"+role+".conf", modules[role], "the kernel modules"
 			}
-		}
-	default:
-		facts.Roles = []string{"director", "backend"}
+			_, _ = fmt.Fprintf(a.stdout, "# theLB %s: %s it sets, or loads, while it runs - for them from boot.\n# Install: sudo thelb generate %s %s | sudo tee %s\n%s\n", role, what2, what, role, file, strings.Join(lines, "\n"))
+			return nil
+		}),
 	}
-	if *port > 0 {
-		facts.Port = *port
-	}
-	if *vip != "" {
-		facts.VIP = *vip
-	}
-	findings := doctor.Check(facts)
-	if *asJSON {
-		b, err := json.MarshalIndent(findings, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(stdout, string(b))
-	} else {
-		_, _ = fmt.Fprintf(stdout, "theLB doctor, for a %s on this node - it changes nothing:\n\n%s", strings.Join(facts.Roles, " and a "), doctor.Render(findings))
-	}
-	if doctor.Failed(findings) {
-		return errors.New("thelb doctor: something theLB needs is missing here - see what to do, above")
-	}
-	return nil
 }

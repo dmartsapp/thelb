@@ -46,7 +46,7 @@
 <span class="tok-cmd">sudo</span> systemctl enable <span class="tok-flag">--now</span> thelb-director     <span class="tok-com"># or thelb-backend</span>
 <span class="tok-cmd">journalctl</span> <span class="tok-flag">-u</span> thelb-director <span class="tok-flag">-f</span>                <span class="tok-com"># follow its log</span></code></pre></div>
 <p>Here is a director's unit:</p>
-<figure class="screen"><img src="assets/screens/generate-systemd.svg" width="797" height="898" alt="A director&#x27;s unit, for the binary in `/usr/local/bin`." loading="lazy"><figcaption>A director's unit, for the binary in <code>/usr/local/bin</code>.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb generate systemd director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+<figure class="screen"><img src="assets/screens/generate-systemd.svg" width="789" height="898" alt="A director&#x27;s unit, for the binary in `/usr/local/bin`." loading="lazy"><figcaption>A director's unit, for the binary in <code>/usr/local/bin</code>.</figcaption><details class="screentext"><summary>As text</summary><pre><code>$ sudo thelb generate systemd director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
 # theLB director, as `thelb generate systemd` printed it. Install it, and start it:
 #   sudo tee /etc/systemd/system/thelb-director.service &lt;this file
 #   sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now thelb-director
@@ -59,7 +59,7 @@ Wants=network-online.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --bootstrap --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret
+ExecStart=/usr/local/bin/thelb director --vip 198.18.0.10 --port 7443 --secret-file /etc/thelb/director.secret --backend-secret-file /etc/thelb/backend.secret --bootstrap
 Restart=always
 # Longer than the other of two directors takes to stand alone after a crash -
 # the control VIP's lease (6 s unless set) and about 15 s more: back sooner,

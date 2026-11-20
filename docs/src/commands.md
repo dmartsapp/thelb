@@ -9,12 +9,25 @@ nav: Commands
 
 ## Overview
 
-Every command except `--help` and `--version` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly. `thelb --help` lists the commands; `thelb <command> --help` lists a command's subcommands, or its options; `thelb <command> <subcommand> --help` shows one subcommand's usage, options and examples - `thelb admin service add --help`, `thelb generate k8s service --help`. `thelb help <command> [<subcommand>]` shows the same. A command that needs a subcommand - `thelb admin`, `thelb generate`, `thelb offer` - shows its page when given none. Arguments with control characters are refused before any command reads them ([What theLB checks](security.md#what-thelb-checks)).
+A command line is `thelb [global flags] <command> [<subcommand> ...] [flags] [arguments]`, as in most tools. Flags go before or after the arguments - `thelb admin pool add main --vip 10.10.1.20/24 --vippool-count 10` and `thelb admin pool add --vip 10.10.1.20/24 --vippool-count 10 main` are the same - and take a value as `--port 7443` or `--port=7443`. Long flags have two dashes.
+
+Every command except `--help`, `--version` and `completion` runs only as root. The exit status is `0` when it worked, `1` when it failed, and `2` when the command was used wrongly: a command, flag or argument theLB does not take, or a required flag missing. A command that groups others - `thelb admin`, `thelb generate`, `thelb offer`, `thelb admin pool` - shows its page when given none. Arguments with control characters are refused before any command reads them ([What theLB checks](security.md#what-thelb-checks)).
+
+**The help.** `thelb --help` lists the commands, in groups; `thelb <command> --help` shows a command: what it does, its usage, examples, subcommands and flags - the flags in sections where there are many. `thelb help <command> [<subcommand>]` shows the same. Each page lists, under **Global flags**, the flags every command takes, and under **Flags of thelb generate k8s** those every form of `generate k8s` takes.
+
+**Global flags**, on every command:
+
+| Flag | Meaning |
+|---|---|
+| `-h`, `--help` | show the command's help |
+| `--debug` | say more: a director logs each connection it forwards while leading ([`--debug`](monitoring.md#each-connection-with-debug)); `status`, `doctor`, `admin`, `offer` and `generate commands` say on standard error what they ask the theLB running on this machine, and how long it took to answer. A backend has nothing more to say yet |
+
+**Shell completion.** `thelb completion bash|zsh|fish|powershell` prints the completion script of a shell - commands, subcommands, flags and their values. For bash: `thelb completion bash | sudo tee /etc/bash_completion.d/thelb`; `thelb completion bash --help` says more.
 
 ```text
 thelb director --vip <address|name> --port <port> --secret-file <file> --backend-secret-file <file>
                [--bootstrap [--bootstrap-wait <duration>]] [--cluster <name>] [--name <name>] [--interface <name>]
-               [--metrics <address:port>] [--debug] [--kubeconfig <file>|in-cluster]
+               [--metrics <address:port>] [--kubeconfig <file>|in-cluster]
 thelb backend  --join <address|name>:<port> --secret-file <file> [--offer [<name>=]<proto>/<port>[,check=tcp|none|http:<path>] ...]
                [--name <name>] [--interface <name>] [--metrics <address:port>]
 thelb offer add <name> <proto>/<port>[,check=tcp|none|http:<path>]      (on a backend)
@@ -39,7 +52,11 @@ thelb admin assign <service> <node>:<offer> ... [--weight <node>=<n>,...]
 thelb admin unassign <service> <node>
 thelb admin lease <seconds>
 thelb admin secret show --role director|backend
+thelb completion bash|zsh|fish|powershell
+thelb help [<command> ...]
 thelb --version
+
+Global flags, on every command: [--debug] [-h|--help]
 ```
 
 ## `thelb director`
@@ -56,7 +73,6 @@ Runs a director. See [Directors and failover](directors.md).
 | `--name` | this node's name; the hostname by default |
 | `--interface` | the control VIP's interface, when it is not the one in its network |
 | `--metrics` | serve [Prometheus metrics](monitoring.md#metrics) on this address and port; not `0.0.0.0` or `::` |
-| `--debug` | log each new connection while leading - see [`--debug`](monitoring.md#each-connection-with-debug) |
 | `--kubeconfig` | serve [Kubernetes](kubernetes.md) Services of class `dmarts.app/thelb`, with this credential: a kubeconfig file (an absolute path), or `in-cluster` for a pod's ServiceAccount |
 | `--bootstrap-wait` | with `--bootstrap`: how long to look for the cluster before creating one (default `5s`; `5s` to `10m`). A director in a pod uses `31s` or more - see [Kubernetes](kubernetes.md#3b-as-a-daemonset) |
 
@@ -106,7 +122,7 @@ Prints something for you to keep or install. It never changes the machine.
 |---|---|
 | `generate secret` | a new secret, for a secret file |
 | `generate commands` | the `thelb admin` commands that create the cluster's pools, services and assignments again - [Keeping them](services.md#keeping-them-thelb-generate-commands) |
-| `generate systemd director\|backend <flags>` | a systemd unit - [Running under systemd](systemd.md) |
+| `generate systemd director\|backend <flags>` | a systemd unit that runs the role with those flags - the role's own, checked as it checks them; on `ExecStart=` in the order the help lists them - [Running under systemd](systemd.md) |
 | `generate sysctl director\|backend` | the kernel settings theLB sets, for `/etc/sysctl.d` |
 | `generate modules director\|backend` | the kernel modules theLB uses, for `/etc/modules-load.d` |
 | `generate k8s` | the directors' identity and permissions in a Kubernetes cluster - [Kubernetes](kubernetes.md#1-one-director-outside-the-cluster) |

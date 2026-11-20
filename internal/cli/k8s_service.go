@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/dmartsapp/thelb/internal/version"
 )
 
@@ -61,12 +63,6 @@ var (
 	k8sPortRE      = regexp.MustCompile(`^(\d+)(/(tcp|udp|sctp))?(:(\d+))?$`)
 )
 
-// portFlags is a repeated --port.
-type portFlags []string
-
-func (p *portFlags) String() string     { return strings.Join(*p, ",") }
-func (p *portFlags) Set(v string) error { *p = append(*p, v); return nil }
-
 // label is one label of a selector.
 type label struct{ key, val string }
 
@@ -88,30 +84,50 @@ type svcPort struct {
 	port, pods int
 }
 
+// serviceFlags are generate k8s service's flags.
+type serviceFlags struct {
+	ns, selector, pool, ip, share, policy string
+	ports                                 []string
+}
+
+// k8sServiceCmd is generate k8s service: a Service of theLB's class.
+func (a *app) k8sServiceCmd(from *fromCluster) *cobra.Command {
+	var f serviceFlags
+	c := &cobra.Command{
+		Use:   "service <name> [flags]",
+		Short: "A Service of class dmarts.app/thelb",
+		Long: `Print a Service of type LoadBalancer and class dmarts.app/thelb, with the
+annotation that keeps Cilium off directors' nodes.
+
+With --from-kubeconfig, it takes the selector and ports from the Deployment or
+StatefulSet of the same name.`,
+		Example: `  thelb generate k8s service web --port 80:8080 > web.yaml
+  kubectl apply -f web.yaml`,
+		Annotations: map[string]string{annDocs: docsURL + "docs/kubernetes.html"},
+		Args:        nArgs(1, "the Service's name: service <name> [flags]"),
+	}
+	fs := c.Flags()
+	fs.StringVar(&f.ns, "namespace", "default", "Its `namespace`")
+	fs.StringArrayVar(&f.ports, "port", nil, "A `port[/proto][:pods-port]`, as often as needed: 80, 53/udp, 80:8080, 443/tcp:8443 (default 80)")
+	fs.StringVar(&f.selector, "selector", "", "The pods it sends to, as one label `key=value` (default app=<name>)")
+	fs.StringVar(&f.policy, "policy", "Local", "Its externalTrafficPolicy, `Local|Cluster`: Local sends only to nodes with a ready pod, and keeps the client's address")
+	fs.StringVar(&f.pool, "pool", "", "Its VIP from this `pool`, not the default")
+	fs.StringVar(&f.ip, "ip", "", "This `address` of the pool")
+	fs.StringVar(&f.share, "shared-vip", "", "One VIP for the Services with this `key`")
+	_ = c.RegisterFlagCompletionFunc("policy", cobra.FixedCompletions([]cobra.Completion{"Local", "Cluster"}, cobra.ShellCompDirectiveNoFileComp))
+	c.RunE = a.act(func(_ *cobra.Command, args []string) error {
+		return generateK8sService(a.ctx, args[0], f, a.stdout, a.stderr, *from)
+	})
+	return c
+}
+
 // generateK8sService prints a Service of theLB's class, for the user to apply:
 // its name, namespace, ports, the pods it selects, and theLB's annotations.
 // With from, it fits them to the cluster first.
-func generateK8sService(ctx context.Context, args []string, stdout, stderr io.Writer, from fromCluster) error {
+func generateK8sService(ctx context.Context, name string, f serviceFlags, stdout, stderr io.Writer, from fromCluster) error {
 	const cmd = "thelb generate k8s service"
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return usagef("%s <name> [--namespace <ns>] [--port <port>[/tcp|udp|sctp][:<pods' port>] ...] [--selector <key=value>] [--pool <pool>] [--ip <address>] [--shared-vip <key>] [--policy Local|Cluster]", cmd)
-	}
-	name := args[0]
-	fs := newFlags("generate k8s service")
-	ns := fs.String("namespace", "default", "")
-	var ports portFlags
-	fs.Var(&ports, "port", "")
-	selector := fs.String("selector", "", "")
-	pool := fs.String("pool", "", "")
-	ip := fs.String("ip", "", "")
-	share := fs.String("shared-vip", "", "")
-	policy := fs.String("policy", "Local", "")
-	if err := parse(fs, args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return usagef("%s: unexpected %q", cmd, fs.Arg(0))
-	}
+	ns, selector, pool, ip, share, policy := &f.ns, &f.selector, &f.pool, &f.ip, &f.share, &f.policy
+	ports := f.ports
 	switch {
 	case !k8sNameRE.MatchString(name):
 		return usagef("%s: a Service's name is lowercase letters, digits and hyphens, beginning with a letter, up to 63: %q", cmd, name)
@@ -142,7 +158,7 @@ func generateK8sService(ctx context.Context, args []string, stdout, stderr io.Wr
 	}
 	havePorts := len(ports) > 0
 	if !havePorts {
-		ports = portFlags{"80"}
+		ports = []string{"80"}
 	}
 	var ps []svcPort
 	seen := map[string]bool{}
