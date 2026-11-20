@@ -2,7 +2,9 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
-## Unreleased
+## v0.1.0-alpha.3 - 2026-11-20
+
+**An alpha**: to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.
 
 - **The command line is built with cobra**, in the layout most tools use: `thelb [global flags] <command> [<subcommand> ...] [flags] [arguments]` ([Commands](https://dmartsapp.github.io/thelb/docs/commands.html)):
   - **flags go before or after the arguments** (`thelb admin assign web web-1:nginx --weight web-1=3`), as `--flag value` or `--flag=value`; **long flags take two dashes only** - `-vip` and `-version`, which Go's flag package took, are refused (exit `2`);

@@ -1,4 +1,4 @@
-# theLB 0.1.0-alpha.2, as `thelb generate k8s` printed it: the directors' identity and
+# theLB 0.1.0-alpha.3, as `thelb generate k8s` printed it: the directors' identity and
 # permissions in the cluster. Apply it: kubectl apply -f <this file>
 apiVersion: v1
 kind: Namespace
@@ -93,7 +93,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: director
-          image: ghcr.io/dmartsapp/thelb:0.1.0-alpha.2
+          image: ghcr.io/dmartsapp/thelb:0.1.0-alpha.3
           args:
             - director
             - "--vip"

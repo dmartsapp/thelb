@@ -15,7 +15,7 @@
 <header class="topbar">
   <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
   <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
-  <span class="version">v0.1.0-alpha.2</span>
+  <span class="version">v0.1.0-alpha.3</span>
   <nav class="toplinks" aria-label="Site">
     <a href="install.html">Install</a>
     <a href="quickstart.html">Docs</a>
@@ -41,7 +41,7 @@
 <ol><li><strong>Write the changelog.</strong> <code>CHANGELOG.md</code> must have a section <code>## vX.Y.Z - &lt;date&gt;</code> with what changed. Its text becomes the release page.</li><li><strong>Create or update the release branch</strong> <code>release/vX.Y</code> from <code>main</code>, and push it:</li></ol>
 <p>``<code>bash git switch -c release/v0.1 main      # the first release of a line; later: git switch release/v0.1 &amp;&amp; git merge --ff-only main git push origin release/v0.1 </code>``</p>
 <ol><li><strong>Tag the release on that branch</strong>, and push the tag:</li></ol>
-<p>``<code>bash git tag -a v0.1.0-alpha.2 -m "theLB v0.1.0-alpha.2" git push origin v0.1.0-alpha.2 </code>``</p>
+<p>``<code>bash git tag -a v0.1.0-alpha.3 -m "theLB v0.1.0-alpha.3" git push origin v0.1.0-alpha.3 </code>``</p>
 <p>The tag must be on its <code>release/vX.Y</code> branch: the workflow checks, and stops if it is not.</p>
 <p><strong>A pre-release</strong> - <code>vX.Y.Z-alpha.N</code>, <code>-beta.N</code>, <code>-rc.N</code> - is cut the same way, on the same <code>release/vX.Y</code> branch, with a changelog section <code>## vX.Y.Z-alpha.N - &lt;date&gt;</code>. Its GitHub release is marked a pre-release, which GitHub's "latest" skips, and its image is tagged with its own version only - never <code>X.Y</code> or <code>latest</code>.</p>
 <h2 id="the-release-workflow">The Release workflow<a class="anchor" href="#the-release-workflow" aria-label="Link to this section">#</a></h2>
@@ -50,10 +50,10 @@
 <p>Every third-party action is pinned to a full commit hash. Jobs get only the permissions they need: the build jobs may sign attestations, the image job may push to the repository's packages, and only the publish job may write the release.</p>
 <h3 id="the-container-image">The container image<a class="anchor" href="#the-container-image" aria-label="Link to this section">#</a></h3>
 <p>The <code>Dockerfile</code> builds nothing: it copies <code>dist/thelb-&lt;version&gt;-linux-&lt;arch&gt;</code> into <code>gcr.io/distroless/static-debian12</code>, so the image runs the very file the release publishes. It runs as root - theLB requires it - and is meant for <code>thelb generate k8s director</code>'s DaemonSet. Check it:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify oci://ghcr.io/dmartsapp/thelb:0.1.0-alpha.2 <span class="tok-flag">--repo</span> dmartsapp/thelb</code></pre></div>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify oci://ghcr.io/dmartsapp/thelb:0.1.0-alpha.3 <span class="tok-flag">--repo</span> dmartsapp/thelb</code></pre></div>
 <h3 id="the-sboms">The SBOMs<a class="anchor" href="#the-sboms" aria-label="Link to this section">#</a></h3>
 <p><code>.github/scripts/sbom.py</code> reads the build information Go embeds in every binary (<code>go version -m</code>) - the Go release, the main module and every dependency with its checksum - and writes it as CycloneDX and SPDX. Standard library only. Each SBOM is attested, so anyone can check that it describes that exact file:</p>
-<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.2-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
+<div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.3-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom</code></pre></div>
 <h2 id="the-slack-notification">The Slack notification<a class="anchor" href="#the-slack-notification" aria-label="Link to this section">#</a></h2>
 <p><code>.github/workflows/notify-slack.yaml</code> starts with the same tag. It waits for the Release run to finish, then posts one message to Slack:</p>
 <ul><li><strong>Released</strong>: the version, a link to the release page, and how many files it has.</li><li><strong>Failed</strong>: which job and which step failed, and the last lines of that step's log, so you can see why without opening GitHub.</li></ul>
@@ -62,10 +62,10 @@
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">gh</span> secret set SLACK_WEBHOOK_URL <span class="tok-flag">--repo</span> dmartsapp/thelb</code></pre></div>
 <p>(It asks for the webhook URL; paste it there, not on the command line.)</p>
 <h2 id="after-a-release">After a release<a class="anchor" href="#after-a-release" aria-label="Link to this section">#</a></h2>
-<ul><li>Check the release page: three binaries, three <code>.sha256</code> files, six SBOMs, and <code>SHA256SUMS</code>.</li><li>Check the image: <code>docker pull ghcr.io/dmartsapp/thelb:0.1.0-alpha.2</code>. <strong>After the first release only</strong>, make the package public: GitHub keeps a new package private - the repository's <strong>Packages</strong>, <code>thelb</code>, <strong>Package settings</strong>, <strong>Change visibility</strong>.</li><li>Check one download: <code>sha256sum -c SHA256SUMS --ignore-missing</code> and <code>gh attestation verify</code> - see <a href="security.html#check-a-release">Security</a>.</li><li>Development goes on on <code>main</code>. Fixes for a released line are merged to its <code>release/vX.Y</code> branch and tagged <code>vX.Y.Z+1</code>.</li></ul>
+<ul><li>Check the release page: three binaries, three <code>.sha256</code> files, six SBOMs, and <code>SHA256SUMS</code>.</li><li>Check the image: <code>docker pull ghcr.io/dmartsapp/thelb:0.1.0-alpha.3</code>. <strong>After the first release only</strong>, make the package public: GitHub keeps a new package private - the repository's <strong>Packages</strong>, <code>thelb</code>, <strong>Package settings</strong>, <strong>Change visibility</strong>.</li><li>Check one download: <code>sha256sum -c SHA256SUMS --ignore-missing</code> and <code>gh attestation verify</code> - see <a href="security.html#check-a-release">Security</a>.</li><li>Development goes on on <code>main</code>. Fixes for a released line are merged to its <code>release/vX.Y</code> branch and tagged <code>vX.Y.Z+1</code>.</li></ul>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="tech-testing.html"><span>Previous</span>Testing</a><a class="next" href="tech-docs.html"><span>Next</span>This documentation</a></nav>
-<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-release.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.2 &middot; MIT License</span></footer>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/tech-release.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.3 &middot; MIT License</span></footer>
 </main>
 <aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#what-runs-when">What runs when</a></li><li class="toc2"><a href="#cutting-a-release">Cutting a release</a></li><li class="toc2"><a href="#the-release-workflow">The Release workflow</a></li><li class="toc3"><a href="#the-container-image">The container image</a></li><li class="toc3"><a href="#the-sboms">The SBOMs</a></li><li class="toc2"><a href="#the-slack-notification">The Slack notification</a></li><li class="toc2"><a href="#after-a-release">After a release</a></li></ul></aside>
 </div>
