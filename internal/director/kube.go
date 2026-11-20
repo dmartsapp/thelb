@@ -2,12 +2,14 @@ package director
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dmartsapp/thelb/internal/api"
@@ -16,6 +18,7 @@ import (
 	"github.com/dmartsapp/thelb/internal/kube"
 	"github.com/dmartsapp/thelb/internal/logx"
 	"github.com/dmartsapp/thelb/internal/safe"
+	"github.com/hashicorp/raft"
 )
 
 // The names theLB reads in a cluster.
@@ -57,6 +60,10 @@ type kubeView struct {
 	nodes    *kube.Cache[kube.Node]
 	slices   *kube.Cache[kube.EndpointSlice]
 	server   string
+
+	mu      sync.Mutex
+	waiting string    // why it does not watch the cluster yet, for status; "" once it does
+	since   time.Time // since when it has been waiting
 }
 
 func newKubeView(c *kube.Client) *kubeView {
@@ -67,7 +74,33 @@ func newKubeView(c *kube.Client) *kubeView {
 		nodes:    kube.NewCache(c, "/api/v1/nodes", func(n *kube.Node) string { return key(n.Meta) }),
 		slices:   kube.NewCache(c, "/apis/discovery.k8s.io/v1/endpointslices", func(e *kube.EndpointSlice) string { return key(e.Meta) }),
 		server:   c.Config().Server.String(),
+		waiting:  "connecting",
+		since:    time.Now(),
 	}
+}
+
+// waitingFor is why this director does not watch the cluster yet, and since
+// when; "" once it does.
+func (k *kubeView) waitingFor() (string, time.Time) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.waiting, k.since
+}
+
+func (k *kubeView) setWaiting(why string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if (k.waiting == "") != (why == "") {
+		k.since = time.Now()
+	}
+	k.waiting = why
+}
+
+// reads is whether this director knows the cluster: it watches it, and has
+// read it all once. A watch lost later keeps what it read.
+func (k *kubeView) reads() bool {
+	w, _ := k.waitingFor()
+	return w == "" && k.services.Synced() && k.nodes.Synced() && k.slices.Synced()
 }
 
 func (k *kubeView) run(ctx context.Context) {
@@ -92,53 +125,130 @@ func (k *kubeView) changed(ctx context.Context) <-chan struct{} {
 	return out
 }
 
-// kubeStart checks that this director can serve Kubernetes - the API server
-// answers, it is recent enough, every permission is held, and a director on
-// a node of the cluster has that node labelled - then watches the cluster.
-func (n *node) kubeStart(ctx context.Context, c *kube.Client, self netip.Addr) error {
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// kubeStart watches the cluster, once this director can serve it: the API
+// server answers, it is recent enough, every permission is held, and a
+// director on a node of the cluster has that node labelled. Until then it says
+// why, asks again, and serves all but Kubernetes' Services - Kubernetes never
+// stops a director.
+func (n *node) kubeStart(ctx context.Context, c *kube.Client, self netip.Addr) {
+	n.kube = newKubeView(c)
+	go func() {
+		said, wait, git := "", kubeRetryFirst, ""
+		for {
+			var problem error
+			var answered bool
+			git, problem, answered = n.kubeCheck(ctx, c, self)
+			if ctx.Err() != nil {
+				return
+			}
+			if problem == nil {
+				break
+			}
+			if problem.Error() != said {
+				said = problem.Error()
+				if answered {
+					n.log.Error("Kubernetes not served: asking again every "+kubeRetryMost.String()+" - meanwhile this director serves all but Kubernetes' Services", "reason", problem)
+				} else {
+					n.log.Warn("Kubernetes not served yet: the API server does not answer; asking again - meanwhile this director serves all but Kubernetes' Services", "reason", problem)
+				}
+			}
+			n.kube.setWaiting(kubeShort(problem, answered))
+			if answered {
+				wait = kubeRetryMost
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			wait = min(2*wait, kubeRetryMost)
+		}
+		n.log.OK("connected to Kubernetes: serving Services of class "+kubeClass, "api", c.Config().Server.String(), "version", git,
+			"credential", c.Config().Source, "permissions", fmt.Sprintf("all %d", len(kubeAccess)))
+		n.kube.setWaiting("")
+		n.kube.run(ctx)
+		go n.kube.report(ctx, n.log)
+	}()
+}
+
+// kubeProblem is why this director cannot serve the cluster, with what status
+// shows of it.
+type kubeProblem struct {
+	short string
+	err   error
+}
+
+func (p kubeProblem) Error() string { return p.err.Error() }
+func (p kubeProblem) Unwrap() error { return p.err }
+
+// kubeShort is what status shows of a problem: the log says it all.
+func kubeShort(err error, answered bool) string {
+	var p kubeProblem
+	switch {
+	case errors.As(err, &p):
+		return p.short
+	case answered:
+		return "the API server answers no"
+	default:
+		return "the API server does not answer"
+	}
+}
+
+// kubeCheck is why this director cannot serve the cluster now, and whether
+// the API server answered; nil: it can. git is the release the API server runs.
+func (n *node) kubeCheck(ctx context.Context, c *kube.Client, self netip.Addr) (git string, problem error, answered bool) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	src := c.Config().Source
 	minor, git, err := c.Version(cctx)
-	if err != nil {
-		return fmt.Errorf("the Kubernetes API server %s (%s) does not answer: %w", c.Config().Server, src, err)
+	var refused *kube.APIError
+	switch {
+	case errors.As(err, &refused): // it answered, with an error: an expired token, a server failing
+		return "", kubeProblem{fmt.Sprintf("the API server answers %d", refused.Code),
+			fmt.Errorf("the Kubernetes API server %s (%s), asked its version: %w", c.Config().Server, src, err)}, true
+	case err != nil && git != "": // it answered, with a version theLB does not know
+		return git, err, true
+	case err != nil:
+		return "", fmt.Errorf("the Kubernetes API server %s (%s) does not answer: %w", c.Config().Server, src, err), false
 	}
 	if minor < kube.MinMinor {
-		return fmt.Errorf("the Kubernetes API server runs %s: theLB serves Kubernetes 1.%d and later", git, kube.MinMinor)
+		return git, kubeProblem{"Kubernetes " + safe.Short(git, 40) + " is older than 1." + fmt.Sprint(kube.MinMinor),
+			fmt.Errorf("the Kubernetes API server runs %s: theLB serves Kubernetes 1.%d and later", git, kube.MinMinor)}, true
 	}
 	var missing []string
 	for _, a := range kubeAccess {
 		ok, err := c.Allowed(cctx, a)
 		if err != nil {
-			return fmt.Errorf("asking the Kubernetes API server what this director may do: %w", err)
+			problem := fmt.Errorf("asking the Kubernetes API server what this director may do: %w", err)
+			if errors.As(err, &refused) {
+				return git, kubeProblem{fmt.Sprintf("the API server answers %d", refused.Code), problem}, true
+			}
+			return git, problem, false // it stopped answering
 		}
 		if !ok {
 			missing = append(missing, a.String())
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("the Kubernetes credential (%s) lacks permissions theLB needs: %s - apply what thelb generate k8s prints", src, strings.Join(missing, ", "))
+		return git, kubeProblem{"lacks permissions: " + strings.Join(missing, ", "),
+			fmt.Errorf("the Kubernetes credential (%s) lacks permissions theLB needs: %s - apply what thelb generate k8s prints", src, strings.Join(missing, ", "))}, true
 	}
 	nodes, _, err := kube.List[kube.Node](cctx, c, "/api/v1/nodes")
 	if err != nil {
-		return fmt.Errorf("listing the cluster's nodes: %w", err)
+		return git, fmt.Errorf("listing the cluster's nodes: %w", err), errors.As(err, &refused)
 	}
 	for _, kn := range nodes {
 		for _, a := range kn.Status.Addresses {
 			if ip, err := netip.ParseAddr(a.Address); err == nil && ip.Unmap() == self {
 				if _, ok := kn.Meta.Labels[labelDirector]; !ok {
-					return fmt.Errorf("this director runs on the Kubernetes node %s, which is not labelled as a director: the node's own service proxy would take the VIPs' packets before theLB - label it (kubectl label node %s %s=true), and keep theLB's Services off it as the documentation says", kn.Meta.Name, kn.Meta.Name, labelDirector)
+					return git, kubeProblem{"its node " + kn.Meta.Name + " is not labelled as a director",
+						fmt.Errorf("this director runs on the Kubernetes node %s, which is not labelled as a director: the node's own service proxy would take the VIPs' packets before theLB - label it (kubectl label node %s %s=true), and keep theLB's Services off it as the documentation says", kn.Meta.Name, kn.Meta.Name, labelDirector)}, true
 				}
 				n.log.OK("this director runs on a Kubernetes node labelled as a director", "node", kn.Meta.Name)
 			}
 		}
 	}
-	n.log.OK("connected to Kubernetes: serving Services of class "+kubeClass, "api", c.Config().Server.String(), "version", git,
-		"credential", src, "permissions", fmt.Sprintf("all %d", len(kubeAccess)))
-	n.kube = newKubeView(c)
-	n.kube.run(ctx)
-	go n.kube.report(ctx, n.log)
-	return nil
+	return git, nil, true
 }
 
 // report logs how this director's watch of the cluster goes: once it has read
@@ -279,9 +389,13 @@ func (s *session) kubeController(ctx context.Context) {
 	if s.n.d.KubeEvery > 0 {
 		every = s.n.d.KubeEvery
 	}
+	handing, led := false, time.Now()
 	for {
 		changed := k.changed(ctx)
 		fsmChanged := s.fsm.Changed()
+		if !handing && time.Since(led) >= kubeHandOverAfter && s.kubeHandOver() {
+			handing = true // once: it is a follower soon, and this loop stops
+		}
 		s.kubeReconcile(ctx, said)
 		select {
 		case <-ctx.Done():
@@ -291,6 +405,44 @@ func (s *session) kubeController(ctx context.Context) {
 		case <-time.After(every):
 		}
 	}
+}
+
+// kubeHandOver hands leadership to a director that knows the cluster, when
+// this leader has not watched it for kubeHandOverAfter - its API server did
+// not answer, or refused it - and so serves none of its Services. A lost watch
+// does not count: the leader serves what it last read. Only to a voter that
+// checked in lately saying it reads the cluster (api.Request.KubeReads), so a
+// cluster where no director reads it keeps its leader. Whether it handed over.
+func (s *session) kubeHandOver() bool {
+	waiting, since := s.n.kube.waitingFor()
+	if waiting == "" || time.Since(since) < kubeHandOverAfter {
+		return false
+	}
+	f := s.r.GetConfiguration()
+	if f.Error() != nil {
+		return false
+	}
+	voters := map[raft.ServerID]raft.ServerAddress{}
+	for _, srv := range f.Configuration().Servers {
+		if srv.Suffrage == raft.Voter && string(srv.ID) != s.raftID {
+			voters[srv.ID] = srv.Address
+		}
+	}
+	cis := s.checkInsCopy()
+	for _, name := range sortedNames(cis) {
+		ci := cis[name]
+		addr, voter := voters[raft.ServerID(ci.RaftID)]
+		if !ci.KubeReads || !voter || time.Since(ci.At) > liveFor {
+			continue
+		}
+		s.log.Warn("handing leadership over: this director does not read Kubernetes, "+name+" does", "to", name, "reason", waiting)
+		if err := s.r.LeadershipTransferToServer(raft.ServerID(ci.RaftID), addr).Error(); err != nil {
+			s.log.Warn("handing leadership over failed", "to", name, "error", err)
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // kubeReconcile is one pass of the controller.

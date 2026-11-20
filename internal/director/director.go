@@ -144,6 +144,14 @@ var (
 	// orphanAfter is how long a director goes without a leader before it looks
 	// on the control VIP for another cluster.
 	orphanAfter = 10 * time.Second
+	// kubeRetryFirst is how long a director waits before asking a Kubernetes
+	// API server that did not answer again, doubling up to kubeRetryMost - and
+	// asking again, after kubeRetryMost, one that answered no.
+	kubeRetryFirst = 2 * time.Second
+	kubeRetryMost  = 30 * time.Second
+	// kubeHandOverAfter is how long a leader that does not read Kubernetes
+	// leads before it hands leadership to a director that does.
+	kubeHandOverAfter = 15 * time.Second
 )
 
 // probe is what answered on the control VIP and port.
@@ -305,13 +313,14 @@ func Run(ctx context.Context, cfg Config, d Deps) error {
 				return kube.New(c), nil
 			}
 		}
+		// The kubeconfig is this machine's: a mistake in it stops the director
+		// here, before anything changed. The API server is not: whatever it
+		// answers, the director starts, and serves Kubernetes once it can.
 		c, err := newKube(cfg.Kubeconfig)
 		if err != nil {
 			return err
 		}
-		if err := n.kubeStart(ctx, c, addr.Prefix.Addr()); err != nil {
-			return err
-		}
+		n.kubeStart(ctx, c, addr.Prefix.Addr())
 	}
 	if cfg.ControlVIPName != "" {
 		log.OK("control VIP resolved", "name", cfg.ControlVIPName, "vip", cfg.ControlVIP)

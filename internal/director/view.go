@@ -39,7 +39,10 @@ func (s *session) status(brief bool) status.Status {
 	kubeSays := ""
 	if k := s.n.kube; k != nil {
 		kubeServices = k.services.Items()
+		waiting, _ := k.waitingFor()
 		switch {
+		case waiting != "":
+			kubeSays = "waiting: " + waiting
 		case k.services.Err() != "" || k.nodes.Err() != "" || k.slices.Err() != "":
 			kubeSays = "not watching: " + firstNonEmpty(k.services.Err(), k.nodes.Err(), k.slices.Err())
 		case !k.services.Synced() || !k.nodes.Synced() || !k.slices.Synced():

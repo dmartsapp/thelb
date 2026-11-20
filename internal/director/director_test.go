@@ -30,6 +30,7 @@ import (
 
 func TestMain(m *testing.M) {
 	joinRetry, checkInEvery, liveFor, sweepEvery = 200*time.Millisecond, 200*time.Millisecond, time.Second, time.Second
+	kubeRetryFirst, kubeRetryMost, kubeHandOverAfter = 100*time.Millisecond, 300*time.Millisecond, time.Second
 	secret.CheckOwner = func(os.FileInfo) error { return nil } // the tests' files are not root's
 	os.Exit(m.Run())
 }

@@ -2,6 +2,10 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
+## Unreleased
+
+- **Kubernetes never stops a director.** A director started with `--kubeconfig` whose API server does not answer, or refuses it - a release older than 1.35, a permission missing, its node not labelled `dmarts.app/thelb-director`, an expired token - **now starts anyway** (it exited `1` before): it serves every service but Kubernetes', logs `WARN Kubernetes not served yet: ...` or `ERROR Kubernetes not served: ...` once per reason, and asks again by itself - every 2 seconds doubling to 30 while the API server does not answer, every 30 after a refusal - so fixing the reason needs no restart. `thelb status` shows `waiting: <reason>` in the cluster's `kubernetes` column. A leader that has not read the cluster for 15 seconds **hands leadership to a director that does** (`WARN handing leadership over: ...`). A kubeconfig that cannot be read still stops the director at start.
+
 ## v0.1.0-alpha.2 - 2026-11-16
 
 **An alpha**: to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.

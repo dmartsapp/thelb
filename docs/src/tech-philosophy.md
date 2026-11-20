@@ -28,6 +28,8 @@ theLB decides what to do from the running kernel - the current settings, the add
 
 A load balancer that half works is worse than one that refuses to start. Before it changes anything, theLB checks that it can do **all** of its job: its Linux capabilities, that it can write the kernel settings it needs, that the kernel has IPVS (and IPv6 for an IPv6 VIP). If anything is missing, it stops, says exactly what is missing, and how to fix it.
 
+That is this machine's authority. Another machine's is not: when the Kubernetes API server does not answer, or refuses a director, the director still starts, serves every service that does not need Kubernetes, says why, and serves Kubernetes once it can.
+
 ## 4. Fail closed
 
 Two machines answering for the same VIP is worse than a VIP that is briefly down: clients flip between them, and connections break in ways that are hard to see. So a director holds a VIP only while the cluster agrees it should. A leader that loses the majority gives its VIPs up, even if it feels healthy. And the VIPs are leased from the kernel: a theLB that is killed loses them by itself, a few seconds later.

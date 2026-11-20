@@ -61,7 +61,7 @@ make remote-e2e REMOTE=<host>     # on another, over ssh: syncs the tree, runs i
 
 Each node does what kube-proxy or Cilium does for a Service: it takes packets for the Service's VIP, hands them to its "pods" (a web server answering with the node's name), and answers on the Service's health port - `200`, or `503` when the test says so.
 
-It checks the directors' startup checks (a permission missing, a director on a node that is not labelled), a Service getting its VIP and status, the nodes with ready pods serving - weighted by their pods - and the others not, a node going unhealthy and coming back, addresses asked for, shared VIPs and a port clash, another provider's Service left alone, status on a follower, the leader killed, and a Service deleted.
+It checks the directors' startup checks, which never stop a director (a director on a node that is not labelled, a permission missing: each says why, runs on, and serves Kubernetes by itself once fixed), a Service getting its VIP and status, the nodes with ready pods serving - weighted by their pods - and the others not, a node going unhealthy and coming back, addresses asked for, shared VIPs and a port clash, another provider's Service left alone, status on a follower, the leader killed, and a Service deleted.
 
 ```bash
 make e2e-k8s                          # on this Linux machine

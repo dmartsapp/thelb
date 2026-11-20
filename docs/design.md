@@ -211,7 +211,7 @@ start ─▶ preflight ─▶ read the kernel ─▶ plan ─▶ apply ─▶ bo
            └─ missing authority: exit 1    └─ `thelb doctor` prints this, and exits
 ```
 
-1. **Preflight - full authority or nothing.** Effective capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`; `CAP_SYS_MODULE` if a module is missing); `/proc/sys/net` writable; IPVS present (netlink family, schedulers); nftables if a port mapping is needed; IPv6 enabled if any VIP is IPv6; the interface exists; on a director serving Kubernetes, the API server reachable and every permission held (checked with `SelfSubjectAccessReview`). Anything missing: theLB changes nothing, exits `1`, and prints what is missing and how to grant it.
+1. **Preflight - full authority or nothing.** Effective capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`; `CAP_SYS_MODULE` if a module is missing); `/proc/sys/net` writable; IPVS present (netlink family, schedulers); nftables if a port mapping is needed; IPv6 enabled if any VIP is IPv6; the interface exists; Anything missing: theLB changes nothing, exits `1`, and prints what is missing and how to grant it. The Kubernetes API server is **not** part of preflight (changed 2026-11-20): it is another machine, and its outage must not take down the services that do not need it. A director serving Kubernetes checks the API server - reachable, 1.35 or later, every permission held (`SelfSubjectAccessReview`), its own node labelled - after it starts, in the background; until all pass, it logs why, serves everything but Kubernetes' Services, and asks again (every 2 s doubling to 30 s while it does not answer; every 30 s after a refusal). Only a kubeconfig that cannot be read stops it at start - that is this machine's mistake.
 2. **Read the kernel**: every parameter, address, interface, table and IPVS entry it cares about.
 3. **Plan**: the difference between what it needs and what is there.
 4. **Apply**: kernel parameters and modules now; VIPs and IPVS services only when the cluster gives this node a VIP. Each change is logged with its old value.
@@ -488,7 +488,9 @@ The cluster's state is gone, by design; its secrets are not, because they are th
 
 ## Kubernetes
 
-theLB is a provider for Services of type `LoadBalancer`, for **Kubernetes 1.35.0 and later**. It refuses to start against an older API server.
+theLB is a provider for Services of type `LoadBalancer`, for **Kubernetes 1.35.0 and later**. A director serves none of an older API server's Services, and says why; it runs on, for its other services.
+
+**Kubernetes never stops a director** (decided 2026-11-20). A director whose API server does not answer, or refuses it, starts anyway, serves everything but Kubernetes' Services, and connects by itself once it can. A leader that knows nothing of the cluster would serve none of its Services, so a leader that has not read the cluster for 15 seconds hands leadership to a voter that checks in saying it reads it (`kube_reads` in its check-in). A watch lost later does not count: the leader serves what it last read.
 
 **Tested by hand on 2026-11-15, before any code**, on Kubernetes 1.36 with Cilium 1.20.1 as kube-proxy replacement (VXLAN tunnel mode). The test used a Service of theLB's class with its status written by hand, and sent packets to a node's MAC address, as a director's direct routing does:
 
@@ -530,7 +532,7 @@ kube-proxy's modes are still to be tested.
 - **With Cilium**, the director nodes carry the label **`dmarts.app/thelb-director`**, and every theLB Service carries the annotation **`service.cilium.io/node-selector: "!dmarts.app/thelb-director"`**. Cilium then installs the Service on every node except the directors'. This needs Cilium 1.17 or later, and was tested on 1.20.1.
   - **The user writes the annotation in the Service's manifest** (decided 2026-11-15: a one-time job). theLB never edits a Service, so it needs no permission to.
   - The leader warns of a theLB Service without the annotation while a director runs on a Cilium node.
-  - A director on a Cilium node refuses to start if its Node lacks the label.
+  - A director on a Cilium node serves no Kubernetes Service while its Node lacks the label; it says so, and re-checks every 30 s.
   - Cilium drops the whole Service on those nodes, its cluster IP too, so pods there cannot reach theLB's Services. Director nodes are therefore **kept for theLB**: tainted, as a control-plane node already is.
   - Cilium reads a node's labels only when a Service changes. So **label a node first, then touch theLB's Services**, before its director is approved; the [example](#example) has the command. Restarting Cilium on the node works too.
 - **With kube-proxy**, there is no such switch. kube-proxy is kept off the director nodes with a node affinity on its DaemonSet, and the director nodes are rebooted to clear the rules it left behind. Pods on a node without kube-proxy can reach no Service at all, so these nodes run nothing else. In IPVS mode, kube-proxy would also share the kernel's IPVS table with theLB.

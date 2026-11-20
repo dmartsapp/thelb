@@ -14,8 +14,10 @@
 # to its "pods" (a web server answering with the node's name), and answers on
 # the Service's health port - 200 while it has ready pods, 503 when not.
 #
-# Checked: the directors' startup checks (the API server, the permissions -
-# one refused -, a director on a node of the cluster without its label); a
+# Checked: the directors' startup checks, which never stop a director - a
+# director on a node of the cluster without its label, a permission refused:
+# each says why, runs on without Kubernetes, and serves it by itself once
+# fixed; a
 # Service given its VIP from the default pool, its status written with ipMode
 # VIP, an event; the nodes with ready pods serving, weighted by their pods; a
 # node excluded by its label, one not ready, a director's node; a node whose
@@ -154,7 +156,7 @@ state() { # services, slices, [deny] - then a moment for the API server to read 
 	mv "$tmp/state.json.new" "$tmp/state.json"
 	sleep 1
 }
-state "$WEB" "$SLICES" '"watch nodes"'
+state "$WEB" "$SLICES"
 
 ip netns exec $P-api "$api" --listen ${addr[api]}:6443 --state "$tmp/state.json" --out "$tmp/api" >"$tmp/api.log" 2>&1 &
 pid[api]=$!
@@ -196,21 +198,26 @@ no_ipvs_service() { ! ipvs_on "$1" | grep -qF "$2"; }
 nothing_left() { ! ip -n $P-$1 -o addr show | grep -qE "$NET.(10|50)/" && [ -z "$(ipvs_on "$1" | grep -E '^(TCP|UDP)')" ]; }
 status_of() { python3 -c "import json; s = json.load(open('$tmp/api/status.json')); print(','.join(i['ip'] + ':' + i.get('ipMode', '') for i in (s.get('$1') or {}).get('loadBalancer', {}).get('ingress', [])))" 2>/dev/null; }
 
-echo "== the startup checks"
-start d1 "$tmp/d1.log" --bootstrap
-check "a permission missing: the director says which, and stops" "within 15 stopped d1 && logged $tmp/d1.log 'lacks permissions theLB needs: watch nodes'"
-state "$WEB" "$SLICES"
+echo "== the startup checks: Kubernetes never stops a director"
 start d3 "$tmp/d3.log" --bootstrap
-check "a director on a node of the cluster that is not labelled: it says so, and stops" \
-	"within 15 stopped d3 && logged $tmp/d3.log 'runs on the Kubernetes node d3node, which is not labelled as a director'"
+check "a director on a node of the cluster that is not labelled: it says so, and runs on" \
+	"within 15 logged $tmp/d3.log 'ERROR Kubernetes not served: .*runs on the Kubernetes node d3node, which is not labelled as a director' && ! stopped d3"
+check "meanwhile it leads, and status says what it waits for" \
+	"within 20 logged $tmp/d3.log 'OK control VIP taken' && within 10 is d3 \"s['cluster']['kubernetes']\" 'waiting: its node d3node is not labelled as a director'"
 LABELLED='{"dmarts.app/thelb-director":"true"}'
 NODES="$WORKERS,$(node d3node ${addr[d3]} True "$LABELLED"),$(node d2node ${addr[d2]} True "$LABELLED")"
 state "$WEB" "$SLICES"
+check "labelled, it serves Kubernetes by itself" "within 40 logged $tmp/d3.log 'OK connected to Kubernetes'"
+kill -TERM "${pid[d3]}"
+check "it stops when asked" "within 15 stopped d3"
+state "$WEB" "$SLICES" '"watch nodes"'
+start d1 "$tmp/d1.log" --bootstrap
+check "a permission missing: the director says which, and runs on" "within 15 logged $tmp/d1.log 'ERROR Kubernetes not served: .*lacks permissions theLB needs: watch nodes' && ! stopped d1"
+check "status says what it waits for" "within 20 is d1 \"s['cluster']['kubernetes']\" 'waiting: lacks permissions: watch nodes'"
+state "$WEB" "$SLICES"
 
 echo "== a Service of theLB's class gets its VIP"
-: >"$tmp/d1.log"
-start d1 "$tmp/d1.log" --bootstrap
-check "the director checks the API server and serves Kubernetes" "within 20 logged $tmp/d1.log 'OK connected to Kubernetes: serving Services of class dmarts.app/thelb .*version=v1.36.0-e2e.*permissions=.all 13.'"
+check "granted, the director serves Kubernetes by itself" "within 40 logged $tmp/d1.log 'OK connected to Kubernetes: serving Services of class dmarts.app/thelb .*version=v1.36.0-e2e.*permissions=.all 13.'"
 check "it says once it has read the cluster" "within 20 logged $tmp/d1.log 'OK watching Kubernetes: the cluster read services=1 nodes=5 ready=5'"
 check "it leads" "within 20 logged $tmp/d1.log 'OK control VIP taken'"
 copy() { install -m 0600 "$tmp/d1/director.secret" "$tmp/d1/backend.secret" "$tmp/$1/"; }

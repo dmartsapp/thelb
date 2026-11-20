@@ -54,7 +54,7 @@ Directors outside the cluster are the simplest: the nodes stay as they are. **Wh
 On a director's node, pods cannot reach theLB's Services by their cluster IP either. So keep these nodes for theLB: a control-plane node is a good choice, because it runs no workloads already.
 
 :::note A director checks its node
-A director that finds its own address on a node of the cluster refuses to start unless the node has the label `dmarts.app/thelb-director`.
+A director that finds its own address on a node of the cluster serves none of its Services until the node has the label `dmarts.app/thelb-director`. It says so in its log, and serves Kubernetes by itself within 30 seconds of the label.
 :::
 
 ## Let generate read your cluster
@@ -482,7 +482,7 @@ Or run the directors on these nodes under systemd, with a kubeconfig.
 
 ## When something is wrong
 
-- **The director does not start.** It says why: the API server does not answer, it runs a Kubernetes release older than 1.35, the credential lacks a permission (each one is named - apply `thelb generate k8s` again), or its node is not labelled (run the node's script).
+- **The director runs, but serves no Kubernetes Service.** Kubernetes never stops a director: it serves every other service, and its log says why it does not serve the cluster - the API server does not answer, it runs a Kubernetes release older than 1.35, the credential lacks a permission (each one is named - apply `thelb generate k8s` again), or its node is not labelled (run the node's script). `sudo thelb status` shows it too, as `waiting: ...` in the cluster's `kubernetes` column. It asks again by itself: fix the reason, and it serves Kubernetes within 30 seconds. A leader that cannot read the cluster hands leadership to a director that can.
 - **A Service has no `EXTERNAL-IP`.** `kubectl describe service <name>` shows theLB's events: `AllocationFailed` says why - no default pool, an address in no pool or taken, a port another Service on a shared VIP has.
 - **A warning `NoDirectorExclusion`.** Directors run on labelled nodes, and the Service lacks the Cilium annotation.
 - **Nodes get no traffic.** `sudo thelb status backends` shows each node's check and weight. With `Local`, a node without a ready pod has weight 0 - by design.

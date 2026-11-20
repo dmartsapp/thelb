@@ -68,6 +68,7 @@ type fakeKube struct {
 	patches  []string
 	events   []string
 	disallow map[string]bool // permissions refused: verb resource
+	down     bool            // it answers nothing: each connection closed
 }
 
 func newFakeKube(t *testing.T) *fakeKube {
@@ -94,6 +95,15 @@ func (f *fakeKube) set(path string, objs ...any) {
 }
 
 func (f *fakeKube) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	down := f.down
+	f.mu.Unlock()
+	if down {
+		if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = c.Close()
+		}
+		return
+	}
 	b, _ := io.ReadAll(r.Body)
 	w.Header().Set("Content-Type", "application/json")
 	switch {
@@ -315,34 +325,66 @@ func TestDirectorServesKubernetesServices(t *testing.T) {
 	})
 }
 
-func TestADirectorOnAnUnlabelledNodeRefusesToStart(t *testing.T) {
-	f := newFakeKube(t)
-	f.set("/api/v1/nodes", kubeNode("cp1", "10.0.0.11", true, nil))
+// waitsForKubernetes starts w against f, and checks that it leads without
+// Kubernetes, says why once - the log line has logged in it - and status says
+// waiting with short; then fix() makes f right, and w connects by itself.
+func waitsForKubernetes(t *testing.T, f *fakeKube, logged, short string, fix func()) {
+	t.Helper()
 	w := single(t)
 	w.cfg.Kubeconfig = "the test's"
 	w.kube = f.client()
-	w.launch(t)
-	err := <-w.errc
-	w.errc <- err
-	if err == nil || !strings.Contains(err.Error(), "runs on the Kubernetes node cp1, which is not labelled as a director") {
-		t.Fatalf("%v", err)
+	w.start(t)
+	eventually(t, "it leads", func() bool { return strings.Contains(w.logs.String(), "OK control VIP taken") })
+	eventually(t, "it says why", func() bool { return strings.Contains(w.logs.String(), logged) })
+	eventually(t, "status says it waits", func() bool { return w.status(t).Cluster.Kubernetes == "waiting: "+short })
+	time.Sleep(time.Second) // several more tries: said once, not again and again
+	if n := strings.Count(w.logs.String(), "Kubernetes not served"); n != 1 {
+		t.Errorf("why said %d times:\n%s", n, w.logs)
 	}
+	fix()
+	eventually(t, "connected, once it can", func() bool {
+		return strings.Contains(w.logs.String(), "OK connected to Kubernetes") && w.status(t).Cluster.Kubernetes == "0 Services"
+	})
+}
+
+func TestADirectorWaitsForTheAPIServer(t *testing.T) {
+	f := newFakeKube(t)
+	f.set("/api/v1/nodes")
+	f.set("/api/v1/services")
+	f.set("/apis/discovery.k8s.io/v1/endpointslices")
+	f.down = true
+	waitsForKubernetes(t, f, "WARN Kubernetes not served yet: the API server does not answer; asking again - meanwhile this director serves all but Kubernetes' Services reason=\"the Kubernetes API server "+f.srv.URL,
+		"the API server does not answer", func() {
+			f.mu.Lock()
+			f.down = false
+			f.mu.Unlock()
+		})
+}
+
+func TestADirectorOnAnUnlabelledNodeWaitsForTheLabel(t *testing.T) {
+	f := newFakeKube(t)
+	f.set("/api/v1/nodes", kubeNode("cp1", "10.0.0.11", true, nil))
+	f.set("/api/v1/services")
+	f.set("/apis/discovery.k8s.io/v1/endpointslices")
+	waitsForKubernetes(t, f, "ERROR Kubernetes not served: asking again every 300ms - meanwhile this director serves all but Kubernetes' Services reason=\"this director runs on the Kubernetes node cp1, which is not labelled as a director",
+		"its node cp1 is not labelled as a director", func() {
+			f.set("/api/v1/nodes", kubeNode("cp1", "10.0.0.11", true, map[string]string{"dmarts.app/thelb-director": "true"}))
+		})
 }
 
 func TestADirectorWithoutThePermissionsSaysWhich(t *testing.T) {
 	f := newFakeKube(t)
 	f.set("/api/v1/nodes")
+	f.set("/api/v1/services")
+	f.set("/apis/discovery.k8s.io/v1/endpointslices")
 	f.disallow["patch services"] = true
 	f.disallow["watch nodes"] = true
-	w := single(t)
-	w.cfg.Kubeconfig = "the test's"
-	w.kube = f.client()
-	w.launch(t)
-	err := <-w.errc
-	w.errc <- err
-	if err == nil || !strings.Contains(err.Error(), "lacks permissions theLB needs: patch services/status, watch nodes") {
-		t.Fatalf("%v", err)
-	}
+	waitsForKubernetes(t, f, "lacks permissions theLB needs: patch services/status, watch nodes",
+		"lacks permissions: patch services/status, watch nodes", func() {
+			f.mu.Lock()
+			f.disallow = map[string]bool{}
+			f.mu.Unlock()
+		})
 }
 
 // After every director stopped, the new cluster knows no allocation: a Service

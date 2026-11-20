@@ -315,3 +315,36 @@ func TestTwoDirectorsSurviveEitherOnesPlannedStop(t *testing.T) {
 		t.Fatalf("lb-2, alone: leader %q\n%s", st.Cluster.Leader, d2.logs)
 	}
 }
+
+// A leader whose Kubernetes API server does not answer serves none of the
+// cluster's Services: it hands leadership to a director that reads it.
+func TestALeaderThatDoesNotReadKubernetesHandsOver(t *testing.T) {
+	l := newLab(t)
+	d1, d2 := l.director(t, 1), l.director(t, 2)
+	dead, live := newFakeKube(t), newFakeKube(t)
+	dead.down = true
+	for _, p := range []string{"/api/v1/nodes", "/api/v1/services", "/apis/discovery.k8s.io/v1/endpointslices"} {
+		live.set(p)
+	}
+	d1.cfg.Kubeconfig, d1.kube = "the test's", dead.client()
+	d2.cfg.Kubeconfig, d2.kube = "the test's", live.client()
+	d1.start(t)
+	copySecrets(t, d1, d2)
+	d2.launch(t)
+	eventually(t, "lb-2 pending", func() bool { return pending(d1.status(t), "lb-2") != nil })
+	if _, err := admin(d1, "approve", "lb-2"); err != nil {
+		t.Fatal(err)
+	}
+	d2.waitReady(t)
+	eventually(t, "lb-2 leading", func() bool { return vipLeader(t, d2) == "lb-2" })
+	if !strings.Contains(d1.logs.String(), "WARN handing leadership over: this director does not read Kubernetes, lb-2 does to=lb-2 reason=\"the API server does not answer\"") {
+		t.Errorf("lb-1 did not say why it handed over:\n%s", d1.logs)
+	}
+	time.Sleep(3 * time.Second) // lb-1 never takes it back while it cannot read the cluster
+	if vipLeader(t, d2) != "lb-2" {
+		t.Errorf("leader: %q", vipLeader(t, d2))
+	}
+	if st := d2.status(t); st.Cluster.Kubernetes != "0 Services" {
+		t.Errorf("lb-2's kubernetes: %q", st.Cluster.Kubernetes)
+	}
+}

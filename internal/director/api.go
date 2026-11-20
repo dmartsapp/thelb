@@ -166,7 +166,7 @@ func (s *session) serveCheckIns(c *tls.Conn, w *wire.Conn, name string, req api.
 			return
 		}
 		s.mu.Lock()
-		s.checkIns[name] = checkIn{Name: name, RaftID: req.RaftID, At: time.Now(), Applied: req.Applied, Version: reported(req.Version)}
+		s.checkIns[name] = checkIn{Name: name, RaftID: req.RaftID, At: time.Now(), Applied: req.Applied, Version: reported(req.Version), KubeReads: req.KubeReads}
 		p := s.plane
 		s.mu.Unlock()
 		if req.Applied >= n.AdmitIndex {
@@ -258,7 +258,8 @@ func (s *session) checkInLoop() {
 			if _, now := s.r.LeaderWithID(); now != id {
 				break
 			}
-			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version, Probes: s.checkResults()}
+			req := api.Request{V: wire.Version, Op: api.OpCheckIn, RaftID: s.raftID, Applied: s.r.AppliedIndex(), Version: version.Version, Probes: s.checkResults(),
+				KubeReads: s.n.kube != nil && s.n.kube.reads()}
 			s.n.alive.Tick("check-in", stallAfter)
 			resync()
 			if w.Send(req) != nil {

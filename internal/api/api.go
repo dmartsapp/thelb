@@ -24,16 +24,19 @@ const (
 
 // Request is a member's.
 type Request struct {
-	V       int     `json:"v"`
-	Op      string  `json:"op"`
-	CSR     []byte  `json:"csr,omitempty"`
-	RaftID  string  `json:"raft_id,omitempty"`
-	Applied uint64  `json:"applied,omitempty"`
-	Version string  `json:"version,omitempty"`
-	Change  *Change `json:"change,omitempty"`
-	Beat    *Beat   `json:"beat,omitempty"`
-	Offer   *Offer  `json:"offer,omitempty"`
-	Brief   bool    `json:"brief,omitempty"` // live: without IPVS's counters
+	V       int    `json:"v"`
+	Op      string `json:"op"`
+	CSR     []byte `json:"csr,omitempty"`
+	RaftID  string `json:"raft_id,omitempty"`
+	Applied uint64 `json:"applied,omitempty"`
+	Version string `json:"version,omitempty"`
+	// KubeReads: a director serving Kubernetes, with its check-in, says it
+	// knows the cluster - a leader that does not hands it the lead.
+	KubeReads bool    `json:"kube_reads,omitempty"`
+	Change    *Change `json:"change,omitempty"`
+	Beat      *Beat   `json:"beat,omitempty"`
+	Offer     *Offer  `json:"offer,omitempty"`
+	Brief     bool    `json:"brief,omitempty"` // live: without IPVS's counters
 	// Probes are a director's results of the checks the leader gave it, with
 	// its check-in.
 	Probes map[string]ProbeResult `json:"probes,omitempty"`
@@ -118,6 +121,8 @@ type CheckIn struct {
 	Version string    `json:"version"`
 	// Gone: the leader found this director gone, and took it out of the vote.
 	Gone bool `json:"gone,omitempty"`
+	// KubeReads: it knows the Kubernetes cluster it serves.
+	KubeReads bool `json:"kube_reads,omitempty"`
 }
 
 // Live is an assignment as the leader sees it now.
