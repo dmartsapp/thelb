@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -465,5 +466,119 @@ func TestLoadContextNamesWhichContext(t *testing.T) {
 	}
 	if _, err := LoadContext(path, "nope"); err == nil || !strings.Contains(err.Error(), `no context named "nope"`) {
 		t.Errorf("a context it lacks: %v", err)
+	}
+}
+
+// TestReadSmallNeverWaitsOnAPipe: a kubeconfig, a token file or a CA file that
+// is a FIFO is refused at once - no writer is waited for.
+func TestReadSmallNeverWaitsOnAPipe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skip(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := readSmall(path); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("readSmall waited on a FIFO")
+	}
+}
+
+// TestNoRedirectIsFollowed: an API server that redirects - to another port, in
+// clear - gets an error back; the token never goes there.
+func TestNoRedirectIsFollowed(t *testing.T) {
+	var seen sync.Map
+	trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store("auth", r.Header.Get("Authorization"))
+		_, _ = io.WriteString(w, `{"metadata":{"resourceVersion":"1"},"items":[]}`)
+	}))
+	defer trap.Close()
+	evil := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, trap.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer evil.Close()
+	u, _ := url.Parse(evil.URL)
+	pool := x509.NewCertPool()
+	pool.AddCert(evil.Certificate())
+	c := New(&Config{Server: u, RootCAs: pool, Token: "secret-token", Source: "test"})
+	_, _, err := List[Node](context.Background(), c, "/api/v1/nodes")
+	if err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("a redirect: %v", err)
+	}
+	if a, ok := seen.Load("auth"); ok {
+		t.Fatalf("the redirect was followed, with %q", a)
+	}
+}
+
+// TestAnswersAreBounded: a list page larger than maxAnswer, a watch event
+// larger than maxEvent, a list that goes on for ever - each an error, read no
+// further than its bound. Many small events are not one large one.
+func TestAnswersAreBounded(t *testing.T) {
+	savedA, savedL, savedE, savedP := maxAnswer, maxList, maxEvent, maxPages
+	maxAnswer, maxList, maxEvent, maxPages = 64<<10, 1<<20, 16<<10, 5
+	defer func() { maxAnswer, maxList, maxEvent, maxPages = savedA, savedL, savedE, savedP }()
+	mode := ""
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		m := mode
+		mu.Unlock()
+		switch m {
+		case "endless list":
+			_, _ = io.WriteString(w, `{"metadata":{"resourceVersion":"1"},"items":[`)
+			for i := 0; i < 100000; i++ {
+				if _, err := io.WriteString(w, `{"metadata":{"name":"n"}},`); err != nil {
+					return
+				}
+			}
+		case "pages that add up":
+			_, _ = io.WriteString(w, `{"metadata":{"resourceVersion":"1","continue":"again"},"items":[`)
+			for i := 0; i < 500; i++ {
+				_, _ = io.WriteString(w, `{"metadata":{"name":"`+strings.Repeat("n", 90)+`"}},`)
+			}
+			_, _ = io.WriteString(w, `{"metadata":{"name":"last"}}]}`)
+		case "continue for ever":
+			_, _ = io.WriteString(w, `{"metadata":{"resourceVersion":"1","continue":"again"},"items":[{"metadata":{"name":"n"}}]}`)
+		case "giant event":
+			_, _ = io.WriteString(w, `{"type":"ADDED","object":{"metadata":{"name":"`+strings.Repeat("a", 32<<10)+`"}}}`+"\n")
+		case "many events":
+			for i := 0; i < 200; i++ {
+				_, _ = fmt.Fprintf(w, `{"type":"ADDED","object":{"metadata":{"name":"n%d","resourceVersion":"%d"}}}`+"\n", i, i+2)
+			}
+		}
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	c := New(&Config{Server: u, Source: "test"})
+	set := func(m string) { mu.Lock(); mode = m; mu.Unlock() }
+
+	set("endless list")
+	if _, _, err := List[Node](context.Background(), c, "/api/v1/nodes"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an endless list: %v", err)
+	}
+	savedP2 := maxPages
+	maxPages = 100
+	set("pages that add up")
+	if _, _, err := List[Node](context.Background(), c, "/api/v1/nodes"); err == nil || !strings.Contains(err.Error(), "larger than 1 MiB") {
+		t.Errorf("pages that add up past the list's bound: %v", err)
+	}
+	maxPages = savedP2
+	set("continue for ever")
+	if _, _, err := List[Node](context.Background(), c, "/api/v1/nodes"); err == nil || !strings.Contains(err.Error(), "goes on past 5 pages") {
+		t.Errorf("a list that goes on for ever: %v", err)
+	}
+	set("giant event")
+	if _, err := Watch(context.Background(), c, "/api/v1/nodes", "1", func(Change[Node]) error { return nil }); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("a giant event: %v", err)
+	}
+	set("many events")
+	n := 0
+	rv, err := Watch(context.Background(), c, "/api/v1/nodes", "1", func(Change[Node]) error { n++; return nil })
+	if err != nil || n != 200 || rv != "201" {
+		t.Errorf("200 small events, %d KiB in all: %d read, rv %s, %v", 200*80>>10, n, rv, err)
 	}
 }

@@ -246,3 +246,45 @@ func TestALongMessageIsRefused(t *testing.T) {
 		t.Errorf("a long message: %v", err)
 	}
 }
+
+// TestAFloodFromOneAddressIsTurnedAway: connections that never begin their
+// handshake - from one address - beyond MaxHandshakesPerSource are closed at
+// once; the rest at the handshake's timeout.
+func TestAFloodFromOneAddressIsTurnedAway(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Mux{Handlers: map[string]func(*tls.Conn){}}
+	go m.Serve(ln, &tls.Config{MinVersion: tls.VersionTLS13})
+	defer func() { _ = ln.Close() }()
+	var conns []net.Conn
+	for i := 0; i < MaxHandshakesPerSource+40; i++ {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for m.TurnedAway() < 40 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := m.TurnedAway(); got != 40 {
+		t.Errorf("turned away %d of %d, want 40", got, len(conns))
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	// Once they are gone, the address may connect again.
+	time.Sleep(200 * time.Millisecond)
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	time.Sleep(100 * time.Millisecond)
+	if got := m.TurnedAway(); got != 40 {
+		t.Errorf("a new connection after the flood was turned away (%d)", got)
+	}
+}

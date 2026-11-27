@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dmartsapp/thelb/internal/logx"
 )
@@ -206,5 +208,24 @@ func TestExists(t *testing.T) {
 	_ = os.Symlink(filepath.Join(dir, "gone"), dangling)
 	if ok, err := Exists(dangling); !ok || err != nil {
 		t.Errorf("a dangling link counts as existing: %v %v", ok, err)
+	}
+}
+
+// TestLoadNeverWaitsOnAPipe: a FIFO put where a secret file was is refused at
+// once - no writer is waited for.
+func TestLoadNeverWaitsOnAPipe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fifo.secret")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skip(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := Load(path); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Load waited on a FIFO")
 	}
 }

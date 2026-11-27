@@ -43,8 +43,54 @@ func New(cfg *Config) *Client {
 		IdleConnTimeout:       90 * time.Second,
 		Proxy:                 nil, // straight to the API server: theLB's own traffic never takes a proxy
 	}
-	return &Client{cfg: cfg, http: &http.Client{Transport: tr}}
+	return &Client{cfg: cfg, http: &http.Client{Transport: tr, CheckRedirect: noRedirect}}
 }
+
+// noRedirect keeps every request - and its token - on the API server the
+// kubeconfig names: an API server does not redirect theLB's requests, and one
+// that does is answered with an error, never followed - least of all to
+// another port, or in clear.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// Bounds on what an API server's answers may hold: far above what a real one
+// sends - Kubernetes keeps an object under 1.5 MiB by default, and theLB asks
+// for 500 at a time - so that one that lies cannot fill this machine's memory.
+// Variables, so that tests can shorten them. A page holds pageSize objects;
+// 64 MiB is 256 KiB an object, which a real one is far under.
+var (
+	maxAnswer int64 = 64 << 20 // one answer: a page of a list
+	maxList   int64 = 1 << 30  // one list, all its pages
+	maxEvent  int64 = 16 << 20 // one event of a watch
+	maxPages        = 10000    // one list: 2.5 million objects
+)
+
+// capped reads at most n bytes of an answer, then fails - an answer larger
+// than any API server sends is an error, not one cut short in silence.
+type capped struct {
+	r     io.Reader
+	n     int64
+	limit int64
+	what  string
+}
+
+func newCapped(r io.Reader, limit int64, what string) *capped {
+	return &capped{r: r, n: limit, limit: limit, what: what}
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.n <= 0 {
+		return 0, fmt.Errorf("%s is larger than %d MiB: theLB stopped reading it", c.what, c.limit>>20)
+	}
+	if int64(len(p)) > c.n {
+		p = p[:c.n]
+	}
+	n, err := c.r.Read(p)
+	c.n -= int64(n)
+	return n, err
+}
+
+// reset allows another limit's worth: the next event of a watch.
+func (c *capped) reset() { c.n = c.limit }
 
 // Config is the client's configuration.
 func (c *Client) Config() *Config { return c.cfg }
@@ -148,13 +194,20 @@ func printable(s string) string { return safe.Text(s) }
 
 // do makes a request and decodes its answer into out, unless out is nil.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, in, out any, contentType string) error {
+	_, err := c.doLimited(ctx, method, path, query, in, out, contentType, maxAnswer)
+	return err
+}
+
+// doLimited is do, reading at most limit bytes of the answer; it says how
+// many it read.
+func (c *Client) doLimited(ctx context.Context, method, path string, query url.Values, in, out any, contentType string, limit int64) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	var body []byte
 	if in != nil {
 		var err error
 		if body, err = json.Marshal(in); err != nil {
-			return err
+			return 0, err
 		}
 		if contentType == "" {
 			contentType = "application/json"
@@ -162,14 +215,16 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	resp, err := c.request(ctx, method, path, query, body, contentType)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	r := newCapped(resp.Body, limit, "the API server's answer")
 	if out == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
+		_, err := io.Copy(io.Discard, r)
+		return r.limit - r.n, err
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	err = json.NewDecoder(r).Decode(out)
+	return r.limit - r.n, err
 }
 
 // Version is the API server's version: its minor release, and its own words.
@@ -295,20 +350,30 @@ func (c *Client) Emit(ctx context.Context, e Event) error {
 }
 
 // pageSize is how many objects a list asks for at a time.
-const pageSize = 500
+const pageSize = 250
 
 // List lists every object at path - all of them, page by page - and is the
 // resource version to watch from.
 func List[T any](ctx context.Context, c *Client, path string) ([]T, string, error) {
 	var items []T
 	cont := ""
-	for {
+	read := int64(0)
+	for page := 0; ; page++ {
+		if page == maxPages {
+			return nil, "", fmt.Errorf("the list of %s goes on past %d pages of %d: theLB stopped reading it", path, maxPages, pageSize)
+		}
 		q := url.Values{"limit": {strconv.Itoa(pageSize)}}
 		if cont != "" {
 			q.Set("continue", cont)
 		}
 		var l list[T]
-		if err := c.do(ctx, http.MethodGet, path, q, nil, &l, ""); err != nil {
+		left := maxList - read
+		n, err := c.doLimited(ctx, http.MethodGet, path, q, nil, &l, "", min(maxAnswer, left))
+		read += n
+		if err != nil {
+			if read >= maxList {
+				return nil, "", fmt.Errorf("the list of %s is larger than %d MiB: theLB stopped reading it", path, maxList>>20)
+			}
 			return nil, "", err
 		}
 		items = append(items, l.Items...)
@@ -345,8 +410,10 @@ func Watch[T any](ctx context.Context, c *Client, path, rv string, fn func(Chang
 		return rv, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	dec := json.NewDecoder(resp.Body)
+	body := newCapped(resp.Body, maxEvent, "an event of the watch")
+	dec := json.NewDecoder(body)
 	for {
+		body.reset()
 		var ev struct {
 			Type   string          `json:"type"`
 			Object json.RawMessage `json:"object"`

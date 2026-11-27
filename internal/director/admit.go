@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dmartsapp/thelb/internal/ca"
@@ -107,6 +108,75 @@ func (s *session) admission(c cluster.Claim) admission {
 	return a
 }
 
+// Limits on the nodes waiting for approval: each is a Raft entry, a row of
+// thelb status, a line an approver reads. One machine joins as one node - two
+// with a director and a backend on it - so a few names an address are plenty;
+// past them, a node is told to ask again later, not refused.
+const (
+	maxWaitingPerAddress = 4
+	maxWaiting           = 512
+)
+
+// tooManyWaiting is why the cluster puts off recording claim as waiting, or "".
+func (s *session) tooManyWaiting(claim cluster.Claim) string {
+	all, same := 0, 0
+	s.fsm.Read(func(st *cluster.State) {
+		for name, p := range st.Pending {
+			if name == claim.Name {
+				continue
+			}
+			all++
+			if p.Address == claim.Address {
+				same++
+			}
+		}
+	})
+	switch {
+	case same >= maxWaitingPerAddress:
+		return fmt.Sprintf("%d nodes from %s wait for approval already: approve or refuse them, then this one asks again", same, claim.Address)
+	case all >= maxWaiting:
+		return fmt.Sprintf("%d nodes wait for approval already: approve or refuse them, then this one asks again", all)
+	}
+	return ""
+}
+
+// refusals limits the log of joins refused for a wrong secret: one line per
+// address a minute.
+type refusals struct {
+	mu   sync.Mutex
+	last map[netip.Addr]*refusal
+}
+
+type refusal struct {
+	at   time.Time // when a line was last logged
+	more int       // refused since, unlogged
+}
+
+// note counts a refusal from addr, and says whether to log it - and how many
+// were refused since the last line.
+func (r *refusals) note(addr netip.Addr, now time.Time) (say bool, more int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.last == nil {
+		r.last = map[netip.Addr]*refusal{}
+	}
+	for a, x := range r.last { // forget quiet addresses: the map stays small
+		if now.Sub(x.at) > 10*time.Minute {
+			delete(r.last, a)
+		}
+	}
+	x := r.last[addr]
+	if x == nil || now.Sub(x.at) >= time.Minute {
+		if x != nil {
+			more = x.more
+		}
+		r.last[addr] = &refusal{at: now}
+		return true, more
+	}
+	x.more++
+	return false, 0
+}
+
 func remoteIP(c net.Conn) netip.Addr {
 	ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
 	if err != nil {
@@ -142,7 +212,11 @@ func (s *session) serveJoin(c *tls.Conn) {
 	}
 	s.n.mu.Unlock()
 	if !wire.CheckProof([]secret.Secret{roleSecret}, wire.SideJoiner, cs, hello.Proof) {
-		s.log.Warn("join refused: the "+role+"s' secret was not proved", "from", from)
+		// Anyone who reaches the VIP can send a wrong secret, as often as
+		// they like: one line per address a minute, saying how many.
+		if say, more := s.n.refused.note(from, time.Now()); say {
+			s.log.Warn("join refused: the "+role+"s' secret was not proved", "from", from, "since_last_line", more)
+		}
 		_ = w.Send(join.Reply{V: wire.Version, Error: "not accepted"})
 		return
 	}
@@ -226,8 +300,19 @@ func (s *session) serveJoin(c *tls.Conn) {
 			return
 		default:
 			if !a.pending {
+				// The count and the entry under one lock: joins at once
+				// would each count before the others' entries are in.
+				s.pendingMu.Lock()
+				if why := s.tooManyWaiting(claim); why != "" {
+					s.pendingMu.Unlock()
+					s.log.Warn("join put off: too many nodes wait for approval", "node", claim.Name, "from", from, "reason", why)
+					_ = w.Send(join.State{State: join.Retry, Message: why})
+					return
+				}
 				p := cluster.Pending{Claim: claim, Since: s.n.d.Now().UTC()}
-				if err := s.apply(cluster.TypePending, s.n.cfg.Name, p); err != nil {
+				err := s.apply(cluster.TypePending, s.n.cfg.Name, p)
+				s.pendingMu.Unlock()
+				if err != nil {
 					_ = w.Send(join.State{State: join.Retry, Message: "the cluster could not record the request: " + err.Error()})
 					return
 				}

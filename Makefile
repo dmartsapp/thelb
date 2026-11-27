@@ -25,7 +25,7 @@ REMOTE     ?=
 REMOTE_DIR ?= thelb
 REMOTE_ENV  = export PATH=$$HOME/.local/go/bin:$$HOME/go/bin:$$PATH;
 
-.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln e2e e2e-k8s scale lab lab-down screens remote-sync remote-check remote-e2e remote-e2e-k8s remote-scale remote-screens clean
+.PHONY: build dist dist-one notes check tools fmt-check vet test lint vuln fuzz e2e e2e-k8s e2e-security scale lab lab-down screens remote-sync remote-check remote-e2e remote-e2e-k8s remote-e2e-security remote-fuzz remote-scale remote-screens clean
 
 build:
 	@for arch in amd64 arm arm64; do \
@@ -84,6 +84,20 @@ vuln:
 	@echo "==> govulncheck"
 	@$(GOVULNCHECK) ./...
 
+# fuzz: every fuzz test - the parsers of what theLB takes from outside - each
+# for FUZZTIME. make test runs their seeds; this searches for more. A failing
+# input is kept in the package's testdata/fuzz, and runs with every go test.
+FUZZTIME ?= 30s
+fuzz:
+	@mkdir -p bin
+	@for pkg in $$($(GO) list ./...); do \
+		for f in $$($(GO) test -list '^Fuzz' $$pkg | grep '^Fuzz'); do \
+			echo "==> $$pkg $$f ($(FUZZTIME))"; \
+			$(GO) test $$pkg -run '^$$' -fuzz "^$$f$$" -fuzztime $(FUZZTIME) > bin/fuzz.log 2>&1 || { cat bin/fuzz.log; exit 1; }; \
+		done; \
+	done
+	@echo "fuzz: every target passed"
+
 e2e:
 	@echo "==> the kernel tests, as root, each in a network namespace of its own"
 	@sudo -n env "PATH=$$PATH:/usr/sbin:/sbin" "HOME=$$HOME" "GOCACHE=$$($(GO) env GOCACHE)" "GOMODCACHE=$$($(GO) env GOMODCACHE)" $(GO) test -count=1 -run '^TestRoot' ./...
@@ -100,6 +114,16 @@ e2e-k8s:
 	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
 	@CGO_ENABLED=0 $(GO) build -trimpath -o bin/e2e/kubeapi ./test/kubeapi
 	@sudo -n test/e2e-k8s.sh bin/e2e/thelb bin/e2e/kubeapi
+
+# e2e-security: a cluster attacked from outside - the control port, the join, a
+# member gone bad, the metrics endpoint, the local socket, hostile files and a
+# Kubernetes API server that lies (test/attack) - and checked unharmed.
+e2e-security:
+	@echo "==> security, end to end, as root"
+	@CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/e2e/thelb ./cmd/thelb
+	@CGO_ENABLED=0 $(GO) build -trimpath -o bin/e2e/attack ./test/attack
+	@CGO_ENABLED=0 $(GO) test -c -o bin/e2e/blackbox.test ./test/blackbox
+	@sudo -n test/e2e-security.sh bin/e2e/thelb bin/e2e/attack bin/e2e/blackbox.test
 
 # scale: N services - each its own VIP, three backends - on three directors,
 # and what that costs (N=1000 by default).
@@ -137,6 +161,12 @@ remote-check: remote-sync
 
 remote-e2e: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e COMMIT=$(COMMIT)'
+
+remote-e2e-security: remote-sync
+	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e-security COMMIT=$(COMMIT)'
+
+remote-fuzz: remote-sync
+	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make fuzz FUZZTIME=$(FUZZTIME) COMMIT=$(COMMIT)'
 
 remote-e2e-k8s: remote-sync
 	@ssh $(REMOTE) '$(REMOTE_ENV) cd $(REMOTE_DIR) && make e2e-k8s COMMIT=$(COMMIT)'

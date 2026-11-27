@@ -28,6 +28,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dmartsapp/thelb/internal/ca"
@@ -49,6 +50,13 @@ const MaxLine = 1 << 20
 
 // HandshakeTimeout bounds a TLS handshake.
 const HandshakeTimeout = 5 * time.Second
+
+// MaxHandshakesPerSource is how many connections from one address may be in
+// their TLS handshake at once: far more than any director or backend makes -
+// they hold a few connections, each handshaking once - and it keeps a flood of
+// connections that never speak to what one address can hold, each for at most
+// HandshakeTimeout.
+const MaxHandshakesPerSource = 64
 
 const exporterLabel = "EXPORTER-thelb-join-proof"
 
@@ -310,7 +318,37 @@ type Mux struct {
 	// Handlers by protocol; a handler owns the connection.
 	Handlers map[string]func(*tls.Conn)
 
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+	shaking  map[netip.Addr]int // connections in their handshake, by source
+	turnAway atomic.Int64       // connections closed at once: their source had too many
+}
+
+// TurnedAway is how many connections the mux closed at once, their source
+// having MaxHandshakesPerSource in their handshake already.
+func (m *Mux) TurnedAway() int64 { return m.turnAway.Load() }
+
+// admit counts a connection from src in its handshake, unless src has too
+// many; done uncounts it.
+func (m *Mux) admit(src netip.Addr) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shaking == nil {
+		m.shaking = map[netip.Addr]int{}
+	}
+	if m.shaking[src] >= MaxHandshakesPerSource {
+		return false
+	}
+	m.shaking[src]++
+	return true
+}
+
+func (m *Mux) done(src netip.Addr) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shaking[src]--; m.shaking[src] <= 0 {
+		delete(m.shaking, src)
+	}
 }
 
 // Serve accepts connections on ln until it is closed.
@@ -324,12 +362,23 @@ func (m *Mux) Serve(ln net.Listener, cfg *tls.Config) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
+		src := netip.Addr{}
+		if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+			src = ap.Addr().Unmap()
+		}
+		if !m.admit(src) {
+			m.turnAway.Add(1)
+			_ = c.Close()
+			continue
+		}
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
 			tc := tls.Server(c, cfg)
 			_ = tc.SetDeadline(time.Now().Add(HandshakeTimeout))
-			if err := tc.Handshake(); err != nil {
+			err := tc.Handshake()
+			m.done(src)
+			if err != nil {
 				_ = c.Close()
 				return
 			}

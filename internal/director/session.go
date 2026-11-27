@@ -57,6 +57,7 @@ type session struct {
 	backends  map[string]backendLive // the leader's: each backend's last heartbeat
 	checkIns  map[string]checkIn     // the leader's: by node name
 	asked     map[string]time.Time   // the leader's: when each pending node last asked
+	pendingMu sync.Mutex             // the leader's: a node counted, and recorded, as waiting - one at a time
 	promoting map[string]bool
 	conns     map[net.Conn]struct{}
 	authority *ca.Authority

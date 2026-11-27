@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/dmartsapp/thelb/internal/safe"
 )
@@ -40,7 +41,8 @@ const maxFile = 1 << 20
 // readSmall reads a regular file of at most maxFile bytes: never a device, a
 // pipe or a file that does not end.
 func readSmall(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	// Without waiting for a writer: a FIFO is refused below, not waited on.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

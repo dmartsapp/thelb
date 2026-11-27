@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -139,9 +140,23 @@ func Load(path string) (Secret, error) {
 	if err := CheckOwner(fi); err != nil {
 		return Secret{}, fmt.Errorf("secret file %s is %v", path, err)
 	}
-	b, err := os.ReadFile(path)
+	// Read the file just checked, and only that: opened without following a
+	// symbolic link, without waiting for a writer, and the same file - so
+	// nothing put in its place since the check is read.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return Secret{}, fmt.Errorf("secret file %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	if now, err := f.Stat(); err != nil || !os.SameFile(fi, now) || !now.Mode().IsRegular() {
+		return Secret{}, fmt.Errorf("secret file %s changed while theLB read it: try again", path)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxFile+1))
+	if err != nil {
+		return Secret{}, fmt.Errorf("secret file %s: %w", path, err)
+	}
+	if len(b) > maxFile {
+		return Secret{}, fmt.Errorf("secret file %s is too big to hold a secret", path)
 	}
 	s, err := Parse(string(b))
 	if err != nil {

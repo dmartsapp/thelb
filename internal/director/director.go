@@ -224,6 +224,7 @@ type node struct {
 
 	dirSecret secret.Secret
 	bkSecret  secret.Secret
+	refused   refusals // joins refused for a wrong secret, for the log
 
 	ready sync.Once
 
@@ -392,6 +393,9 @@ func (n *node) loop(ctx context.Context) error {
 			if !exists && !n.cfg.Bootstrap {
 				return n.noSecret()
 			}
+			if err := n.checkSecrets(); err != nil {
+				return err
+			}
 			n.setPhase("looking for the cluster on the control VIP")
 			p, takenBy, err := n.probe(ctx)
 			if err != nil {
@@ -465,6 +469,30 @@ func (n *node) loop(ctx context.Context) error {
 
 func (n *node) noSecret() error {
 	return fmt.Errorf("there is no secret in %s, and this director may not create a cluster (no --bootstrap): on a director, run `sudo thelb admin secret show --role director` and put what it prints in %s", n.cfg.SecretFile, n.cfg.SecretFile)
+}
+
+// checkSecrets reads the secret files there are before the director waits on
+// the network for anything: a file it cannot use - a link, a pipe, open to
+// others, not a secret - stops it at once, saying why, rather than when a
+// cluster first answers, which may be never. A file that is missing is
+// created at a bootstrap; without one, both are needed to join.
+func (n *node) checkSecrets() error {
+	for _, f := range []struct{ path, role string }{{n.cfg.SecretFile, "directors'"}, {n.cfg.BackendSecretFile, "backends'"}} {
+		ok, err := secret.Exists(f.path)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if n.cfg.Bootstrap {
+				continue
+			}
+			return fmt.Errorf("there is no secret in %s: a director joins with the %s secret too - on a director, run `sudo thelb admin secret show --role backend` and put what it prints in %s", f.path, f.role, f.path)
+		}
+		if _, err := secret.Load(f.path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // settleSecrets creates, at a bootstrap, either secret file that is missing.

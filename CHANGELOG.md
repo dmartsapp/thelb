@@ -2,6 +2,18 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
+## Unreleased
+
+- **Security fixes, found by the new security tests** ([What theLB checks](https://dmartsapp.github.io/thelb/docs/security.html#what-thelb-checks)):
+  - **The Kubernetes client follows no redirect**: an API server that answered a request with a redirect - to another port, in clear - was followed, with the director's token. Now the redirect is an error, and the token goes only to the server the kubeconfig names;
+  - **an API server's answers are bounded**: a page of a list (now 250 objects) at most 64 MiB, a whole list at most 1 GiB and 10,000 pages, an event of a watch at most 16 MiB. An API server sending an endless list, or one endless event, made the director hold all of it - until the machine ran out of memory;
+  - **a kubeconfig, token file or CA file that is a FIFO is refused at once**: the director waited for a writer, for ever - not even SIGTERM stopped it;
+  - **a director checks its secret files before it waits for anything**: one without `--bootstrap`, with a secret file it could never use - a link, a FIFO, a directory, open to others, empty, not a secret - or without the backends' secret, waited for a cluster for ever; now it stops at once, saying why. Secret files are read without following a link, and must be the file that was checked;
+  - **the control port takes at most 64 connections from one address in their TLS handshake at once**: thousands that never spoke each held a file descriptor until the handshake's timeout;
+  - **joins refused for a wrong secret are logged once a minute for each address**, with how many since (`since_last_line`): 500 of them were 500 log lines;
+  - **at most 4 nodes from one address, and 512 in all, wait for approval**: with a backend secret, one machine could have 300 names waiting - a Raft entry each. Past the limit, a node is told to ask again later (`join put off: too many nodes wait for approval`).
+- **Testing**: `make fuzz` - Go's fuzzer on every parser of what theLB takes from outside (20 targets; `make check` runs their seeds); `test/blackbox` - the binary run with every command, every flag its help lists and about 80 hostile values each, as a user and as root; `make e2e-security` - a cluster attacked from outside: the control port, the join, a member gone bad, the metrics endpoint, the local socket, hostile files and a Kubernetes API server that lies ([Testing](https://dmartsapp.github.io/thelb/docs/tech-testing.html)).
+
 ## v0.1.0-alpha.3 - 2026-11-20
 
 **An alpha**: to try - not yet for production. Commands, flags, and what theLB writes may still change before v0.1.0.

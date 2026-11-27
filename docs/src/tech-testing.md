@@ -74,6 +74,28 @@ The unit tests check the rest: `internal/kube` against a fake API server; the di
 The end-to-end test takes several minutes of a whole machine, with root. Running it on every push in GitHub Actions would cost a lot and slow everything down. Instead, it runs on a development machine **before each release** - see [Releasing](tech-release.md).
 :::
 
+## The fuzz tests
+
+`make fuzz` (`FUZZTIME=30s` each, by default) runs Go's fuzzer on every parser of what theLB takes from outside: the join's checks and certificate requests, secret files, health checks, `--offer`, the wire's framing, the Kubernetes reader (kubeconfig YAML, objects, watch streams, error bodies), Raft entries and snapshots, IPVS's connection table, the backend's orders, and what `status` and `safe` make fit for a terminal. Each states what must hold for anything it takes - not just that it does not crash. `make check` runs their seeds; a failing input is kept in the package's `testdata/fuzz`, and runs with every test after.
+
+## The blackbox test
+
+`test/blackbox` runs the binary as a user would, knowing nothing of its code. It finds every command and flag in the binary's own help, and runs each with about 80 hostile values - empty, huge, negative, out of range, other addresses' forms, paths out of the tree, shell and format strings, control characters - as arguments and as flags. Whatever it is given, theLB must end within 10 seconds, exit 0, 1 or 2, never print a panic, a stack trace or a control character, and name the help page on a usage error. As a user, everything but the help must say it runs only as root. As root (in the security lab), each flag's values are tried on a command line that holds every flag it requires, so a hostile value reaches its own check.
+
+## The security test
+
+`make e2e-security` (`test/e2e-security.sh`, as root on Linux): a cluster - two directors, a backend serving a service, a client - and an attacker (`test/attack`), each in a network namespace. The attacker speaks theLB's own protocols with theLB's own packages:
+
+- **the control port**: thousands of connections that connect and close, or never speak; garbage, HTTP, TLS 1.2, wrong or 500 protocols, certificates no cluster signed and another cluster's director certificate; handshakes dripped a byte at a time;
+- **the join**: wrong, missing and relayed proofs, the other role's secret, future versions, messages over the size limit; with the secret, every lie a claim can tell (name, role, address, MAC, fingerprint, hostname, version, a request for another name or an RSA key); floods of wrong secrets, and of new names;
+- **a member gone bad**: a backend joins, is approved, then tries what only directors may - changes, approvals, removals, Raft, the directors' own listener - sends heartbeats over the limits and hostile offers, renews its certificate as another node; once removed, its certificate is refused;
+- **a cluster that is not one**: an impostor with a theLB certificate chain of its own, and a proof it cannot make - a backend sent there stops, never telling it its claim or asking it to sign anything;
+- **the metrics endpoint** (methods, paths, a megabyte of headers, slowloris, 500 connections) and **the local socket** (another user);
+- **hostile files at start** (secret files and kubeconfigs that are links, FIFOs, directories, open to others, huge, empty, not what they claim; kubeconfigs that run a command, talk in clear, skip the certificate check, name theLB's secret as their token);
+- **a Kubernetes API server that lies**: errors with escapes, broken JSON, redirects to a trap, answers dripped a byte a second, an endless list, an endless watch event - the director under a 600 MB memory limit.
+
+After each, the cluster must be unharmed: both directors up, d1 still leading, the client served through the VIP, d1's file descriptors back to what they were, its memory bounded. It ends with the blackbox test as root, and a failover.
+
 ## The scale test
 
 `make scale N=1000` builds three directors, three backends and N services, each on a VIP of its own, then measures: the time to create the services and bring their VIPs up, the leader's CPU and memory at rest, how long `thelb status` takes, and a failover. `PROFILE=1` builds with profiling and prints where the leader spends its CPU.

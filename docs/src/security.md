@@ -59,8 +59,15 @@ theLB checks what it is given where it comes in, and quotes or cleans it where i
 | Command-line arguments | Before any command reads them: UTF-8, no control characters (newlines, terminal escapes), no characters that reorder text, at most 4096 bytes. Names, addresses, ports and interface names are checked for what they are. |
 | Another node's messages | A joining node's name, address, MAC address, fingerprint, hostname, version and member identity; a backend's offers (name, protocol, port, check), heartbeats (at most 4096 VIPs and checks) and version; every message is at most 1 MiB. A backend checks the leader's orders before it changes the kernel. |
 | The Kubernetes API | Each Service, Node and EndpointSlice: names, namespaces, ports, protocols, policies. An object an API server would never send is left out, and the director logs `a Kubernetes object left out`. theLB's annotations are checked before use: at most two pools and addresses, and a shared-VIP key like a label's value. |
-| Files | Secret files: owned by root, mode `0600`, a regular file. Kubeconfigs and the files they name: regular files, at most 1 MiB, nested at most 32 deep; tokens are printable ASCII without spaces, at most 16 KiB. |
+| Files | Secret files: owned by root, mode `0600`, a regular file - checked at start, before a director waits for anything, and read without following a link, the same file that was checked. Kubeconfigs and the files they name: regular files, at most 1 MiB, nested at most 32 deep, never waited on (a FIFO is refused); tokens are printable ASCII without spaces, at most 16 KiB. |
 | Health checks | An HTTP check's path: printable ASCII from `/`, at most 512 characters. |
+| The Kubernetes API's answers | No redirect is followed: the token goes only to the API server the kubeconfig names. A page of a list (250 objects) is at most 64 MiB, a whole list at most 1 GiB and 10,000 pages, an event of a watch at most 16 MiB - far above what a real API server sends: Kubernetes keeps an object under 1.5 MiB by default. |
+
+**Limits on what anyone who reaches the control VIP can make a director do:**
+
+- **Connections**: at most 64 from one address in their TLS handshake at once; each handshake ends after 5 seconds; a join that says nothing ends after 10.
+- **Joins with a wrong secret**: refused, and logged once a minute for each address, with how many were refused since - a flood of them is not a flood of the log.
+- **Nodes waiting for approval**: at most 4 from one address, and 512 in all. Past that, a node is told to ask again later, and the log says why (`join put off`). Approving or refusing those waiting makes room.
 
 | What goes out | How theLB makes it safe |
 |---|---|
