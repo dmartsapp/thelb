@@ -2,7 +2,9 @@
 
 Notable changes to theLB, newest first. Versions follow [semantic versioning](https://semver.org); a change that scripts could notice is called out in bold.
 
-## Unreleased
+## v0.1.0-beta.1 - 2026-11-27
+
+**A beta**: what v0.1.0 will be, tested under attack - to run where an outage can be borne, not yet for production. Commands, flags, and what theLB writes change before v0.1.0 only to fix what the beta finds.
 
 - **Security fixes, found by the new security tests** ([What theLB checks](https://dmartsapp.github.io/thelb/docs/security.html#what-thelb-checks)):
   - **The Kubernetes client follows no redirect**: an API server that answered a request with a redirect - to another port, in clear - was followed, with the director's token. Now the redirect is an error, and the token goes only to the server the kubeconfig names;

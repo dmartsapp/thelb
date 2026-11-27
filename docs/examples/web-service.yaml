@@ -1,4 +1,4 @@
-# theLB 0.1.0-alpha.3, as `thelb generate k8s service` printed it: a Service of theLB's
+# theLB 0.1.0-beta.1, as `thelb generate k8s service` printed it: a Service of theLB's
 # class. Apply it: kubectl apply -f <this file>
 apiVersion: v1
 kind: Service

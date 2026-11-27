@@ -15,7 +15,7 @@
 <header class="topbar">
   <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
   <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
-  <span class="version">v0.1.0-alpha.3</span>
+  <span class="version">v0.1.0-beta.1</span>
   <nav class="toplinks" aria-label="Site">
     <a href="install.html">Install</a>
     <a href="quickstart.html">Docs</a>
@@ -114,7 +114,7 @@ thelb admin assign web b1:tcp/80 b2:tcp/80 b3:tcp/80 d2-web:tcp/80</code></pre><
 <ol><li>approve the directors and backends as they ask - the script's comment has the command (compare fingerprints first);</li><li>wait until <code>sudo thelb status offers</code> lists the backends' offers - each backend offers again, by itself, what it offered before;</li><li>run the script on a director: <code>sudo sh /root/thelb-restore.sh</code>.</li></ol>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="backends.html"><span>Previous</span>Backends and offers</a><a class="next" href="forwarding.html"><span>Next</span>Direct routing and tunnels</a></nav>
-<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/services.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.3 &middot; MIT License</span></footer>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/services.md">Edit this page on GitHub</a><span>theLB v0.1.0-beta.1 &middot; MIT License</span></footer>
 </main>
 <aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#pools">Pools</a></li><li class="toc2"><a href="#services">Services</a></li><li class="toc2"><a href="#assignments">Assignments</a></li><li class="toc2"><a href="#port-mapping">Port mapping</a></li><li class="toc2"><a href="#keeping-them-thelb-generate-commands">Keeping them: <code>thelb generate commands</code></a></li></ul></aside>
 </div>

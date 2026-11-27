@@ -15,7 +15,7 @@
 <header class="topbar">
   <label for="nav-toggle" class="burger" aria-hidden="true"><span></span><span></span><span></span></label>
   <a class="brand" href="index.html"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><circle cx="9" cy="16" r="3" fill="#fff"/><path d="M11.5 16L22 9M11.5 16H22M11.5 16L22 23" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="23.5" cy="9" r="2.4" fill="#fff"/><circle cx="23.5" cy="16" r="2.4" fill="#fff"/><circle cx="23.5" cy="23" r="2.4" fill="#fff"/></svg><span class="brandname">theLB</span></a>
-  <span class="version">v0.1.0-alpha.3</span>
+  <span class="version">v0.1.0-beta.1</span>
   <nav class="toplinks" aria-label="Site">
     <a href="install.html">Install</a>
     <a href="quickstart.html">Docs</a>
@@ -42,9 +42,9 @@
 <div class="tablewrap"><table><thead><tr><th>File</th><th>What it is</th></tr></thead><tbody><tr><td><code>thelb-&lt;version&gt;-linux-&lt;arch&gt;</code></td><td>the binary</td></tr><tr><td><code>....sha256</code></td><td>its SHA-256 checksum; <code>SHA256SUMS</code> has all three</td></tr><tr><td><code>....cdx.json</code>, <code>....spdx.json</code></td><td>its software bill of materials (SBOM), CycloneDX 1.6 and SPDX 2.3: the Go release and every module it was built from</td></tr></tbody></table></div>
 <p>And GitHub-signed attestations: one saying which workflow built the binary from which commit (build provenance), and one for each SBOM.</p>
 <div class="codeblock lang-bash"><div class="codebar"><span class="codelabel">Shell</span></div><pre><code><span class="tok-cmd">sha256sum</span> <span class="tok-flag">-c</span> SHA256SUMS <span class="tok-flag">--ignore-missing</span>
-<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.3-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
-<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.3-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom
-<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-alpha.3-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://spdx.dev/Document/v2.3</code></pre></div>
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-beta.1-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-beta.1-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://cyclonedx.org/bom
+<span class="tok-cmd">gh</span> attestation verify thelb-0.1.0-beta.1-linux-amd64 <span class="tok-flag">--repo</span> dmartsapp/thelb <span class="tok-flag">--predicate-type</span> https://spdx.dev/Document/v2.3</code></pre></div>
 <p>The SBOMs list exactly what is inside the binary, so you can check it against vulnerability databases with your own tools.</p>
 <h2 id="what-thelb-trusts-by-design">What theLB trusts, by design<a class="anchor" href="#what-thelb-trusts-by-design" aria-label="Link to this section">#</a></h2>
 <p>These are not vulnerabilities, but you should run theLB with them in mind.</p>
@@ -60,7 +60,7 @@
 <p>The same policy is in the repository's <a href="https://github.com/dmartsapp/thelb/blob/main/SECURITY.md">SECURITY.md</a>.</p>
 </article>
 <nav class="pager" aria-label="Pagination"><a class="prev" href="messages.html"><span>Previous</span>Log messages</a><a class="next" href="tech-philosophy.html"><span>Next</span>Philosophy</a></nav>
-<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/security.md">Edit this page on GitHub</a><span>theLB v0.1.0-alpha.3 &middot; MIT License</span></footer>
+<footer class="pagefoot"><a href="https://github.com/dmartsapp/thelb/edit/main/docs/src/security.md">Edit this page on GitHub</a><span>theLB v0.1.0-beta.1 &middot; MIT License</span></footer>
 </main>
 <aside class="toc" aria-label="On this page"><p class="toctitle">On this page</p><ul><li class="toc2"><a href="#report-a-vulnerability">Report a vulnerability</a></li><li class="toc2"><a href="#check-a-release">Check a release</a></li><li class="toc2"><a href="#what-thelb-trusts-by-design">What theLB trusts, by design</a></li><li class="toc2"><a href="#what-thelb-checks">What theLB checks</a></li><li class="toc2"><a href="#what-is-in-scope">What is in scope</a></li></ul></aside>
 </div>

@@ -1,5 +1,5 @@
 #!/bin/sh
-# theLB 0.1.0-alpha.3, as `thelb generate k8s node cp1` printed it. Run it where kubectl
+# theLB 0.1.0-beta.1, as `thelb generate k8s node cp1` printed it. Run it where kubectl
 # reaches the cluster, before a director runs on the node cp1 - in the
 # DaemonSet, or under systemd: it makes cp1 a director's node.
 #   sh thelb-node.sh
